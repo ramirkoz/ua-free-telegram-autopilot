@@ -45,17 +45,15 @@ class Result:
 MODEL_SLOTS: tuple[Slot, ...] = (
     Slot(1, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
     Slot(2, "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash / Google", "gemini"),
-    Slot(3, "nvidia", "deepseek-ai/deepseek-v4-pro", "DeepSeek V4 Pro / NVIDIA"),
-    Slot(4, "nvidia", "nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra 550B / NVIDIA"),
-    Slot(5, "nvidia", "z-ai/glm-5.2", "GLM-5.2 / NVIDIA"),
-    Slot(6, "nvidia", "qwen/qwen3.5-397b-a17b", "Qwen 3.5 397B / NVIDIA"),
-    Slot(7, "nvidia", "deepseek-ai/deepseek-v4-flash", "DeepSeek V4 Flash / NVIDIA"),
-    Slot(8, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
-    Slot(9, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
-    Slot(10, "groq", "qwen/qwen3.6-27b", "Qwen 3.6 27B / Groq"),
-    Slot(11, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
-    Slot(12, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
-    Slot(13, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
+    # Live-verified NVIDIA slots. Models that returned HTTP 410 (EOL) on
+    # 2026-08-17 are intentionally not routed anymore.
+    Slot(3, "nvidia", "nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra 550B / NVIDIA"),
+    Slot(4, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
+    Slot(5, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
+    Slot(6, "groq", "qwen/qwen3.6-27b", "Qwen 3.6 27B / Groq"),
+    Slot(7, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
+    Slot(8, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
+    Slot(9, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
 )
 
 
@@ -149,17 +147,17 @@ def _openai(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
         "max_tokens": max(64, min(4096, int(max_output_tokens))),
         "stream": False,
     }
-    if slot.provider == "nvidia" and slot.model == "deepseek-ai/deepseek-v4-pro":
-        payload["temperature"] = 1
-        payload["top_p"] = 0.95
-        payload["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
     try:
         response = fetch_url(
-            url, method="POST",
+            url,
+            method="POST",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json, application/problem+json"},
-            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=max(3, int(timeout_seconds)),
-            max_bytes=4 * 1024 * 1024, allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
-            max_redirects=1, allow_http_errors=True,
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            timeout=max(3, int(timeout_seconds)),
+            max_bytes=4 * 1024 * 1024,
+            allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
+            max_redirects=1,
+            allow_http_errors=True,
         )
     except NetworkError as exc:
         raise AIModelError(str(exc), kind="temporary") from exc
@@ -172,6 +170,9 @@ def _openai(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
         raise AIModelError(f"{slot.label}: досягнуто ліміт.", kind="quota", retry_after=_retry_after(response.headers))
     if response.status >= 500:
         raise AIModelError(f"{slot.label}: тимчасова помилка HTTP {response.status}.", kind="temporary")
+    low_detail = detail.casefold()
+    if response.status in {404, 410} or "end of life" in low_detail or "no longer available" in low_detail:
+        raise AIModelError(f"{slot.label}: модель більше недоступна (HTTP {response.status}).", kind="gone")
     if response.status >= 400:
         raise AIModelError(f"{slot.label}: HTTP {response.status}: {detail[:350]}", kind="model")
     return _extract_openai(response.json())
@@ -185,7 +186,17 @@ def _gemini(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
         "generationConfig": {"temperature": 0.25, "maxOutputTokens": max(64, min(4096, int(max_output_tokens)))},
     }
     try:
-        response = fetch_url(url, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json, application/problem+json"}, body=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=max(3, int(timeout_seconds)), max_bytes=4 * 1024 * 1024, allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"}, max_redirects=1, allow_http_errors=True)
+        response = fetch_url(
+            url,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json, application/problem+json"},
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            timeout=max(3, int(timeout_seconds)),
+            max_bytes=4 * 1024 * 1024,
+            allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
+            max_redirects=1,
+            allow_http_errors=True,
+        )
     except NetworkError as exc:
         raise AIModelError(str(exc), kind="temporary") from exc
     detail = _detail(response)
@@ -226,17 +237,11 @@ def _cooldown_seconds(exc: AIModelError) -> int:
         return min(6 * 3600, max(15 * 60, int(exc.retry_after or 30 * 60)))
     if exc.kind in {"auth", "configuration"}:
         return 6 * 3600
+    if exc.kind == "gone":
+        return 7 * 24 * 3600
     if exc.kind == "temporary":
         return 5 * 60
     return 10 * 60
-
-
-def _repair_local(cfg: SecretConfig, prompt: str, output: str, error: Exception, *, budget: int, timeout: int) -> tuple[str, object]:
-    repair = (
-        "Виправ ЛИШЕ формат попередньої відповіді. Не додавай нових фактів. Поверни тільки формат, який вимагався.\n\n"
-        f"ІНСТРУКЦІЯ:\n{prompt[:1600]}\n\nПОМИЛКА: {error}\n\nВІДПОВІДЬ:\n{output[:2400]}"
-    )
-    return generate_local_text(preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model, prompt=repair, max_output_tokens=min(220, budget), temperature=0.0, timeout_seconds=max(30, min(60, timeout)))
 
 
 def run_ai(
@@ -270,7 +275,10 @@ def run_ai(
     for slot in MODEL_SLOTS:
         if slot.provider.casefold() in suppressed or not _configured(slot, cfg):
             continue
-        if slot.provider != "local" and (_cooldown_active(state, _cooldown_key(slot, provider=True), now) or _cooldown_active(state, _cooldown_key(slot), now)):
+        if slot.provider != "local" and (
+            _cooldown_active(state, _cooldown_key(slot, provider=True), now)
+            or _cooldown_active(state, _cooldown_key(slot), now)
+        ):
             continue
         if deadline is not None and time.monotonic() >= deadline:
             failures.append("Загальний ліміт часу AI-завдання вичерпано.")
@@ -282,10 +290,20 @@ def run_ai(
             if remaining is not None and remaining < 3:
                 break
             if slot.provider == "local":
+                if remaining is not None and remaining < 20:
+                    failures.append("Недостатньо часу для локального fallback у межах поточного AI-завдання.")
+                    break
+                local_timeout = max(20, int(local_timeout_seconds))
+                if remaining is not None:
+                    local_timeout = min(local_timeout, remaining)
                 output, target = generate_local_text(
-                    preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model,
-                    prompt=local_text_prompt, max_output_tokens=local_budget, temperature=0.0,
-                    timeout_seconds=min(max(30, int(local_timeout_seconds)), remaining) if remaining is not None else max(30, int(local_timeout_seconds)),
+                    preferred_model=cfg.local_model,
+                    manual_base_url=cfg.local_base_url,
+                    manual_model=cfg.local_model,
+                    prompt=local_text_prompt,
+                    max_output_tokens=local_budget,
+                    temperature=0.0,
+                    timeout_seconds=local_timeout,
                 )
                 runtime_slot = Slot(slot.priority, "local", target.model, target.label, "local")
             elif slot.family == "codex":
@@ -296,22 +314,26 @@ def run_ai(
                     kind = "quota" if any(x in low for x in ("limit", "quota", "usage", "429")) else "temporary"
                     raise AIModelError(str(exc), kind=kind) from exc
             elif slot.family == "gemini":
-                output = _gemini(slot, cfg, text_prompt, max_output_tokens=cloud_budget, timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds))
+                output = _gemini(
+                    slot,
+                    cfg,
+                    text_prompt,
+                    max_output_tokens=cloud_budget,
+                    timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds),
+                )
             else:
-                output = _openai(slot, cfg, text_prompt, max_output_tokens=cloud_budget, timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds))
+                output = _openai(
+                    slot,
+                    cfg,
+                    text_prompt,
+                    max_output_tokens=cloud_budget,
+                    timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds),
+                )
             output = str(output).strip()
             if not output:
                 raise AIModelError("Порожня відповідь.", kind="bad_response")
             if validator is not None:
-                try:
-                    validator(output)
-                except Exception as validation_error:
-                    if slot.provider != "local" or not local_repair:
-                        raise
-                    repaired, target = _repair_local(cfg, local_text_prompt, output, validation_error, budget=local_budget, timeout=int(local_timeout_seconds))
-                    output = str(repaired).strip()
-                    runtime_slot = Slot(slot.priority, "local", target.model, target.label, "local")
-                    validator(output)
+                validator(output)
         except LocalAIRuntimeError as exc:
             failures.append(f"{runtime_slot.label}: {exc}")
             continue
@@ -320,7 +342,8 @@ def run_ai(
             if suppress_provider_on_quota and exc.kind == "quota":
                 suppressed.add(slot.provider.casefold())
             if slot.provider != "local" and exc.kind != "request_too_large":
-                key = _cooldown_key(slot, provider=exc.kind in {"auth", "configuration"})
+                provider_level = exc.kind in {"auth", "configuration", "quota"}
+                key = _cooldown_key(slot, provider=provider_level)
                 _put_cooldown(state, key, _cooldown_seconds(exc), str(exc))
                 _save_state(state)
             continue
@@ -338,7 +361,8 @@ def run_ai(
 
     if not attempted:
         raise AIRouterError("Немає доступного AI-провайдера. Підключіть API-ключ або увімкніть локальний fallback; cooldown буде перевірено автоматично пізніше.")
-    raise AIRouterError("Усі доступні AI-моделі цього разу відмовили. " + " | ".join(failures[-5:]))
+    tail = " | ".join(failures[-6:])
+    raise AIRouterError("Усі доступні AI-моделі цього разу відмовили. " + tail)
 
 
 def test_all() -> list[tuple[str, str, str]]:
