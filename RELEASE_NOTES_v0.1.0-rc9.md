@@ -1,40 +1,33 @@
 # UA FREE Telegram Autopilot v0.1.0-rc9
 
-Дата: 17.08.2026
+## Live hotfix 17.08.2026
 
-## Основне
+RC9 зберігає той самий внутрішній номер версії та сумісність з наявною `Data`, але містить виправлення, знайдені під час живого Windows-тесту.
 
-RC9 зберігає Autopilot окремим програмним продуктом і не змінює формат наявної `Data` від RC8. База даних та формат зашифрованих секретів залишені byte-identical до RC8.
+### Черга
+- свіжі `new` матеріали обробляються раніше за старі `retry`;
+- retry має backoff 2 / 5 / 15 / 30 хвилин;
+- після 5 невдалих повторів матеріал переходить у `error` і більше не блокує потік;
+- існуюча база мігрується лише additive-полями `retry_count` і `next_retry_at`.
 
-### AI Router і локальний fallback
+### AI Router
+- вилучені NVIDIA-моделі, які у live-тесті повернули HTTP 410 / end-of-life;
+- робочі Nemotron/Groq routes залишені у production chain;
+- quota/429 ставить провайдера на cooldown для поточного failover, а не змушує наступні матеріали знову бити той самий ліміт;
+- editorial decision більше не вимагає бездоганного JSON: використовується компактний `PUBLISH / REJECT / DUPLICATE` line protocol із tolerant parsing;
+- rewrite використовує `ЗАГОЛОВОК / АНОНС / ТЕКСТ`, JSON лишився сумісним fallback;
+- local Ollama prompt істотно скорочений, local task bounded timeout;
+- один цикл обробляє обмежену кількість AI-спроб і має wall-clock deadline.
 
-- Перенесено bounded-підхід із стабільного UA FREE Content Tool v1.2.2.
-- Редакційне рішення та повний український рерайт розділені на два окремі AI-завдання.
-- Для завдань встановлені окремі output budgets, cloud timeouts і загальні deadlines.
-- 429/quota не змушує один і той самий провайдер безкінечно повторюватися в межах завдання.
-- Локальний останній fallback: уже встановлена Ollama → ручний loopback llama.cpp.
-- Ollama та моделі не встановлюються і не завантажуються автоматично.
-- Embedding-моделі не обираються для генерації.
+### Media
+Зберігаються RC9 правила safe media selection: реклама, Cocoon/AI-summary, банери, логотипи, аватарки та tracking assets не використовуються як editorial media. Якщо надійної картинки немає, Telegram-публікація виконується без випадкового зображення.
 
-### Українська мова
+### Перевірки
+- локальний source gate: 19 tests PASS;
+- extracted Source ZIP: 19 tests PASS;
+- GitHub Actions: Ubuntu/Python 3.12 PASS;
+- Windows/Python 3.11 PASS;
+- Windows/Python 3.12 PASS;
+- Windows/Python 3.13 PASS.
 
-- Посилено вимогу повного природного українського рерайту замість буквального перекладу.
-- Додано редакційний термінологічний QA для помилок, уже виявлених у production.
-- Зафіксовано стандартні форми `даркнет / даркнет-майданчик` та `електронно-променева трубка (ЕПТ)`.
-
-### Media Engine
-
-- `og:image` більше не отримує автоматичний пріоритет.
-- Жорстко відсікаються advertisement/sponsored/promo/Cocoon AI summary, банери, логотипи, аватари, tracking/pixel та інші не редакційні зображення.
-- Вбудовані в article body фото/схеми/скриншоти ранжуються за якістю та релевантністю заголовку/матеріалу.
-- Telegram hero вибирається за score, а не за принципом «перша картинка».
-- Якщо надійного зображення немає, публікація йде без фото.
-- Caption дозволений лише як консервативний переклад/скорочення наявного source caption/alt. Без source metadata caption прибирається.
-- Старі captions із перенесеної `Data` повторно санітизуються перед публікацією.
-
-### Data
-
-- `telegram_autopilot/database.py` не змінювався від RC8.
-- `telegram_autopilot/secrets_store.py` не змінювався від RC8.
-- Немає destructive migration або reset.
-- Для переходу потрібно скопіювати всю стару папку `Data` до RC9.
+Живий publication gate на реальній `Data` залишається фінальною перевіркою перед визнанням RC9 стабільним.
