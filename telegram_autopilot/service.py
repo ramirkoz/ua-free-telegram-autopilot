@@ -129,16 +129,20 @@ class AutopilotService:
 
     def _process(self, channel: Channel) -> None:
         posted = 0
+        attempted = 0
+        max_attempts = max(4, min(8, int(channel.max_posts_per_cycle) * 2))
+        cycle_deadline = time.monotonic() + 180
         for row in self.db.pending_articles(channel.id, limit=30):
-            if posted >= channel.max_posts_per_cycle or not self._gap_ok(channel):
+            if posted >= channel.max_posts_per_cycle or attempted >= max_attempts or time.monotonic() >= cycle_deadline or not self._gap_ok(channel):
                 break
+            attempted += 1
             article_id = int(row["id"])
             try:
                 self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
 
-                # RC7 migration-in-place: copied RC6 rows do not have structured article
-                # layout. Re-fetch only pending rows so existing channels/sources/history
-                # remain untouched while new Telegraph pages gain correct media order.
+                # Copied older rows do not always have structured article layout.
+                # Re-fetch only pending rows so existing channels/sources/history remain
+                # untouched while new Telegraph pages gain correct media order.
                 try:
                     layout_existing = str(row["article_layout_json"] or "")
                 except Exception:
@@ -235,9 +239,6 @@ class AutopilotService:
                     self.db.article_layout_json(row), media_urls,
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
                 )
-                # RC9 revalidates even captions stored by older Data. If the source did
-                # not actually provide caption/alt metadata, a previously invented
-                # caption is intentionally discarded before Telegraph publication.
                 safe_captions: dict[int, str] = {}
                 for media_item in prepared_media.body:
                     if media_item.index in media_captions:
@@ -249,7 +250,6 @@ class AutopilotService:
                 media_captions = safe_captions
                 telegraph_url = str(row["telegraph_url"] or "").strip()
                 if not telegraph_url:
-                    # Mark the irreversible phase before the network write. A process crash here cannot cause an automatic duplicate page.
                     self.db.update_article(article_id, status="telegraph_writing")
                     page = create_page(
                         self._telegraph_token(),
@@ -297,6 +297,8 @@ class AutopilotService:
                     published_at=now_iso(),
                     telegram_message_id=result.message_id,
                     telegram_media_count=result.media_count,
+                    retry_count=0,
+                    next_retry_at=None,
                     last_error=None,
                 )
                 posted += 1
@@ -305,14 +307,23 @@ class AutopilotService:
                     f"{channel.name}: опубліковано #{article_id}, Telegram {result.message_id}, медіа {result.media_count}",
                 )
             except TelegraphError as exc:
-                status = "unknown" if exc.outcome_unknown else "retry"
-                self.db.update_article(article_id, status=status, last_error=str(exc)[:2000])
-                self.on_event("error", f"{channel.name}: Telegraph: {exc}")
+                if exc.outcome_unknown:
+                    status = "unknown"
+                    self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
+                else:
+                    status = self.db.schedule_retry(article_id, str(exc))
+                self.on_event("error", f"{channel.name}: Telegraph ({status}): {exc}")
             except TelegramError as exc:
-                status = "unknown" if exc.outcome_unknown else "retry" if exc.retryable else "error"
-                self.db.update_article(article_id, status=status, last_error=str(exc)[:2000])
-                self.on_event("error", f"{channel.name}: Telegram: {exc}")
+                if exc.outcome_unknown:
+                    status = "unknown"
+                    self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
+                elif exc.retryable:
+                    status = self.db.schedule_retry(article_id, str(exc))
+                else:
+                    status = "error"
+                    self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
+                self.on_event("error", f"{channel.name}: Telegram ({status}): {exc}")
             except Exception as exc:
-                self.db.update_article(article_id, status="retry", last_error=str(exc)[:2000])
+                status = self.db.schedule_retry(article_id, str(exc))
                 self.log.exception("Article %s processing failed", article_id)
-                self.on_event("error", f"{channel.name}: #{article_id}: {exc}")
+                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
