@@ -119,8 +119,6 @@ def editorial_media_candidate(
         return ""
     if parts.scheme not in {"http", "https"} or not parts.hostname or not _media_url_allowed(url):
         return ""
-    # Featured metadata is not trusted. Publishers frequently put sponsor banners or
-    # AI-summary promos into og:image, so the same hard editorial filters apply.
     if _looks_noneditorial_media_context(" ".join((alt, context))):
         return ""
     if (width and width < 220) or (height and height < 140):
@@ -149,16 +147,12 @@ def _clean_text(text: str) -> str:
 
 
 class _ArticleHTMLParser(HTMLParser):
-    """Extract article text and preserve editorial media in source order.
-
-    RC6 collected a flat media bag and Telegraph sprinkled it every three paragraphs.
-    RC7 records media as blocks at their actual article position. Featured metadata is
-    kept separately for the Telegram hero and is not blindly duplicated in Telegraph.
-    """
-
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, *, include_main: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
+        self.include_main = include_main
+        self.article_seen = False
+        self.main_seen = False
         self.depth = 0
         self.skip_depths: list[int] = []
         self.article_depths: list[int] = []
@@ -236,8 +230,6 @@ class _ArticleHTMLParser(HTMLParser):
         candidates = list(self.figure.get("candidates") or [])
         caption = " ".join("".join(self.figure.get("caption_chunks") or []).split()).strip()[:1000]
         if candidates:
-            # Choose the largest declared rendition inside a figure. srcset variants
-            # and lazy placeholders are therefore collapsed before publication.
             candidates.sort(key=lambda row: (int(row.get("width") or 0) * int(row.get("height") or 0), int(row.get("width") or 0)), reverse=True)
             media = dict(candidates[0])
             media.update({"type": "media", "caption": caption})
@@ -256,7 +248,11 @@ class _ArticleHTMLParser(HTMLParser):
         if should_skip and not self.skipping:
             self.skip_depths.append(self.depth)
 
-        if tag in {"article", "main"} and not self.skipping:
+        if tag == "article" and not self.skipping:
+            self.article_seen = True
+            self.article_depths.append(self.depth)
+        elif tag == "main" and self.include_main and not self.skipping:
+            self.main_seen = True
             self.article_depths.append(self.depth)
         if tag == "title":
             self.in_title = True
@@ -285,7 +281,7 @@ class _ArticleHTMLParser(HTMLParser):
                 candidate = self._image_candidate(values)
                 if candidate:
                     if self.figure is not None:
-                        self.figure["candidates"].append(candidate)  # type: ignore[index]
+                        self.figure["candidates"].append(candidate)
                     else:
                         self._finish_text_capture()
                         self.blocks.append({"type": "media", **candidate, "caption": ""})
@@ -331,7 +327,7 @@ class _ArticleHTMLParser(HTMLParser):
             self.figcaption_depth = 0
         if tag == "title":
             self.in_title = False
-        if self.article_depths and self.article_depths[-1] == self.depth and tag in {"article", "main"}:
+        if self.article_depths and self.article_depths[-1] == self.depth and (tag == "article" or (self.include_main and tag == "main")):
             self._finish_text_capture()
             self.article_depths.pop()
         if self.skip_depths and self.skip_depths[-1] == self.depth:
@@ -350,7 +346,7 @@ class _ArticleHTMLParser(HTMLParser):
             self.title_chunks.append(stripped)
         self.all_chunks.append(stripped + " ")
         if self.figure is not None and self.figcaption_depth:
-            self.figure["caption_chunks"].append(stripped + " ")  # type: ignore[index]
+            self.figure["caption_chunks"].append(stripped + " ")
         elif self.text_capture is not None:
             self.text_capture[2].append(text)
 
@@ -397,24 +393,43 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str) -> tuple[l
 
     if featured and featured not in media_urls:
         media_urls.insert(0, featured)
-    layout = {"version": 3, "featured": featured, "blocks": normalized}
     return normalized, media_urls[:24]
 
 
-def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
-    parser = _ArticleHTMLParser(base_url)
+def _parse_scope(html: str, base_url: str, *, include_main: bool) -> _ArticleHTMLParser:
+    parser = _ArticleHTMLParser(base_url, include_main=include_main)
     parser.feed(html)
     parser.close()
     parser._finish_text_capture()
     parser._finish_figure()
+    return parser
 
-    blocks, media = _normalize_layout(parser.blocks, parser.featured_media)
-    article_text = _clean_text("\n".join(str(block.get("text") or "") for block in blocks if block.get("type") == "text"))
-    all_text = _clean_text("".join(parser.all_chunks))
-    text = article_text if len(article_text) >= 100 else all_text
-    title = " ".join(parser.title_chunks).strip()
+
+def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
+    article_parser = _parse_scope(html, base_url, include_main=False)
+    article_blocks, article_media = _normalize_layout(article_parser.blocks, article_parser.featured_media)
+    article_text = _clean_text("\n".join(
+        str(block.get("text") or "") for block in article_blocks if block.get("type") == "text"
+    ))
+
+    parser = article_parser
+    blocks = article_blocks
+    media = article_media
+    text = article_text
+    if not article_parser.article_seen or len(article_text) < 50:
+        main_parser = _parse_scope(html, base_url, include_main=True)
+        main_blocks, main_media = _normalize_layout(main_parser.blocks, main_parser.featured_media)
+        main_text = _clean_text("\n".join(
+            str(block.get("text") or "") for block in main_blocks if block.get("type") == "text"
+        ))
+        if len(main_text) >= max(50, len(article_text)):
+            parser, blocks, media, text = main_parser, main_blocks, main_media, main_text
+
+    if not text:
+        text = _clean_text("".join(parser.all_chunks))
+    title = " ".join(parser.title_chunks or article_parser.title_chunks).strip()
     layout_json = json.dumps({
-        "version": 3, "featured": parser.featured_media,
+        "version": 4, "featured": parser.featured_media,
         "featured_meta": {"alt": parser.featured_alt}, "blocks": blocks,
     }, ensure_ascii=False, separators=(",", ":"))
     return ExtractedArticle(title[:500], text[:120_000], media, layout_json)
