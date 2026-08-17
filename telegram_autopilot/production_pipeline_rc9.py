@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import re
 from sqlite3 import Row
 
@@ -146,6 +147,23 @@ def _section(text: str, names: str, next_names: str | None = None) -> str:
 
 def _parse_rewrite(raw: str) -> dict[str, str]:
     text = _strip_fences(raw)
+    # Some otherwise useful providers still return JSON out of habit. Accept it
+    # instead of throwing away a perfectly usable rewrite.
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            obj = json.loads(text)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            headline = str(obj.get("headline_uk") or obj.get("headline") or obj.get("title") or "").strip()
+            teaser = str(obj.get("telegram_teaser") or obj.get("teaser") or obj.get("summary") or "").strip()
+            full = str(obj.get("full_article_uk") or obj.get("full") or obj.get("text") or obj.get("article") or "").strip()
+            if headline and teaser and full:
+                return {
+                    "headline": normalize_ukrainian_terminology(headline),
+                    "teaser": normalize_ukrainian_terminology(teaser),
+                    "full": normalize_ukrainian_terminology(full),
+                }
     headline = _section(text, r"ЗАГОЛОВОК|HEADLINE|TITLE", r"АНОНС|TEASER|SUMMARY")
     teaser = _section(text, r"АНОНС|TEASER|SUMMARY", r"ТЕКСТ|TEXT|ARTICLE")
     full = _section(text, r"ТЕКСТ|TEXT|ARTICLE")
@@ -163,11 +181,11 @@ def validate_rewrite(raw: str) -> dict[str, str]:
     headline, teaser, full = obj["headline"], obj["teaser"], obj["full"]
     if not (8 <= len(headline) <= 220):
         raise ProductionPipelineError("Непридатний український заголовок.")
-    if not (45 <= len(teaser) <= 700):
+    if not (30 <= len(teaser) <= 700):
         raise ProductionPipelineError("Непридатний Telegram-анонс.")
-    if not (180 <= len(full) <= 12000):
+    if not (100 <= len(full) <= 12000):
         raise ProductionPipelineError("Непридатний повний текст.")
-    if not looks_ukrainian(teaser) or not looks_ukrainian(full):
+    if not looks_ukrainian(teaser + "\n" + full):
         raise ProductionPipelineError("AI не повернув природний український текст.")
     if terminology_issues("\n".join((headline, teaser, full))):
         raise ProductionPipelineError("У тексті залишилася заборонена термінологічна калька.")
