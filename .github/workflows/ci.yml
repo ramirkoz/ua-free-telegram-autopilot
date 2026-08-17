@@ -1,0 +1,99 @@
+name: Autopilot CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop/**
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-gate:
+    name: Source gate / Ubuntu / Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+
+      - name: Reject committed runtime Data and secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)(Data/|.*\.(sqlite|sqlite3|db|log|key|secure)$)' ; then
+            echo "Runtime Data/secrets must not be committed."
+            exit 1
+          fi
+
+      - name: Compile source
+        run: python -m compileall -q telegram_autopilot tests app.py
+
+      - name: Run RC9 regression tests
+        run: python -m pytest -q
+
+      - name: Import core without creating production Data
+        shell: bash
+        run: |
+          set -euo pipefail
+          export UA_FREE_TELEGRAM_AUTOPILOT_DATA="$RUNNER_TEMP/autopilot-data"
+          python - <<'PY'
+          from telegram_autopilot import __version__
+          from telegram_autopilot.database import Database
+          db = Database()
+          db.quick_check()
+          assert __version__ == "0.1.0-rc9"
+          print("AUTOPILOT_SOURCE_GATE_OK")
+          PY
+
+  windows-gate:
+    name: Windows / Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+
+      - name: Compile source
+        shell: pwsh
+        run: python -m compileall -q telegram_autopilot tests app.py
+
+      - name: Run RC9 regression tests
+        shell: pwsh
+        run: python -m pytest -q
+
+      - name: Import Windows entrypoint and verify isolated database
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
+          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
+          if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
