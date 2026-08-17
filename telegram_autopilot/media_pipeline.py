@@ -317,7 +317,7 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             seen_urls.add(item.url)
             prepared.append(item)
         seen_identities.add(identity)
-        if len(prepared) >= 5:
+        if len(prepared) >= 4:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
     return PreparedArticleMedia(featured, prepared)
