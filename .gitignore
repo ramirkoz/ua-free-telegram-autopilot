@@ -1,0 +1,28 @@
+# Runtime data and secrets
+Data/
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.key
+*.secure
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Build outputs
+build/
+dist/
+Release/
+*.spec
+*.zip
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
