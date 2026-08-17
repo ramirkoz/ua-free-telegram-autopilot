@@ -140,14 +140,16 @@ class AutopilotService:
             try:
                 self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
 
-                # RC7 migration-in-place: copied RC6 rows do not have structured article
-                # layout. Re-fetch only pending rows so existing channels/sources/history
-                # remain untouched while new Telegraph pages gain correct media order.
                 try:
                     layout_existing = str(row["article_layout_json"] or "")
                 except Exception:
                     layout_existing = ""
-                if not layout_existing and str(row["url"] or "").startswith(("http://", "https://")):
+                try:
+                    layout_version = int((json.loads(layout_existing or "{}") or {}).get("version") or 0)
+                except Exception:
+                    layout_version = 0
+                needs_layout_refresh = layout_version < 4 and not str(row["telegraph_url"] or "").strip()
+                if needs_layout_refresh and str(row["url"] or "").startswith(("http://", "https://")):
                     hydrated = hydrate_article_page(
                         str(row["url"] or ""),
                         str(row["title"] or ""),
@@ -161,6 +163,9 @@ class AutopilotService:
                             media_json=json.dumps(hydrated.media_urls[:24], ensure_ascii=False),
                             article_layout_json=hydrated.article_layout_json,
                             content_hash=content_hash(hydrated.title, hydrated.raw_text),
+                            headline_uk="", teaser_text="", full_article_uk="",
+                            event_key="", event_summary="", ai_provider="", ai_model="",
+                            media_captions_json="{}",
                         )
                         refreshed = self.db.get_article(article_id)
                         if refreshed is not None:
@@ -239,9 +244,6 @@ class AutopilotService:
                     self.db.article_layout_json(row), media_urls,
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
                 )
-                # RC9 revalidates even captions stored by older Data. If the source did
-                # not actually provide caption/alt metadata, a previously invented
-                # caption is intentionally discarded before Telegraph publication.
                 safe_captions: dict[int, str] = {}
                 for media_item in prepared_media.body:
                     if media_item.index in media_captions:
@@ -253,7 +255,6 @@ class AutopilotService:
                 media_captions = safe_captions
                 telegraph_url = str(row["telegraph_url"] or "").strip()
                 if not telegraph_url:
-                    # Mark the irreversible phase before the network write. A process crash here cannot cause an automatic duplicate page.
                     self.db.update_article(article_id, status="telegraph_writing")
                     page = create_page(
                         self._telegraph_token(),
