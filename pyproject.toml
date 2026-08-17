@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ua-free-telegram-autopilot"
+version = "0.1.0rc9"
+description = "Standalone Windows Telegram news autopilot for UA FREE"
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=42,<47",
+]
+
+[tool.setuptools.packages.find]
+include = ["telegram_autopilot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["telegram_autopilot"]
+branch = true
