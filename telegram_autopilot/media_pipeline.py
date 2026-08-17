@@ -64,8 +64,19 @@ class PreparedArticleMedia:
 
     @property
     def telegram_hero(self) -> PreparedMedia | None:
-        candidates = [item for item in ([self.featured] if self.featured else []) + self.body if item and item.kind == "image" and item.data and item.relevance_score >= 35]
-        return max(candidates, key=lambda item: (item.relevance_score, item.width * item.height), default=None)
+        early = [
+            item for item in self.body
+            if item.kind == "image" and item.data and item.relevance_score >= 38 and item.position <= 0.45
+        ]
+        if early:
+            return min(early, key=lambda item: (item.position, -item.relevance_score, -(item.width * item.height)))
+        if self.featured and self.featured.kind == "image" and self.featured.data and self.featured.relevance_score >= 38:
+            return self.featured
+        candidates = [
+            item for item in self.body
+            if item.kind == "image" and item.data and item.relevance_score >= 45
+        ]
+        return max(candidates, key=lambda item: (item.relevance_score, -item.position), default=None)
 
 
 def _image_dimensions(data: bytes, mime: str) -> tuple[int, int]:
@@ -145,26 +156,33 @@ def _classify(item: PreparedMedia) -> str:
 def _score(item: PreparedMedia, *, title: str, article_text: str) -> float:
     if _hard_reject(item):
         return -100.0
-    score = 10.0 if item.featured else 28.0  # body editorial media is substantially more trustworthy than og:image
+    score = 10.0 if item.featured else 16.0
     if item.caption:
-        score += 12.0
+        score += 10.0
     if item.alt:
-        score += 6.0
+        score += 5.0
     if item.context and not item.featured:
-        score += 3.0
-    reference = _text_tokens((title or "") + " " + (article_text or "")[:3500])
+        score += 2.0
+    if not item.featured:
+        if item.position <= 0.15:
+            score += 12.0
+        elif item.position <= 0.35:
+            score += 7.0
+        elif item.position >= 0.70:
+            score -= 5.0
+    reference = _text_tokens((title or "") + " " + (article_text or "")[:5000])
     title_tokens = _text_tokens(title)
     candidate = _text_tokens(_candidate_text(item))
     title_overlap = len(candidate & title_tokens)
     body_overlap = len(candidate & reference)
-    score += min(22.0, title_overlap * 7.0)
-    score += min(10.0, max(0, body_overlap - title_overlap) * 2.0)
+    score += min(28.0, title_overlap * 8.0)
+    score += min(14.0, max(0, body_overlap - title_overlap) * 2.0)
     if item.width and item.height:
         area = item.width * item.height
         if item.width >= 800 and item.height >= 400:
-            score += 8.0
+            score += 5.0
         if area >= 1_000_000:
-            score += 4.0
+            score += 2.0
         ratio = item.width / max(1, item.height)
         if ratio > 3.2 or ratio < 0.35:
             score -= 12.0
@@ -275,7 +293,12 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             if resolved.url in seen_urls:
                 continue
             resolved.relevance_score = _score(resolved, title=title, article_text=article_text)
-            if resolved.relevance_score < 28:
+            candidate_tokens = _text_tokens(_candidate_text(resolved))
+            reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
+            semantic_overlap = len(candidate_tokens & reference_tokens)
+            if resolved.position > 0.45 and semantic_overlap < 1:
+                continue
+            if resolved.relevance_score < 38:
                 continue
             if resolved.digest:
                 seen_hashes.add(resolved.digest)
@@ -283,14 +306,18 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             prepared.append(resolved)
         else:
             item.relevance_score = _score(item, title=title, article_text=article_text)
-            if item.relevance_score < 28:
+            candidate_tokens = _text_tokens(_candidate_text(item))
+            reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
+            if item.position > 0.45 and not (candidate_tokens & reference_tokens):
+                continue
+            if item.relevance_score < 38:
                 continue
             if item.url in seen_urls:
                 continue
             seen_urls.add(item.url)
             prepared.append(item)
         seen_identities.add(identity)
-        if len(prepared) >= 12:
+        if len(prepared) >= 5:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
     return PreparedArticleMedia(featured, prepared)
