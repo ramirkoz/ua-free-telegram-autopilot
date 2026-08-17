@@ -6,9 +6,10 @@ from pathlib import Path
 
 from telegram_autopilot.article_extractor import extract_article_content
 from telegram_autopilot.database import Database
-from telegram_autopilot.decision_engine import _marker_rewrite, build_decision_prompt, build_rewrite_prompt
+from telegram_autopilot.decision_engine import _marker_rewrite, _validate_decision, _validate_rewrite, build_decision_prompt, build_rewrite_prompt
 from telegram_autopilot.language import normalize_ukrainian_terminology, sanitize_media_caption, terminology_issues
 from telegram_autopilot.local_ai_runtime import choose_ollama_model
+from telegram_autopilot.ai_router import MODEL_SLOTS
 from telegram_autopilot.media_pipeline import PreparedMedia, _hard_reject, _score
 from telegram_autopilot.models import Channel
 
@@ -103,3 +104,129 @@ def test_ai_prompts_are_bounded():
 def test_local_rewrite_marker_protocol_is_tolerated():
     parsed = _marker_rewrite("ЗАГОЛОВОК: Новий матеріал про технологію\nАНОНС: Це достатньо довгий анонс для перевірки локального формату.\nТЕКСТ: Повний текст починається тут і може містити кілька абзаців.")
     assert parsed and parsed["headline_uk"].startswith("Новий матеріал")
+
+
+def _seed_queue(db: Database, *, retry_rows: int, new_rows: int) -> int:
+    with db.connect() as con:
+        con.execute(
+            "INSERT INTO channels(id,name,telegram_chat_id,editorial_profile,enabled,include_source_link,poll_interval_minutes,min_publish_interval_minutes,dedupe_window_hours,max_age_hours,max_posts_per_cycle,created_at,updated_at) VALUES(1,'Queue','@queue','tech',1,0,5,0,72,24,3,'x','x')"
+        )
+        con.execute(
+            "INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized) VALUES(1,1,'rss','Feed','https://example.com/feed',1,1)"
+        )
+        article_id = 1
+        for _ in range(retry_rows):
+            con.execute(
+                "INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (article_id,1,1,f'r{article_id}',f'Retry {article_id}',f'https://example.com/r{article_id}',f'https://example.com/r{article_id}','text',f'h{article_id}','2026-08-17T10:00:00+00:00','retry','old AI failure'),
+            )
+            article_id += 1
+        first_new = article_id
+        for _ in range(new_rows):
+            con.execute(
+                "INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (article_id,1,1,f'n{article_id}',f'New {article_id}',f'https://example.com/n{article_id}',f'https://example.com/n{article_id}','text',f'h{article_id}','2026-08-17T11:00:00+00:00','new'),
+            )
+            article_id += 1
+    return first_new
+
+
+def test_fresh_news_has_absolute_priority_over_old_retry_rows(tmp_path: Path):
+    db = Database(tmp_path / "queue.sqlite3")
+    first_new = _seed_queue(db, retry_rows=40, new_rows=17)
+    rows = db.pending_articles(1, limit=30)
+    assert [r["status"] for r in rows[:17]] == ["new"] * 17
+    assert [r["id"] for r in rows[:17]] == list(range(first_new, first_new + 17))
+
+
+def test_retry_backoff_removes_failed_row_from_immediate_queue(tmp_path: Path):
+    db = Database(tmp_path / "retry.sqlite3")
+    _seed_queue(db, retry_rows=1, new_rows=0)
+    assert db.schedule_retry(1, "temporary AI failure") == "retry"
+    row = db.get_article(1)
+    assert row["retry_count"] == 1
+    assert row["next_retry_at"]
+    assert db.pending_articles(1, limit=10) == []
+
+
+def test_retry_is_bounded_and_eventually_becomes_error(tmp_path: Path):
+    db = Database(tmp_path / "bounded.sqlite3")
+    _seed_queue(db, retry_rows=1, new_rows=0)
+    status = ""
+    for _ in range(5):
+        status = db.schedule_retry(1, "AI unavailable")
+    row = db.get_article(1)
+    assert status == "error"
+    assert row["status"] == "error"
+    assert row["retry_count"] == 5
+    assert row["next_retry_at"] is None
+
+
+def test_existing_database_gets_retry_columns_without_losing_rows(tmp_path: Path):
+    path = tmp_path / "legacy.sqlite3"
+    db = Database(path)
+    _seed_queue(db, retry_rows=1, new_rows=1)
+    before = [(r["id"], r["status"]) for r in db.history(1, limit=10)]
+    Database(path)
+    with sqlite3.connect(path) as con:
+        columns = {row[1] for row in con.execute("PRAGMA table_info(articles)")}
+    after = [(r["id"], r["status"]) for r in db.history(1, limit=10)]
+    assert {"retry_count", "next_retry_at"} <= columns
+    assert before == after
+
+
+def test_decision_line_protocol_accepts_publish_without_json():
+    obj = _validate_decision(
+        "PUBLISH | technology | 0.91 | memory-price-drop | Є конкретна технологічна новизна | Новий тип пам'яті різко подешевшав за рік."
+    )
+    assert obj["decision"] == "publish"
+    assert obj["editorial_class"] == "technology"
+    assert obj["event_key"] == "memory-price-drop"
+
+
+def test_decision_line_protocol_accepts_duplicate_id():
+    obj = _validate_decision(
+        "DUPLICATE 77 | cybersecurity | 0.95 | vendor-breach | Та сама конкретна подія | Повтор повідомлення про той самий інцидент."
+    )
+    assert obj["decision"] == "duplicate"
+    assert obj["duplicate_of"] == 77
+
+
+def test_rewrite_marker_protocol_does_not_require_json_or_media_markers():
+    raw = (
+        "ЗАГОЛОВОК: Нова технологія пам'яті стала дешевшою\n"
+        "АНОНС: Дослідники повідомили про новий тип пам'яті, виробництво якого стало суттєво дешевшим без зміни ключових характеристик.\n"
+        "ТЕКСТ: Команда представила новий тип пам'яті та описала зміни у виробництві. "
+        "За даними матеріалу, собівартість знизилася, а ключові характеристики залишилися на заявленому рівні. "
+        "Розробники пояснюють результат змінами у технологічному процесі. Це може спростити масштабування виробництва, "
+        "але джерело не містить даних про масовий випуск або кінцеві роздрібні ціни. "
+        "Подальші випробування мають показати, як технологія поводитиметься у серійному виробництві. Автори також наголошують, що наведені результати стосуються поточного етапу випробувань і не є прогнозом комерційної доступності."
+    )
+    obj = _validate_rewrite(raw, ("[[MEDIA_1]]",))
+    assert obj["headline_uk"].startswith("Нова технологія")
+    assert "[[MEDIA_1]]" not in obj["full_article_uk"]
+
+
+def test_dead_nvidia_models_are_not_in_production_slots():
+    models = {slot.model for slot in MODEL_SLOTS}
+    assert "deepseek-ai/deepseek-v4-pro" not in models
+    assert "deepseek-ai/deepseek-v4-flash" not in models
+    assert "qwen/qwen3.5-397b-a17b" not in models
+    assert "nvidia/nemotron-3-ultra-550b-a55b" in models
+    assert "openai/gpt-oss-120b" in models
+
+
+def test_local_prompts_are_cpu_bounded():
+    article = _article(raw_text="Useful technical facts. " * 5000)
+    decision = build_decision_prompt(_channel(), article, [], local=True)
+    rewrite, *_ = build_rewrite_prompt(_channel(), article, local=True)
+    assert len(decision) < 7500
+    assert len(rewrite) < 7500
+
+
+def test_decision_protocol_can_be_recovered_after_model_preamble():
+    obj = _validate_decision(
+        "Here is the result:\nPUBLISH | science | 88 | lunar-test | Є новий результат | Під час випробування отримано нові вимірювання."
+    )
+    assert obj["decision"] == "publish"
+    assert obj["confidence"] == 0.88
