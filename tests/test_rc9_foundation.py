@@ -108,25 +108,15 @@ def test_local_rewrite_marker_protocol_is_tolerated():
 
 def _seed_queue(db: Database, *, retry_rows: int, new_rows: int) -> int:
     with db.connect() as con:
-        con.execute(
-            "INSERT INTO channels(id,name,telegram_chat_id,editorial_profile,enabled,include_source_link,poll_interval_minutes,min_publish_interval_minutes,dedupe_window_hours,max_age_hours,max_posts_per_cycle,created_at,updated_at) VALUES(1,'Queue','@queue','tech',1,0,5,0,72,24,3,'x','x')"
-        )
-        con.execute(
-            "INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized) VALUES(1,1,'rss','Feed','https://example.com/feed',1,1)"
-        )
+        con.execute("INSERT INTO channels(id,name,telegram_chat_id,editorial_profile,enabled,include_source_link,poll_interval_minutes,min_publish_interval_minutes,dedupe_window_hours,max_age_hours,max_posts_per_cycle,created_at,updated_at) VALUES(1,'Queue','@queue','tech',1,0,5,0,72,24,3,'x','x')")
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized) VALUES(1,1,'rss','Feed','https://example.com/feed',1,1)")
         article_id = 1
         for _ in range(retry_rows):
-            con.execute(
-                "INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (article_id,1,1,f'r{article_id}',f'Retry {article_id}',f'https://example.com/r{article_id}',f'https://example.com/r{article_id}','text',f'h{article_id}','2026-08-17T10:00:00+00:00','retry','old AI failure'),
-            )
+            con.execute("INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (article_id,1,1,f'r{article_id}',f'Retry {article_id}',f'https://example.com/r{article_id}',f'https://example.com/r{article_id}','text',f'h{article_id}','2026-08-17T10:00:00+00:00','retry','old AI failure'))
             article_id += 1
         first_new = article_id
         for _ in range(new_rows):
-            con.execute(
-                "INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (article_id,1,1,f'n{article_id}',f'New {article_id}',f'https://example.com/n{article_id}',f'https://example.com/n{article_id}','text',f'h{article_id}','2026-08-17T11:00:00+00:00','new'),
-            )
+            con.execute("INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (article_id,1,1,f'n{article_id}',f'New {article_id}',f'https://example.com/n{article_id}',f'https://example.com/n{article_id}','text',f'h{article_id}','2026-08-17T11:00:00+00:00','new'))
             article_id += 1
     return first_new
 
@@ -176,18 +166,14 @@ def test_existing_database_gets_retry_columns_without_losing_rows(tmp_path: Path
 
 
 def test_decision_line_protocol_accepts_publish_without_json():
-    obj = _validate_decision(
-        "PUBLISH | technology | 0.91 | memory-price-drop | Є конкретна технологічна новизна | Новий тип пам'яті різко подешевшав за рік."
-    )
+    obj = _validate_decision("PUBLISH | technology | 0.91 | memory-price-drop | Є конкретна технологічна новизна | Новий тип пам'яті різко подешевшав за рік.")
     assert obj["decision"] == "publish"
     assert obj["editorial_class"] == "technology"
     assert obj["event_key"] == "memory-price-drop"
 
 
 def test_decision_line_protocol_accepts_duplicate_id():
-    obj = _validate_decision(
-        "DUPLICATE 77 | cybersecurity | 0.95 | vendor-breach | Та сама конкретна подія | Повтор повідомлення про той самий інцидент."
-    )
+    obj = _validate_decision("DUPLICATE 77 | cybersecurity | 0.95 | vendor-breach | Та сама конкретна подія | Повтор повідомлення про той самий інцидент.")
     assert obj["decision"] == "duplicate"
     assert obj["duplicate_of"] == 77
 
@@ -196,11 +182,7 @@ def test_rewrite_marker_protocol_does_not_require_json_or_media_markers():
     raw = (
         "ЗАГОЛОВОК: Нова технологія пам'яті стала дешевшою\n"
         "АНОНС: Дослідники повідомили про новий тип пам'яті, виробництво якого стало суттєво дешевшим без зміни ключових характеристик.\n"
-        "ТЕКСТ: Команда представила новий тип пам'яті та описала зміни у виробництві. "
-        "За даними матеріалу, собівартість знизилася, а ключові характеристики залишилися на заявленому рівні. "
-        "Розробники пояснюють результат змінами у технологічному процесі. Це може спростити масштабування виробництва, "
-        "але джерело не містить даних про масовий випуск або кінцеві роздрібні ціни. "
-        "Подальші випробування мають показати, як технологія поводитиметься у серійному виробництві. Автори також наголошують, що наведені результати стосуються поточного етапу випробувань і не є прогнозом комерційної доступності."
+        "ТЕКСТ: Команда представила новий тип пам'яті та описала зміни у виробництві. За даними матеріалу, собівартість знизилася, а ключові характеристики залишилися на заявленому рівні. Розробники пояснюють результат змінами у технологічному процесі. Це може спростити масштабування виробництва, але джерело не містить даних про масовий випуск або кінцеві роздрібні ціни. Подальші випробування мають показати, як технологія поводитиметься у серійному виробництві. Автори також наголошують, що наведені результати стосуються поточного етапу випробувань і не є прогнозом комерційної доступності."
     )
     obj = _validate_rewrite(raw, ("[[MEDIA_1]]",))
     assert obj["headline_uk"].startswith("Нова технологія")
@@ -225,8 +207,6 @@ def test_local_prompts_are_cpu_bounded():
 
 
 def test_decision_protocol_can_be_recovered_after_model_preamble():
-    obj = _validate_decision(
-        "Here is the result:\nPUBLISH | science | 88 | lunar-test | Є новий результат | Під час випробування отримано нові вимірювання."
-    )
+    obj = _validate_decision("Here is the result:\nPUBLISH | science | 88 | lunar-test | Є новий результат | Під час випробування отримано нові вимірювання.")
     assert obj["decision"] == "publish"
     assert obj["confidence"] == 0.88
