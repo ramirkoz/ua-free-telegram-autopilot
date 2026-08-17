@@ -9,7 +9,7 @@ from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
 from .database import Database, content_hash, now_iso
-from .decision_engine import decide
+from .production_pipeline_rc9 import decide
 from .language import looks_english, normalize_ukrainian_terminology, sanitize_media_caption
 from .models import Channel
 from .secrets_store import load_secrets, save_secrets
@@ -140,9 +140,9 @@ class AutopilotService:
             try:
                 self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
 
-                # Copied older rows do not always have structured article layout.
-                # Re-fetch only pending rows so existing channels/sources/history remain
-                # untouched while new Telegraph pages gain correct media order.
+                # RC7 migration-in-place: copied RC6 rows do not have structured article
+                # layout. Re-fetch only pending rows so existing channels/sources/history
+                # remain untouched while new Telegraph pages gain correct media order.
                 try:
                     layout_existing = str(row["article_layout_json"] or "")
                 except Exception:
@@ -239,6 +239,9 @@ class AutopilotService:
                     self.db.article_layout_json(row), media_urls,
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
                 )
+                # RC9 revalidates even captions stored by older Data. If the source did
+                # not actually provide caption/alt metadata, a previously invented
+                # caption is intentionally discarded before Telegraph publication.
                 safe_captions: dict[int, str] = {}
                 for media_item in prepared_media.body:
                     if media_item.index in media_captions:
@@ -250,6 +253,7 @@ class AutopilotService:
                 media_captions = safe_captions
                 telegraph_url = str(row["telegraph_url"] or "").strip()
                 if not telegraph_url:
+                    # Mark the irreversible phase before the network write. A process crash here cannot cause an automatic duplicate page.
                     self.db.update_article(article_id, status="telegraph_writing")
                     page = create_page(
                         self._telegraph_token(),
