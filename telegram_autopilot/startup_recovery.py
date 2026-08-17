@@ -7,12 +7,12 @@ from .paths import ai_state_path
 
 
 def _clear_stale_model_cooldowns_once(db: Database) -> int:
-    """Clear model penalties created by the pre-hotfix strict-JSON validator.
+    """Clear model penalties created by the pre-one-rewrite AI pipeline.
 
     Provider-level cooldowns (quota/auth) are preserved. The cleanup is guarded
     by app_state so later legitimate model cooldowns survive normal restarts.
     """
-    key = 'rc9_ai_hotfix_model_cooldowns_reset_v1'
+    key = 'rc9_one_rewrite_model_cooldowns_reset_v2'
     if db.get_state(key, '') == '1':
         return 0
     path = ai_state_path()
