@@ -8,11 +8,13 @@ from . import APP_NAME
 from .database import Database
 from .instance_lock import AlreadyRunning, InstanceLock
 from .logging_setup import configure_logging
+from .queue_hotfix import install_queue_hotfix
 from .ui import MainWindow
 
 
 def main() -> int:
     logger=configure_logging()
+    install_queue_hotfix()
     try:
         with InstanceLock():
             db=Database(); db.quick_check(); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
