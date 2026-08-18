@@ -43,7 +43,7 @@ jobs:
       - name: Compile source
         run: python -m compileall -q telegram_autopilot tests app.py
 
-      - name: Run RC10 regression tests
+      - name: Run RC11 regression tests
         run: python -m pytest -q
 
       - name: Import core without creating production Data
@@ -56,7 +56,7 @@ jobs:
           from telegram_autopilot.database import Database
           db = Database()
           db.quick_check()
-          assert __version__ == "0.1.0-rc10"
+          assert __version__ == "0.1.0-rc11"
           print("AUTOPILOT_SOURCE_GATE_OK")
           PY
 
@@ -86,7 +86,7 @@ jobs:
         shell: pwsh
         run: python -m compileall -q telegram_autopilot tests app.py
 
-      - name: Run RC10 regression tests
+      - name: Run RC11 regression tests
         shell: pwsh
         run: python -m pytest -q
 
