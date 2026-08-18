@@ -302,6 +302,8 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             candidate_tokens = _text_tokens(_candidate_text(resolved))
             reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
             semantic_overlap = len(candidate_tokens & reference_tokens)
+            # Late body images need semantic evidence. This blocks unrelated
+            # recommendation-card photos even when they are high-resolution.
             if resolved.position > 0.45 and semantic_overlap < 1:
                 continue
             if resolved.relevance_score < 38:
