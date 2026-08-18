@@ -7,9 +7,10 @@ _DIRECT_DESCRIPTION = (
     "Кожен Telegram-канал має власний список джерел. Нове джерело спочатку проходить baseline: "
     "поточні матеріали запам'ятовуються, але не публікуються. Далі нові англомовні матеріали проходять "
     "перевірку віку, мови, дублів і локальний editorial gate. AI створює один професійний український "
-    "научпоп/техножурналістський пост: заголовок і текст разом мають жорсткий ліміт 900 символів. "
-    "До поста додається максимум один перевірений релевантний медіафайл; якщо нормального медіа немає, "
-    "пост виходить без нього. Публікація йде безпосередньо в Telegram, без проміжних сторінок."
+    "научпоп/техножурналістський пост. Якщо є надійне релевантне медіа, заголовок і текст разом мають "
+    "жорсткий ліміт 900 символів і додається максимум один медіафайл. Якщо медіа немає, публікується "
+    "одне текстове повідомлення до 4096 символів. Незавершений AI-текст не обрізається, а відхиляється "
+    "і переписується. Публікація йде безпосередньо в Telegram, без проміжних сторінок."
 )
 
 
@@ -26,9 +27,9 @@ def _scrub_widget_tree(widget) -> None:
             except Exception:
                 pass
             continue
-        if "Формат: медіа + анонс ≤900 + Telegraph" in text:
+        if "Формат: медіа + анонс ≤900 + Telegraph" in text or "Формат: 1 медіа + професійний пост ≤900" in text:
             try:
-                child.configure(text="Формат: 1 медіа + професійний пост ≤900")
+                child.configure(text="Формат: 1 медіа + ≤900 / без медіа ≤4096")
             except Exception:
                 pass
         elif "повний український матеріал для Telegraph" in text or ("Telegraph отримує" in text and len(text) > 180):
@@ -39,7 +40,7 @@ def _scrub_widget_tree(widget) -> None:
 
 
 def apply_direct_format_ui(app) -> None:
-    """Remove legacy Telegraph controls without touching historical Data columns."""
+    """Hide legacy Telegraph UI while preserving historical Data columns on disk."""
     _scrub_widget_tree(app.root)
     tree = getattr(app, "history_tree", None)
     if isinstance(tree, ttk.Treeview):
