@@ -30,6 +30,13 @@ class AutopilotService:
     def running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
+    def _audit(self, stage: str, outcome: str, detail: str = "", **refs) -> None:
+        # Observability must never become a new production failure mode.
+        try:
+            self.db.audit(stage, outcome, detail, **refs)
+        except Exception as exc:
+            self.log.debug("Audit write skipped: %s", exc)
+
     def start(self) -> None:
         if self.running:
             return
@@ -79,10 +86,19 @@ class AutopilotService:
                 for item in reversed(items):
                     if self.db.insert_collected(source, item, baseline=baseline):
                         inserted += 1
-                self.db.source_checked(source.id, initialized=True, error=None)
+                self.db.source_checked(
+                    source.id, initialized=True, error=None, inserted_count=inserted, baseline=baseline
+                )
+                self._audit(
+                    "collect", "baseline" if baseline else "success", f"{source.name}: +{inserted}",
+                    channel_id=channel.id, source_id=source.id,
+                )
                 self.on_event("collect", f"{channel.name}: {source.name}: +{inserted}" + (" (baseline)" if baseline else ""))
             except Exception as exc:
                 self.db.source_checked(source.id, error=str(exc)[:1000])
+                self._audit(
+                    "collect", "error", f"{source.name}: {exc}", channel_id=channel.id, source_id=source.id
+                )
                 self.log.warning("Source %s failed: %s", source.name, exc)
                 self.on_event("error", f"{source.name}: {exc}")
 
@@ -121,6 +137,10 @@ class AutopilotService:
             article_id = int(row["id"])
             try:
                 self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
+                self._audit(
+                    "article", "processing", str(row["title"] or "")[:300],
+                    channel_id=channel.id, source_id=int(row["source_id"]), article_id=article_id,
+                )
 
                 # Pending rows collected by older RC9 builds can contain a page-wide
                 # media bag. Refresh them once with the article-only extractor. This
@@ -153,15 +173,21 @@ class AutopilotService:
                             row = refreshed
 
                 if self._is_too_old(row["source_published_at"], channel.max_age_hours):
-                    self.db.update_article(article_id, status="rejected", reject_reason=f"Матеріал старіший за {channel.max_age_hours} год.")
+                    reason = f"Матеріал старіший за {channel.max_age_hours} год."
+                    self.db.update_article(article_id, status="rejected", reject_reason=reason)
+                    self._audit("gate", "rejected", reason, channel_id=channel.id, article_id=article_id)
                     continue
                 if not looks_english((row["title"] or "") + "\n" + (row["raw_text"] or "")):
-                    self.db.update_article(article_id, status="rejected", language="not-en", reject_reason="Матеріал не визначено як англомовний.")
+                    reason = "Матеріал не визначено як англомовний."
+                    self.db.update_article(article_id, status="rejected", language="not-en", reject_reason=reason)
+                    self._audit("gate", "rejected", reason, channel_id=channel.id, article_id=article_id)
                     continue
                 self.db.update_article(article_id, language="en")
                 exact = self.db.exact_duplicate(channel.id, article_id, row["normalized_url"], row["content_hash"])
                 if exact:
-                    self.db.update_article(article_id, status="duplicate", duplicate_of=exact, reject_reason=f"Точний дубль #{exact}.")
+                    reason = f"Точний дубль #{exact}."
+                    self.db.update_article(article_id, status="duplicate", duplicate_of=exact, reject_reason=reason)
+                    self._audit("dedupe", "duplicate", reason, channel_id=channel.id, article_id=article_id)
                     continue
 
                 media_urls = self.db.media_urls(row)
@@ -179,13 +205,13 @@ class AutopilotService:
 
                 event_key = str(row["event_key"] or "").strip()
                 current_format = event_key.startswith(format_marker)
-                headline = normalize_ukrainian_terminology(str(row["headline_uk"] or "").strip()) if current_format else ""
+                headline = ""
                 body = normalize_ukrainian_terminology(str(row["teaser_text"] or "").strip()) if current_format else ""
                 event_summary = str(row["event_summary"] or "").strip() if current_format else ""
                 ai_provider = str(row["ai_provider"] or "").strip() if current_format else ""
                 ai_model = str(row["ai_model"] or "").strip() if current_format else ""
 
-                if not (headline and body and event_summary):
+                if not (body and event_summary):
                     recent = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=30)
                     decision = decide(
                         channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
@@ -196,6 +222,7 @@ class AutopilotService:
                             reject_reason=decision.reason, event_key=decision.event_key,
                             event_summary=decision.event_summary, ai_provider=decision.provider, ai_model=decision.model,
                         )
+                        self._audit("dedupe", "duplicate", decision.reason, channel_id=channel.id, article_id=article_id)
                         continue
                     if decision.decision == "reject":
                         self.db.update_article(
@@ -203,8 +230,9 @@ class AutopilotService:
                             event_key=decision.event_key, event_summary=decision.event_summary,
                             ai_provider=decision.provider, ai_model=decision.model,
                         )
+                        self._audit("editorial", "rejected", decision.reason, channel_id=channel.id, article_id=article_id)
                         continue
-                    headline = decision.headline_uk
+                    headline = ""
                     body = decision.telegram_teaser
                     event_key = decision.event_key
                     event_summary = decision.event_summary
@@ -222,9 +250,12 @@ class AutopilotService:
                         ai_model=ai_model,
                         media_captions_json="{}",
                     )
+                    self._audit(
+                        "rewrite", "pass", f"{ai_provider}/{ai_model}; chars={len(body)}; media={'yes' if hero else 'no'}",
+                        channel_id=channel.id, article_id=article_id,
+                    )
 
                 caption = build_post_text(
-                    headline,
                     body,
                     source_url=str(row["url"] or ""),
                     include_source_link=bool(channel.include_source_link),
@@ -234,6 +265,10 @@ class AutopilotService:
                 secrets = load_secrets()
                 token = secrets.channel_bot_tokens.get(str(channel.id), "") or secrets.default_telegram_bot_token
                 self.db.update_article(article_id, status="telegram_writing", rewrite_text=caption)
+                self._audit(
+                    "telegram", "writing", f"chars={len(caption)}; media={'yes' if hero else 'no'}",
+                    channel_id=channel.id, article_id=article_id,
+                )
                 try:
                     if hero is not None:
                         result = send_prepared_photo(
@@ -260,6 +295,10 @@ class AutopilotService:
                     last_error=None,
                 )
                 posted += 1
+                self._audit(
+                    "telegram", "published", f"message_id={result.message_id}; media={result.media_count}",
+                    channel_id=channel.id, article_id=article_id,
+                )
                 self.on_event(
                     "publish",
                     f"{channel.name}: опубліковано #{article_id}, Telegram {result.message_id}, медіа {result.media_count}",
@@ -273,8 +312,10 @@ class AutopilotService:
                 else:
                     status = "error"
                     self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
+                self._audit("telegram", status, str(exc), channel_id=channel.id, article_id=article_id)
                 self.on_event("error", f"{channel.name}: Telegram ({status}): {exc}")
             except Exception as exc:
                 status = self.db.schedule_retry(article_id, str(exc))
+                self._audit("article", status, str(exc), channel_id=channel.id, article_id=article_id)
                 self.log.exception("Article %s processing failed", article_id)
                 self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
