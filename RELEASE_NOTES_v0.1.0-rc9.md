@@ -1,33 +1,29 @@
 # UA FREE Telegram Autopilot v0.1.0-rc9
 
-## Live hotfix 17.08.2026
+## Direct Telegram format hotfix
 
-RC9 зберігає той самий внутрішній номер версії та сумісність з наявною `Data`, але містить виправлення, знайдені під час живого Windows-тесту.
+RC9 зберігає номер версії та сумісність з наявною `Data`, але production-формат спрощено після live-тестів.
 
-### Черга
-- свіжі `new` матеріали обробляються раніше за старі `retry`;
-- retry має backoff 2 / 5 / 15 / 30 хвилин;
-- після 5 невдалих повторів матеріал переходить у `error` і більше не блокує потік;
-- існуюча база мігрується лише additive-полями `retry_count` і `next_retry_at`.
+### Публікація
+- Telegraph повністю вилучено з production write path;
+- готовий пост публікується безпосередньо в Telegram;
+- жорсткий ліміт готового тексту: 900 символів;
+- максимум один медіафайл на пост;
+- якщо надійного медіа немає, публікація йде текстом.
 
-### AI Router
-- вилучені NVIDIA-моделі, які у live-тесті повернули HTTP 410 / end-of-life;
-- робочі Nemotron/Groq routes залишені у production chain;
-- quota/429 ставить провайдера на cooldown для поточного failover, а не змушує наступні матеріали знову бити той самий ліміт;
-- editorial decision більше не вимагає бездоганного JSON: використовується компактний `PUBLISH / REJECT / DUPLICATE` line protocol із tolerant parsing;
-- rewrite використовує `ЗАГОЛОВОК / АНОНС / ТЕКСТ`, JSON лишився сумісним fallback;
-- local Ollama prompt істотно скорочений, local task bounded timeout;
-- один цикл обробляє обмежену кількість AI-спроб і має wall-clock deadline.
+### Рерайт
+- один AI-запит на професійний український научпоп/техножурналістський пост;
+- цільовий обсяг 600–850 символів, hard limit 900;
+- без рекламної мови, клікбейту, вигаданого бекграунду та буквального машинного перекладу;
+- роки і числа, яких немає у джерелі, блокують рерайт;
+- відносні часові формулювання прив'язуються до `source_published_at`.
 
 ### Media
-Зберігаються RC9 правила safe media selection: реклама, Cocoon/AI-summary, банери, логотипи, аватарки та tracking assets не використовуються як editorial media. Якщо надійної картинки немає, Telegram-публікація виконується без випадкового зображення.
+- article-only extraction;
+- related/recommended stories не входять до кандидатів;
+- `Click to follow`, Google-follow cards, банери, promo, logos та tracking assets відкидаються;
+- у Telegram використовується лише один найкращий hero.
 
-### Перевірки
-- локальний source gate: 19 tests PASS;
-- extracted Source ZIP: 19 tests PASS;
-- GitHub Actions: Ubuntu/Python 3.12 PASS;
-- Windows/Python 3.11 PASS;
-- Windows/Python 3.12 PASS;
-- Windows/Python 3.13 PASS.
-
-Живий publication gate на реальній `Data` залишається фінальною перевіркою перед визнанням RC9 стабільним.
+### Сумісність
+- старі поля Telegraph у SQLite лишаються лише для безпечної сумісності з існуючою `Data` та історією;
+- нові публікації їх не використовують.
