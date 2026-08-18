@@ -73,29 +73,27 @@ def _clean_paragraphs(value: str) -> str:
 
 
 def build_post_text(
-    headline: str,
-    body: str,
+    text_or_internal_headline: str,
+    body: str | None = None,
     *,
     source_url: str = "",
     include_source_link: bool = False,
     hard_limit: int = 900,
 ) -> str:
-    """Build the final Telegram post. No Telegraph, no hidden continuation message.
+    """Build one body-only Telegram post with no separate headline.
 
-    The 900-character limit is a product rule, deliberately lower than Telegram's
-    technical caption limit. AI output is validated before this function; this is
-    the final deterministic guard immediately before the network write.
+    ``body`` keeps compatibility with older RC9 service code that still passes
+    an internal headline/cache marker as the first positional argument. The
+    marker is deliberately ignored and is never rendered to Telegram.
     """
-    clean_headline = " ".join(str(headline or "").split()).strip()
-    clean_body = _clean_paragraphs(body)
-    if not clean_headline or not clean_body:
-        raise TelegramError("Порожній заголовок або текст Telegram-поста.", retryable=False)
-    text = f"{clean_headline}\n\n{clean_body}".strip()
+    clean = _clean_paragraphs(body if body is not None else text_or_internal_headline)
+    if not clean:
+        raise TelegramError("Порожній текст Telegram-поста.", retryable=False)
     if include_source_link and source_url.strip():
-        text += f"\n\nДжерело: {source_url.strip()}"
-    if len(text) > hard_limit:
+        clean += f"\n\nДжерело: {source_url.strip()}"
+    if len(clean) > hard_limit:
         raise TelegramError(f"Telegram-пост перевищує ліміт {hard_limit} символів.", retryable=False)
-    return text
+    return clean
 
 
 def build_caption(teaser: str, telegraph_url: str = "") -> str:
@@ -273,11 +271,7 @@ def send_prepared_photo(
     data: bytes,
     timeout: float = 60.0,
 ) -> TelegramResult:
-    """Upload the editorial hero as bytes instead of asking Telegram to hotlink it.
-
-    Many publishers/CDNs allow the desktop app to fetch an image but reject Telegram's
-    remote fetch. Uploading the already validated image fixes that class of failure.
-    """
+    """Upload the editorial hero as bytes instead of asking Telegram to hotlink it."""
     token = token.strip(); chat_id = normalize_chat_target(chat_id); caption = caption.strip()
     if not token or not chat_id:
         raise TelegramError("Telegram bot token або Chat ID не налаштовано.", retryable=False)
