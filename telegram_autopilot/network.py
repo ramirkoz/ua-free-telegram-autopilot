@@ -53,6 +53,7 @@ def resolve_public(host: str, port: int) -> list[str]:
         raise NetworkError(f"No usable public address for {host}.")
     return addresses
 
+
 def _resolve_with_timeout(
     resolver: Callable[[str, int], list[str]],
     host: str,
@@ -133,7 +134,7 @@ def fetch_url(
     resolver: Callable[[str, int], list[str]] = resolve_public,
 ) -> HttpResponse:
     current = url
-    request_headers = {"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc10", "Accept": "*/*"}
+    request_headers = {"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc11", "Accept": "*/*"}
     if headers:
         request_headers.update(headers)
 
