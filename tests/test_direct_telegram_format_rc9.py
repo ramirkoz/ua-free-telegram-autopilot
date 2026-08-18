@@ -7,7 +7,7 @@ import pytest
 
 from telegram_autopilot.media_pipeline import PreparedMedia, _hard_reject
 from telegram_autopilot.models import Channel
-from telegram_autopilot.production_pipeline_rc9 import POST_HARD_LIMIT, build_rewrite_prompt, validate_rewrite
+from telegram_autopilot.production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_HARD_LIMIT, TEXT_POST_HARD_LIMIT, build_rewrite_prompt, validate_rewrite
 from telegram_autopilot.service import AutopilotService
 from telegram_autopilot.telegram import TelegramError, build_post_text
 
@@ -76,3 +76,34 @@ def test_invented_number_is_rejected(monkeypatch):
 ТЕКСТ: Компанія представила нову систему для дата-центрів. Вона працює зі швидкістю 900 Гбіт/с і має зменшити затримки у великих ШІ-кластерах. Розробники кажуть, що рішення орієнтоване на високонавантажені обчислення та повинно спростити масштабування мережевої інфраструктури."""
     with pytest.raises(Exception, match="число"):
         validate_rewrite(bad, allowed_numbers={"800"})
+
+
+def test_media_and_text_only_posts_have_different_hard_limits(monkeypatch):
+    monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
+    media_prompt = build_rewrite_prompt(_channel(), _row(), hard_limit=MEDIA_POST_HARD_LIMIT)
+    text_prompt = build_rewrite_prompt(_channel(), _row(), hard_limit=TEXT_POST_HARD_LIMIT)
+    assert "HARD LIMIT: 900" in media_prompt
+    assert "HARD LIMIT: 4096" in text_prompt
+    assert "1800-3400" in text_prompt
+
+    long_body = ("Це завершене речення про технологічну подію та її значення для користувачів. " * 20).strip()
+    raw = "ЗАГОЛОВОК: Повний текст без медіафайлу\nТЕКСТ: " + long_body
+    parsed = validate_rewrite(raw, hard_limit=TEXT_POST_HARD_LIMIT)
+    assert 900 < len(parsed["post"]) <= TEXT_POST_HARD_LIMIT
+    with pytest.raises(Exception, match="900"):
+        validate_rewrite(raw, hard_limit=MEDIA_POST_HARD_LIMIT)
+
+
+def test_incomplete_ai_output_is_rejected_instead_of_published(monkeypatch):
+    monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
+    broken = """ЗАГОЛОВОК: Apple тестує нову функцію для AirPods
+ТЕКСТ: У відео Apple показала прототип навушників із камерою. Система має допомагати Siri аналізувати довкілля, а користувач у демонстрації просить асистента запам’ятати книгу, після чого функція Visual Intelligence"""
+    with pytest.raises(Exception, match="обірвав"):
+        validate_rewrite(broken, hard_limit=MEDIA_POST_HARD_LIMIT)
+
+
+def test_service_selects_limit_from_real_media_state():
+    source = inspect.getsource(AutopilotService._process)
+    assert "MEDIA_POST_HARD_LIMIT if hero is not None else TEXT_POST_HARD_LIMIT" in source
+    assert "hard_limit=telegram_hard_limit" in source
+    assert "hard_limit=rewrite_hard_limit" in source
