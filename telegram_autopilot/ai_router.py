@@ -147,17 +147,17 @@ def _openai(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
         "max_tokens": max(64, min(4096, int(max_output_tokens))),
         "stream": False,
     }
+    if slot.provider == "nvidia" and slot.model == "deepseek-ai/deepseek-v4-pro":
+        payload["temperature"] = 1
+        payload["top_p"] = 0.95
+        payload["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
     try:
         response = fetch_url(
-            url,
-            method="POST",
+            url, method="POST",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept": "application/json, application/problem+json"},
-            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            timeout=max(3, int(timeout_seconds)),
-            max_bytes=4 * 1024 * 1024,
-            allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
-            max_redirects=1,
-            allow_http_errors=True,
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=max(3, int(timeout_seconds)),
+            max_bytes=4 * 1024 * 1024, allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
+            max_redirects=1, allow_http_errors=True,
         )
     except NetworkError as exc:
         raise AIModelError(str(exc), kind="temporary") from exc
@@ -186,17 +186,7 @@ def _gemini(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
         "generationConfig": {"temperature": 0.25, "maxOutputTokens": max(64, min(4096, int(max_output_tokens)))},
     }
     try:
-        response = fetch_url(
-            url,
-            method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json, application/problem+json"},
-            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            timeout=max(3, int(timeout_seconds)),
-            max_bytes=4 * 1024 * 1024,
-            allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"},
-            max_redirects=1,
-            allow_http_errors=True,
-        )
+        response = fetch_url(url, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json, application/problem+json"}, body=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=max(3, int(timeout_seconds)), max_bytes=4 * 1024 * 1024, allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"}, max_redirects=1, allow_http_errors=True)
     except NetworkError as exc:
         raise AIModelError(str(exc), kind="temporary") from exc
     detail = _detail(response)
@@ -244,6 +234,7 @@ def _cooldown_seconds(exc: AIModelError) -> int:
     return 10 * 60
 
 
+
 def run_ai(
     prompt: str,
     validator: Callable[[str], object] | None = None,
@@ -275,10 +266,7 @@ def run_ai(
     for slot in MODEL_SLOTS:
         if slot.provider.casefold() in suppressed or not _configured(slot, cfg):
             continue
-        if slot.provider != "local" and (
-            _cooldown_active(state, _cooldown_key(slot, provider=True), now)
-            or _cooldown_active(state, _cooldown_key(slot), now)
-        ):
+        if slot.provider != "local" and (_cooldown_active(state, _cooldown_key(slot, provider=True), now) or _cooldown_active(state, _cooldown_key(slot), now)):
             continue
         if deadline is not None and time.monotonic() >= deadline:
             failures.append("Загальний ліміт часу AI-завдання вичерпано.")
@@ -314,21 +302,9 @@ def run_ai(
                     kind = "quota" if any(x in low for x in ("limit", "quota", "usage", "429")) else "temporary"
                     raise AIModelError(str(exc), kind=kind) from exc
             elif slot.family == "gemini":
-                output = _gemini(
-                    slot,
-                    cfg,
-                    text_prompt,
-                    max_output_tokens=cloud_budget,
-                    timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds),
-                )
+                output = _gemini(slot, cfg, text_prompt, max_output_tokens=cloud_budget, timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds))
             else:
-                output = _openai(
-                    slot,
-                    cfg,
-                    text_prompt,
-                    max_output_tokens=cloud_budget,
-                    timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds),
-                )
+                output = _openai(slot, cfg, text_prompt, max_output_tokens=cloud_budget, timeout_seconds=min(int(cloud_timeout_seconds), remaining) if remaining is not None else int(cloud_timeout_seconds))
             output = str(output).strip()
             if not output:
                 raise AIModelError("Порожня відповідь.", kind="bad_response")

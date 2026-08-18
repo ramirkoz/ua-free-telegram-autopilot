@@ -45,11 +45,12 @@ def _paragraphs(value: str) -> list[str]:
 
 
 def assess_rewrite(body: str, *, hard_limit: int) -> QualityAssessment:
-    """Cheap deterministic quality gate before optional extra AI work.
+    """Cheap deterministic quality gate used before optional extra AI work.
 
-    It catches the live failure mode where Ukrainian is formally valid but
-    dense, clause-heavy, literal or exhausting to read. A high score means the
-    first candidate is good enough and no second AI call is needed.
+    The goal is not to judge literary taste. It catches the exact failure mode
+    seen in live tests: technically valid Ukrainian that is dense, clause-heavy,
+    literal or exhausting to read. A high score means the first candidate is
+    good enough and no extra AI calls are needed.
     """
     text = str(body or "").strip()
     if not text:
@@ -106,6 +107,7 @@ def assess_rewrite(body: str, *, hard_limit: int) -> QualityAssessment:
         score -= min(24, 10 + 5 * (len(awkward) - 1))
         issues.append("неприродна або калькована українська")
 
+    # Repeated sentence starts make short Telegram posts sound mechanical.
     starts: list[str] = []
     for sentence in sentences:
         words = [w.casefold() for w in _WORD_RE.findall(sentence)[:2]]

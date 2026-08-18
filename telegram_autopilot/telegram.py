@@ -62,6 +62,7 @@ def normalize_chat_target(value: str) -> str:
             if not all(ch.isalnum() or ch == "_" for ch in username):
                 raise TelegramError("Некоректне посилання на Telegram-канал.", retryable=False)
             return "@" + username
+    # Also accept a bare public username to reduce pointless ceremony.
     if all(ch.isalnum() or ch == "_" for ch in raw):
         return "@" + raw
     raise TelegramError("Вставте посилання t.me/..., @username або Chat ID каналу.", retryable=False)
@@ -130,6 +131,7 @@ def _request(token: str, method: str, fields: dict[str, str], *, timeout: float 
         code = int(payload.get("error_code", response.status) or response.status)
         desc = str(payload.get("description") or f"HTTP {response.status}")
         retryable = code == 429 or code >= 500
+        # A definite 4xx from a media method means Telegram rejected the URL/media and no post was created.
         media_rejected = bool(media_write and 400 <= code < 500 and code != 429)
         raise TelegramError(f"Telegram: {desc} (код {code})", retryable=retryable, media_rejected=media_rejected)
     return payload.get("result")
@@ -271,7 +273,11 @@ def send_prepared_photo(
     data: bytes,
     timeout: float = 60.0,
 ) -> TelegramResult:
-    """Upload the editorial hero as bytes instead of asking Telegram to hotlink it."""
+    """Upload the editorial hero as bytes instead of asking Telegram to hotlink it.
+
+    Many publishers/CDNs allow the desktop app to fetch an image but reject Telegram's
+    remote fetch. Uploading the already validated image fixes that class of failure.
+    """
     token = token.strip(); chat_id = normalize_chat_target(chat_id); caption = caption.strip()
     if not token or not chat_id:
         raise TelegramError("Telegram bot token або Chat ID не налаштовано.", retryable=False)

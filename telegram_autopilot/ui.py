@@ -148,9 +148,9 @@ class MainWindow:
         info=ttk.LabelFrame(self.dashboard,text="Як працює автопілот",padding=12); info.pack(fill="both",expand=True,pady=14)
         ttk.Label(info,justify="left",wraplength=1000,text=(
             "Кожен Telegram-канал має власний список джерел. Нове джерело спочатку проходить baseline: поточні матеріали запам'ятовуються, але не публікуються. "
-            "Далі нові англомовні матеріали автоматично проходять перевірку віку та мови, точний дубль і AI-порівняння з недавніми публікаціями цього каналу. "
-            "Для нової події AI створює заголовок, повний український матеріал для Telegraph і сильний Telegram-анонс до 900 символів. Telegraph отримує повний текст, усі доступні медіа та посилання на першоджерело; Telegram отримує медіа, анонс і посилання на повну версію. "
-            "Якщо та сама подія вже була опублікована з іншого джерела, новий матеріал автоматично переходить у «Дублі»."
+            "Нові англомовні матеріали проходять перевірку віку, мови й дублів. Для довгих статей програма локально формує Evidence Pack: зберігає лід і відбирає речення з цифрами, назвами, одиницями та атрибуцією замість простого обрізання тексту. "
+            "AI створює один український Telegram-пост без окремого заголовка. Fact Guard блокує вигадані назви/моделі та непідтверджені твердження на кшталт «перший», «найбільший» або «рекорд». "
+            "З надійним медіа діє ліміт до 900 символів, без медіа — до 4096. Після успішної перевірки публікація йде безпосередньо в Telegram; робота джерел та ключові етапи зберігаються в локальному журналі."
         )).pack(anchor="w")
         self.last_event=tk.StringVar(value="Ще немає подій."); ttk.Label(info,textvariable=self.last_event,wraplength=1000).pack(anchor="w",pady=(20,0))
 
@@ -172,10 +172,10 @@ class MainWindow:
         ttk.Button(bar,text="Редагувати",command=self.edit_source).pack(side="left",padx=3)
         ttk.Button(bar,text="Видалити",command=self.delete_source).pack(side="left",padx=3)
         ttk.Label(bar,text="Просто вставте адресу. Програма сама визначить Telegram, RSS/Atom або вебсторінку.").pack(side="left",padx=18)
-        cols=("name","kind","url","enabled","initialized","checked","error")
+        cols=("name","kind","url","enabled","initialized","health","last_new","yield","errors","checked","error")
         self.sources_tree=ttk.Treeview(self.sources_tab,columns=cols,show="headings")
-        heads=("Назва","Тип","URL","Активне","Baseline","Остання перевірка","Помилка")
-        widths=(170,80,340,75,75,150,260)
+        heads=("Назва","Тип","URL","Активне","Baseline","Стан","Остання нова","+ за раз","Помилок","Остання перевірка","Остання помилка")
+        widths=(150,75,260,65,65,105,135,70,70,135,220)
         for c,h,w in zip(cols,heads,widths): self.sources_tree.heading(c,text=h); self.sources_tree.column(c,width=w,anchor="w")
         self.sources_tree.pack(fill="both",expand=True); self.sources_tree.bind("<Double-1>",lambda _e:self.edit_source())
 
@@ -213,6 +213,9 @@ class MainWindow:
         self.ai_result=tk.Text(self.ai_tab,height=18,wrap="word"); self.ai_result.pack(fill="both",expand=True)
 
     def _build_log(self):
+        bar=ttk.Frame(self.log_tab); bar.pack(fill="x",pady=(0,8))
+        ttk.Label(bar,text="Стійкий локальний audit trail. Токени та повні тексти джерел сюди не записуються.").pack(side="left")
+        ttk.Button(bar,text="Оновити журнал",command=self.refresh_audit_log).pack(side="right")
         self.log_text=tk.Text(self.log_tab,wrap="word",state="disabled"); self.log_text.pack(fill="both",expand=True)
 
     def _selected_id(self,tree:ttk.Treeview)->int|None:
@@ -229,10 +232,10 @@ class MainWindow:
             ch=next((c for c in channels if c.id==self.current_channel_id),None)
             if ch: self.channel_var.set(ch.name)
         else: self.channel_var.set("")
-        self.refresh_channels(); self.refresh_sources(); self.refresh_history(); self.refresh_stats(); self.load_secret_ui()
+        self.refresh_channels(); self.refresh_sources(); self.refresh_history(); self.refresh_stats(); self.refresh_audit_log(); self.load_secret_ui()
 
     def _channel_changed(self):
-        self.current_channel_id=self.channel_map.get(self.channel_var.get()); self.refresh_sources(); self.refresh_history(); self.refresh_stats()
+        self.current_channel_id=self.channel_map.get(self.channel_var.get()); self.refresh_sources(); self.refresh_history(); self.refresh_stats(); self.refresh_audit_log()
 
     def refresh_channels(self):
         for i in self.channels_tree.get_children(): self.channels_tree.delete(i)
@@ -244,7 +247,39 @@ class MainWindow:
         if not self.current_channel_id:return
         kind_names={"telegram":"Telegram","rss":"RSS/Atom","page":"Веб"}
         for s in self.db.list_sources(self.current_channel_id):
-            self.sources_tree.insert("","end",iid=str(s.id),values=(s.name,kind_names.get(s.kind,s.kind),s.url,"так" if s.enabled else "ні","так" if s.initialized else "ні",s.last_checked_at or "",s.last_error or ""))
+            health=self.db.source_health(s.id)
+            if not s.enabled:
+                state="⚪ вимкнено"
+            elif s.last_error:
+                state="🔴 помилка"
+            elif health.get("last_success_at"):
+                state="🟢 працює"
+            elif s.initialized:
+                state="🟡 очікує"
+            else:
+                state="⚪ не перевірено"
+            self.sources_tree.insert("","end",iid=str(s.id),values=(
+                s.name,kind_names.get(s.kind,s.kind),s.url,"так" if s.enabled else "ні","так" if s.initialized else "ні",
+                state,health.get("last_new_at") or "",health.get("last_inserted_count") or 0,health.get("total_errors") or 0,
+                s.last_checked_at or "",s.last_error or ""
+            ))
+
+    def refresh_audit_log(self):
+        if not hasattr(self,"log_text"):
+            return
+        rows=self.db.recent_audit(self.current_channel_id,limit=400)
+        lines=[]
+        for r in reversed(rows):
+            refs=[]
+            if r["source_id"]: refs.append(f"source={r['source_id']}")
+            if r["article_id"]: refs.append(f"article={r['article_id']}")
+            ref_text=(" · "+", ".join(refs)) if refs else ""
+            detail=(" · "+str(r["detail"])) if r["detail"] else ""
+            lines.append(f"{r['created_at']} [{r['stage']}/{r['outcome']}]{ref_text}{detail}")
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0","end")
+        self.log_text.insert("1.0","\n".join(lines) if lines else "Журнал ще порожній.")
+        self.log_text.configure(state="disabled")
 
     def refresh_history(self):
         for i in self.history_tree.get_children(): self.history_tree.delete(i)
@@ -284,7 +319,7 @@ class MainWindow:
             e.bind("<Control-KeyPress>", self._control_edit_shortcut, add="+"); e.bind("<Shift-Insert>", self._paste_shortcut, add="+"); e.bind("<Button-3>", self._show_edit_menu, add="+")
         enabled=tk.BooleanVar(value=ch.enabled if ch else True)
         ttk.Checkbutton(nums,text="Канал активний",variable=enabled).grid(row=0,column=2,sticky="w",padx=20)
-        ttk.Label(nums,text="Формат: медіа + анонс ≤900 + Telegraph",foreground="#555").grid(row=1,column=2,sticky="w",padx=20)
+        ttk.Label(nums,text="Формат: 1 медіа + ≤900 / без медіа ≤4096",foreground="#555").grid(row=1,column=2,sticky="w",padx=20)
         def save():
             try:
                 name=fields["name"].get().strip()
