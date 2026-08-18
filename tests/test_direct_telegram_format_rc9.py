@@ -55,25 +55,31 @@ def test_prompt_is_professional_science_pop_and_telegram_only():
     assert "science-and-technology journalist" in prompt
     assert "HARD LIMIT: 900" in prompt
     assert "Telegraph" not in prompt
-    assert "2-4 compact paragraphs" in prompt
+    assert "2-4 short paragraphs" in prompt
+    assert "NO HEADLINE" in prompt
+    assert "one clear idea per sentence" in prompt
 
 
 def test_final_post_has_hard_900_character_limit(monkeypatch):
     monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
-    good = """ЗАГОЛОВОК: Uber і Zipline готують доставку їжі дронами
-ТЕКСТ: Uber Eats і Zipline планують запустити доставку їжі дронами в районі Даллас-Форт-Ворт пізніше цього року. Партнери хочуть масштабувати сервіс і до 2029 року вийти на мільйон доставок на день. Для Uber це спосіб автоматизувати «останню милю», а для Zipline — розширити використання автономних систем доставки у США."""
+    good = """ТЕКСТ: Uber Eats і Zipline планують запустити доставку їжі дронами в районі Даллас-Форт-Ворт пізніше цього року. Партнери хочуть масштабувати сервіс і до 2029 року вийти на мільйон доставок на день.
+
+Для Uber це спосіб автоматизувати «останню милю». Для Zipline — розширити використання автономних систем доставки у США."""
     parsed = validate_rewrite(good, allowed_years={2025, 2026, 2029})
     assert len(parsed["post"]) <= POST_HARD_LIMIT
     assert "Читати повністю" not in parsed["post"]
     assert "telegra.ph" not in parsed["post"]
+    assert not parsed["headline"]
+    assert not parsed["post"].startswith("Uber і Zipline готують")
     with pytest.raises(TelegramError):
-        build_post_text("Короткий заголовок", "А" * 900)
+        build_post_text("А" * 901)
 
 
 def test_invented_number_is_rejected(monkeypatch):
     monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
-    bad = """ЗАГОЛОВОК: Нова система прискорює обмін даними
-ТЕКСТ: Компанія представила нову систему для дата-центрів. Вона працює зі швидкістю 900 Гбіт/с і має зменшити затримки у великих ШІ-кластерах. Розробники кажуть, що рішення орієнтоване на високонавантажені обчислення та повинно спростити масштабування мережевої інфраструктури."""
+    bad = """ТЕКСТ: Компанія представила нову систему для дата-центрів. Вона працює зі швидкістю 900 Гбіт/с і має зменшити затримки у великих ШІ-кластерах.
+
+Розробники кажуть, що рішення орієнтоване на високонавантажені обчислення та повинно спростити масштабування мережевої інфраструктури."""
     with pytest.raises(Exception, match="число"):
         validate_rewrite(bad, allowed_numbers={"800"})
 
@@ -86,8 +92,9 @@ def test_media_and_text_only_posts_have_different_hard_limits(monkeypatch):
     assert "HARD LIMIT: 4096" in text_prompt
     assert "1800-3400" in text_prompt
 
-    long_body = ("Це завершене речення про технологічну подію та її значення для користувачів. " * 20).strip()
-    raw = "ЗАГОЛОВОК: Повний текст без медіафайлу\nТЕКСТ: " + long_body
+    para = ("Це завершене речення про технологічну подію та її значення для користувачів. " * 8).strip()
+    long_body = para + "\n\n" + para + "\n\n" + para
+    raw = "ТЕКСТ: " + long_body
     parsed = validate_rewrite(raw, hard_limit=TEXT_POST_HARD_LIMIT)
     assert 900 < len(parsed["post"]) <= TEXT_POST_HARD_LIMIT
     with pytest.raises(Exception, match="900"):
@@ -96,8 +103,9 @@ def test_media_and_text_only_posts_have_different_hard_limits(monkeypatch):
 
 def test_incomplete_ai_output_is_rejected_instead_of_published(monkeypatch):
     monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
-    broken = """ЗАГОЛОВОК: Apple тестує нову функцію для AirPods
-ТЕКСТ: У відео Apple показала прототип навушників із камерою. Система має допомагати Siri аналізувати довкілля, а користувач у демонстрації просить асистента запам’ятати книгу, після чого функція Visual Intelligence"""
+    broken = """ТЕКСТ: У відео Apple показала прототип навушників із камерою. Система має допомагати Siri аналізувати довкілля.
+
+Користувач у демонстрації просить асистента запам’ятати книгу, після чого функція Visual Intelligence"""
     with pytest.raises(Exception, match="обірвав"):
         validate_rewrite(broken, hard_limit=MEDIA_POST_HARD_LIMIT)
 
@@ -107,3 +115,24 @@ def test_service_selects_limit_from_real_media_state():
     assert "MEDIA_POST_HARD_LIMIT if hero is not None else TEXT_POST_HARD_LIMIT" in source
     assert "hard_limit=telegram_hard_limit" in source
     assert "hard_limit=rewrite_hard_limit" in source
+
+
+def test_dense_single_paragraph_is_rejected(monkeypatch):
+    monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
+    dense = "ТЕКСТ: " + ("Це коротке речення про систему спостереження та її роботу. " * 10)
+    with pytest.raises(Exception, match="стін.*тексту"):
+        validate_rewrite(dense, hard_limit=MEDIA_POST_HARD_LIMIT)
+
+
+def test_overloaded_sentence_is_rejected(monkeypatch):
+    monkeypatch.setattr("telegram_autopilot.production_pipeline_rc9.looks_ukrainian", lambda value: True)
+    long_sentence = " ".join(["система"] * 35) + "."
+    raw = "ТЕКСТ: Коротке вступне речення про технологію.\n\n" + long_sentence
+    with pytest.raises(Exception, match="34 слів"):
+        validate_rewrite(raw, hard_limit=MEDIA_POST_HARD_LIMIT)
+
+
+def test_body_only_builder_does_not_add_headline():
+    text = "Перший абзац завершується нормально.\n\nДругий абзац також завершується нормально."
+    assert build_post_text(text) == text
+    assert build_post_text("\u200b", text) == text
