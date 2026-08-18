@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from . import APP_NAME, __version__
-from .ai_router import test_all
+from .ai_router import clear_router_cooldowns, test_all
 from .local_ai_runtime import test_local_runtime
 from .codex_engine import inspect_codex, install_codex, login_chatgpt
 from .collector import detect_source
@@ -424,7 +424,8 @@ class MainWindow:
     def save_secret_ui(self,quiet=False):
         try:
             old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; sec=SecretConfig(**data,channel_bot_tokens=old.channel_bot_tokens,telegraph_access_token=old.telegraph_access_token,local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); save_secrets(sec)
-            if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено.")
+            clear_router_cooldowns()
+            if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено. AI cooldown скинуто, провайдери перевірятимуться заново.")
         except Exception as exc: messagebox.showerror(APP_NAME,str(exc))
 
     def test_ai_ui(self):
