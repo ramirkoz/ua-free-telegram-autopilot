@@ -75,6 +75,40 @@ def _save_state(value: dict) -> None:
     temp.replace(path)
 
 
+def clear_router_cooldowns(provider: str | None = None) -> None:
+    """Clear stale router suppression after credentials or health recover.
+
+    RC10 diagnostics bypassed production cooldowns but never removed them, so a
+    provider could test green while Autopilot kept skipping it for minutes or
+    hours. RC11 makes recovery explicit and durable.
+    """
+
+    state = _state()
+    cooldowns = state.setdefault("cooldowns", {})
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        state["cooldowns"] = cooldowns
+    name = str(provider or "").strip().casefold()
+    if name:
+        provider_key = f"provider:{name}"
+        model_prefix = f"model:{name}:"
+        for key in list(cooldowns):
+            if str(key).casefold() == provider_key or str(key).casefold().startswith(model_prefix):
+                cooldowns.pop(key, None)
+    else:
+        cooldowns.clear()
+    _save_state(state)
+
+
+def _clear_slot_cooldowns(state: dict, slot: Slot) -> None:
+    cooldowns = state.setdefault("cooldowns", {})
+    if not isinstance(cooldowns, dict):
+        state["cooldowns"] = {}
+        return
+    cooldowns.pop(_cooldown_key(slot), None)
+    cooldowns.pop(_cooldown_key(slot, provider=True), None)
+
+
 def _configured(slot: Slot, cfg: SecretConfig) -> bool:
     if slot.provider == "codex":
         status = inspect_codex()
@@ -266,7 +300,7 @@ def run_ai(
     for slot in MODEL_SLOTS:
         if slot.provider.casefold() in suppressed or not _configured(slot, cfg):
             continue
-        if slot.provider != "local" and (_cooldown_active(state, _cooldown_key(slot, provider=True), now) or _cooldown_active(state, _cooldown_key(slot), now)):
+        if _cooldown_active(state, _cooldown_key(slot, provider=True), now) or _cooldown_active(state, _cooldown_key(slot), now):
             continue
         if deadline is not None and time.monotonic() >= deadline:
             failures.append("Загальний ліміт часу AI-завдання вичерпано.")
@@ -312,6 +346,8 @@ def run_ai(
                 validator(output)
         except LocalAIRuntimeError as exc:
             failures.append(f"{runtime_slot.label}: {exc}")
+            _put_cooldown(state, _cooldown_key(slot, provider=True), 180, str(exc))
+            _save_state(state)
             continue
         except AIModelError as exc:
             failures.append(f"{runtime_slot.label}: {exc}")
@@ -331,7 +367,7 @@ def run_ai(
             continue
 
         state.update({"last_provider": runtime_slot.provider, "last_model": runtime_slot.model, "last_label": runtime_slot.label, "last_success_at": time.time()})
-        state.setdefault("cooldowns", {}).pop(_cooldown_key(slot), None)
+        _clear_slot_cooldowns(state, slot)
         _save_state(state)
         return Result(output, runtime_slot.provider, runtime_slot.model, runtime_slot.label, tuple(attempted))
 
@@ -356,6 +392,7 @@ def test_all() -> list[tuple[str, str, str]]:
                 continue
             try:
                 target = test_local_runtime(preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model)
+                clear_router_cooldowns(provider)
                 rows.append((provider, "✓", f"працює · {target.label}"))
             except Exception as exc:
                 rows.append((provider, "⚠", str(exc)))
@@ -374,6 +411,7 @@ def test_all() -> list[tuple[str, str, str]]:
                 else:
                     text = _openai(slot, cfg, "Return exactly: UA_FREE_AUTOPILOT_OK", max_output_tokens=64, timeout_seconds=15)
                 if "UA_FREE_AUTOPILOT_OK" in text:
+                    clear_router_cooldowns(provider)
                     rows.append((provider, "✓", f"працює · {slot.model}"))
                     break
                 failures.append(f"{slot.model}: контрольний текст не збігся")
