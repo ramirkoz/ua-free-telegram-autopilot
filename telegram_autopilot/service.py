@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
+from .ai_router import clear_router_cooldowns
 from .database import Database, content_hash, now_iso
 from .production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, decide
 from .language import looks_english, normalize_ukrainian_terminology
@@ -25,6 +26,16 @@ class AutopilotService:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_collect: dict[int, float] = {}
+        # RC10 could leave every cloud provider suppressed in a persistent
+        # cooldown even after credentials or connectivity recovered. Clear that
+        # stale state exactly once when a copied Data folder first starts RC11.
+        try:
+            if self.db.get_state("rc11_ai_liveness_migrated", "0") != "1":
+                clear_router_cooldowns()
+                self.db.set_state("rc11_ai_liveness_migrated", "1")
+                self._audit("ai_router", "cooldown_reset", "RC11 one-time stale cooldown reset")
+        except Exception as exc:
+            self.log.debug("RC11 AI cooldown migration skipped: %s", exc)
 
     @property
     def running(self) -> bool:
