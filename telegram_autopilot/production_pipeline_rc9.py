@@ -152,7 +152,7 @@ def _validate_years(output: str, allowed_years: set[int]) -> None:
 def _compact_source(article: Row, *, local: bool, hard_limit: int) -> str:
     """Compatibility wrapper returning the RC10 deterministic Evidence Pack."""
     if hard_limit <= MEDIA_POST_HARD_LIMIT:
-        budget = 1300 if local else 2100
+        budget = 650 if local else 1650
     else:
         budget = 3200 if local else 4800
     return build_evidence_pack(article, char_budget=budget).text
