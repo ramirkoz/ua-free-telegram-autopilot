@@ -43,7 +43,7 @@ def normalize_chat_target(value: str) -> str:
         return raw
     if raw.isdigit():
         return raw
-    if raw.startswith("@"): 
+    if raw.startswith("@"):
         username = raw[1:].strip()
         if username and all(ch.isalnum() or ch == "_" for ch in username):
             return "@" + username
@@ -62,23 +62,51 @@ def normalize_chat_target(value: str) -> str:
             if not all(ch.isalnum() or ch == "_" for ch in username):
                 raise TelegramError("Некоректне посилання на Telegram-канал.", retryable=False)
             return "@" + username
-    # Also accept a bare public username to reduce pointless ceremony.
     if all(ch.isalnum() or ch == "_" for ch in raw):
         return "@" + raw
     raise TelegramError("Вставте посилання t.me/..., @username або Chat ID каналу.", retryable=False)
 
 
-def build_caption(teaser: str, telegraph_url: str) -> str:
-    teaser = " ".join(teaser.strip().split())
-    suffix = f"\n\nЧитати повністю: {telegraph_url.strip()}"
-    max_teaser = max(100, 1024 - len(suffix))
-    if len(teaser) > min(900, max_teaser):
-        limit = min(900, max_teaser)
-        teaser = teaser[: max(1, limit - 1)].rstrip(" ,;:-") + "…"
-    caption = teaser + suffix
-    if len(caption) > 1024:
-        raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
-    return caption
+def _clean_paragraphs(value: str) -> str:
+    parts = [" ".join(part.split()).strip() for part in str(value or "").splitlines() if part.strip()]
+    return "\n\n".join(parts)
+
+
+def build_post_text(
+    headline: str,
+    body: str,
+    *,
+    source_url: str = "",
+    include_source_link: bool = False,
+    hard_limit: int = 900,
+) -> str:
+    """Build the final Telegram post. No Telegraph, no hidden continuation message.
+
+    The 900-character limit is a product rule, deliberately lower than Telegram's
+    technical caption limit. AI output is validated before this function; this is
+    the final deterministic guard immediately before the network write.
+    """
+    clean_headline = " ".join(str(headline or "").split()).strip()
+    clean_body = _clean_paragraphs(body)
+    if not clean_headline or not clean_body:
+        raise TelegramError("Порожній заголовок або текст Telegram-поста.", retryable=False)
+    text = f"{clean_headline}\n\n{clean_body}".strip()
+    if include_source_link and source_url.strip():
+        text += f"\n\nДжерело: {source_url.strip()}"
+    if len(text) > hard_limit:
+        raise TelegramError(f"Telegram-пост перевищує ліміт {hard_limit} символів.", retryable=False)
+    return text
+
+
+def build_caption(teaser: str, telegraph_url: str = "") -> str:
+    """Deprecated compatibility helper for old callers/tests.
+
+    New production code uses build_post_text() and never appends Telegraph links.
+    """
+    clean = _clean_paragraphs(teaser)
+    if len(clean) > 900:
+        raise TelegramError("Telegram-пост перевищує ліміт 900 символів.", retryable=False)
+    return clean
 
 
 def _request(token: str, method: str, fields: dict[str, str], *, timeout: float = 45.0, media_write: bool = False) -> object:
@@ -104,7 +132,6 @@ def _request(token: str, method: str, fields: dict[str, str], *, timeout: float 
         code = int(payload.get("error_code", response.status) or response.status)
         desc = str(payload.get("description") or f"HTTP {response.status}")
         retryable = code == 429 or code >= 500
-        # A definite 4xx from a media method means Telegram rejected the URL/media and no post was created.
         media_rejected = bool(media_write and 400 <= code < 500 and code != 429)
         raise TelegramError(f"Telegram: {desc} (код {code})", retryable=retryable, media_rejected=media_rejected)
     return payload.get("result")
@@ -136,55 +163,30 @@ def send_text(token: str, chat_id: str, text: str, *, timeout: float = 45.0) -> 
 
 
 def send_publication(token: str, chat_id: str, caption: str, media_urls: list[str], *, timeout: float = 45.0) -> TelegramResult:
+    """Compatibility wrapper that deliberately publishes at most one media file."""
     token = token.strip(); chat_id = normalize_chat_target(chat_id); caption = caption.strip()
     if not token or not chat_id:
         raise TelegramError("Telegram bot token або Chat ID не налаштовано.", retryable=False)
-    if len(caption) > 1024:
-        raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
-    media: list[tuple[str, str]] = []
+    if len(caption) > 900:
+        raise TelegramError("Telegram-пост перевищує ліміт 900 символів.", retryable=False)
+    selected: tuple[str, str] | None = None
     for item in media_urls:
         parsed = valid_public_media(str(item))
-        if not parsed:
-            continue
-        kind, url = parsed
-        if kind == "iframe":
-            continue
-        pair = (kind, url)
-        if pair not in media:
-            media.append(pair)
-        if len(media) >= 10:
+        if parsed and parsed[0] != "iframe":
+            selected = parsed
             break
-    if not media:
+    if selected is None:
         return send_text(token, chat_id, caption, timeout=timeout)
-    if len(media) == 1:
-        kind, url = media[0]
-        method = "sendVideo" if kind == "video" else "sendPhoto"
-        field = "video" if kind == "video" else "photo"
-        result = _request(
-            token,
-            method,
-            {"chat_id": chat_id, field: url, "caption": caption, "show_caption_above_media": "true"},
-            timeout=timeout,
-            media_write=True,
-        )
-        ids = _result_ids(result)
-        return TelegramResult(ids[0], ids, 1)
-    payload = []
-    for index, (kind, url) in enumerate(media):
-        item: dict[str, object] = {"type": "video" if kind == "video" else "photo", "media": url}
-        if index == 0:
-            item["caption"] = caption
-            item["show_caption_above_media"] = True
-        payload.append(item)
+    kind, url = selected
+    method = "sendVideo" if kind == "video" else "sendPhoto"
+    field = "video" if kind == "video" else "photo"
     result = _request(
-        token,
-        "sendMediaGroup",
-        {"chat_id": chat_id, "media": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
-        timeout=timeout,
-        media_write=True,
+        token, method,
+        {"chat_id": chat_id, field: url, "caption": caption, "show_caption_above_media": "true"},
+        timeout=timeout, media_write=True,
     )
     ids = _result_ids(result)
-    return TelegramResult(ids[0], ids, len(media))
+    return TelegramResult(ids[0], ids, 1)
 
 
 def test_bot(token: str, chat_id: str) -> str:
