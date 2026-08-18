@@ -9,12 +9,11 @@ from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
 from .database import Database, content_hash, now_iso
-from .production_pipeline_rc9 import decide
-from .language import looks_english, normalize_ukrainian_terminology, sanitize_media_caption
+from .production_pipeline_rc9 import POST_FORMAT_PREFIX, decide
+from .language import looks_english, normalize_ukrainian_terminology
 from .models import Channel
-from .secrets_store import load_secrets, save_secrets
-from .telegraph import TelegraphError, create_account, create_page
-from .telegram import TelegramError, build_caption, send_prepared_photo, send_text
+from .secrets_store import load_secrets
+from .telegram import TelegramError, build_post_text, send_prepared_photo, send_text
 from .media_pipeline import prepare_article_media
 
 
@@ -110,23 +109,6 @@ class AutopilotService:
         except Exception:
             return True
 
-    @staticmethod
-    def _author_url(channel: Channel) -> str:
-        chat = channel.telegram_chat_id.strip()
-        if chat.startswith("@") and len(chat) > 1:
-            return "https://t.me/" + chat[1:]
-        return ""
-
-    def _telegraph_token(self) -> str:
-        secrets = load_secrets()
-        if secrets.telegraph_access_token:
-            return secrets.telegraph_access_token
-        token = create_account("ua_free_autopilot")
-        secrets.telegraph_access_token = token
-        save_secrets(secrets)
-        self.on_event("telegraph", "Telegraph-акаунт автоматично створено та збережено")
-        return token
-
     def _process(self, channel: Channel) -> None:
         posted = 0
         attempted = 0
@@ -140,16 +122,15 @@ class AutopilotService:
             try:
                 self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
 
+                # Pending rows collected by older RC9 builds can contain a page-wide
+                # media bag. Refresh them once with the article-only extractor. This
+                # preserves Data while preventing stale Jaguar/banner/related images.
                 try:
                     layout_existing = str(row["article_layout_json"] or "")
-                except Exception:
-                    layout_existing = ""
-                try:
                     layout_version = int((json.loads(layout_existing or "{}") or {}).get("version") or 0)
                 except Exception:
                     layout_version = 0
-                needs_layout_refresh = layout_version < 4 and not str(row["telegraph_url"] or "").strip()
-                if needs_layout_refresh and str(row["url"] or "").startswith(("http://", "https://")):
+                if layout_version < 4 and str(row["url"] or "").startswith(("http://", "https://")):
                     hydrated = hydrate_article_page(
                         str(row["url"] or ""),
                         str(row["title"] or ""),
@@ -183,60 +164,48 @@ class AutopilotService:
                     self.db.update_article(article_id, status="duplicate", duplicate_of=exact, reject_reason=f"Точний дубль #{exact}.")
                     continue
 
-                headline = normalize_ukrainian_terminology(str(row["headline_uk"] or "").strip())
-                teaser = normalize_ukrainian_terminology(str(row["teaser_text"] or "").strip())
-                full_article = normalize_ukrainian_terminology(str(row["full_article_uk"] or "").strip())
                 event_key = str(row["event_key"] or "").strip()
-                event_summary = str(row["event_summary"] or "").strip()
-                ai_provider = str(row["ai_provider"] or "").strip()
-                ai_model = str(row["ai_model"] or "").strip()
-                media_captions = self.db.media_captions(row)
+                current_format = event_key.startswith(POST_FORMAT_PREFIX)
+                headline = normalize_ukrainian_terminology(str(row["headline_uk"] or "").strip()) if current_format else ""
+                body = normalize_ukrainian_terminology(str(row["teaser_text"] or "").strip()) if current_format else ""
+                event_summary = str(row["event_summary"] or "").strip() if current_format else ""
+                ai_provider = str(row["ai_provider"] or "").strip() if current_format else ""
+                ai_model = str(row["ai_model"] or "").strip() if current_format else ""
 
-                if not (headline and teaser and full_article and event_summary):
+                if not (headline and body and event_summary):
                     recent = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=30)
                     decision = decide(channel, row, recent)
                     if decision.decision == "duplicate":
                         self.db.update_article(
-                            article_id,
-                            status="duplicate",
-                            duplicate_of=decision.duplicate_of,
-                            reject_reason=decision.reason,
-                            event_key=decision.event_key,
-                            event_summary=decision.event_summary,
-                            ai_provider=decision.provider,
-                            ai_model=decision.model,
+                            article_id, status="duplicate", duplicate_of=decision.duplicate_of,
+                            reject_reason=decision.reason, event_key=decision.event_key,
+                            event_summary=decision.event_summary, ai_provider=decision.provider, ai_model=decision.model,
                         )
                         continue
                     if decision.decision == "reject":
                         self.db.update_article(
-                            article_id,
-                            status="rejected",
-                            reject_reason=decision.reason,
-                            event_key=decision.event_key,
-                            event_summary=decision.event_summary,
-                            ai_provider=decision.provider,
-                            ai_model=decision.model,
+                            article_id, status="rejected", reject_reason=decision.reason,
+                            event_key=decision.event_key, event_summary=decision.event_summary,
+                            ai_provider=decision.provider, ai_model=decision.model,
                         )
                         continue
                     headline = decision.headline_uk
-                    teaser = decision.telegram_teaser
-                    full_article = decision.full_article_uk
+                    body = decision.telegram_teaser
                     event_key = decision.event_key
                     event_summary = decision.event_summary
                     ai_provider = decision.provider
                     ai_model = decision.model
-                    media_captions = decision.media_captions_uk
                     self.db.update_article(
                         article_id,
-                        status="retry",
+                        status="processing",
                         headline_uk=headline,
-                        teaser_text=teaser,
-                        full_article_uk=full_article,
+                        teaser_text=body,
+                        full_article_uk=body,
                         event_key=event_key,
                         event_summary=event_summary,
                         ai_provider=ai_provider,
                         ai_model=ai_model,
-                        media_captions_json=json.dumps({str(k): v for k, v in media_captions.items()}, ensure_ascii=False),
+                        media_captions_json="{}",
                     )
 
                 media_urls = self.db.media_urls(row)
@@ -244,40 +213,13 @@ class AutopilotService:
                     self.db.article_layout_json(row), media_urls,
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
                 )
-                safe_captions: dict[int, str] = {}
-                for media_item in prepared_media.body:
-                    if media_item.index in media_captions:
-                        safe = sanitize_media_caption(
-                            media_captions[media_item.index], media_item.caption, media_item.alt
-                        )
-                        if safe:
-                            safe_captions[media_item.index] = safe
-                media_captions = safe_captions
-                telegraph_url = str(row["telegraph_url"] or "").strip()
-                if not telegraph_url:
-                    self.db.update_article(article_id, status="telegraph_writing")
-                    page = create_page(
-                        self._telegraph_token(),
-                        title=headline,
-                        full_text=full_article,
-                        media_urls=media_urls,
-                        prepared_media=prepared_media,
-                        media_captions=media_captions,
-                        source_url=str(row["url"] or ""),
-                        author_name=channel.name,
-                        author_url=self._author_url(channel),
-                    )
-                    telegraph_url = page.url
-                    self.db.update_article(
-                        article_id,
-                        status="retry",
-                        telegraph_url=page.url,
-                        telegraph_path=page.path,
-                        telegraph_created_at=now_iso(),
-                    )
-                    self.on_event("telegraph", f"{channel.name}: Telegraph #{article_id}, медіа {page.media_count}")
+                caption = build_post_text(
+                    headline,
+                    body,
+                    source_url=str(row["url"] or ""),
+                    include_source_link=bool(channel.include_source_link),
+                )
 
-                caption = build_caption(teaser, telegraph_url)
                 secrets = load_secrets()
                 token = secrets.channel_bot_tokens.get(str(channel.id), "") or secrets.default_telegram_bot_token
                 self.db.update_article(article_id, status="telegram_writing", rewrite_text=caption)
@@ -285,17 +227,18 @@ class AutopilotService:
                     hero = prepared_media.telegram_hero
                     if hero is not None:
                         result = send_prepared_photo(
-                            token, channel.telegram_chat_id, caption, filename=hero.filename,
-                            mime_type=hero.mime_type, data=hero.data,
+                            token, channel.telegram_chat_id, caption,
+                            filename=hero.filename, mime_type=hero.mime_type, data=hero.data,
                         )
                     else:
                         result = send_text(token, channel.telegram_chat_id, caption)
                 except TelegramError as exc:
                     if exc.media_rejected:
-                        self.on_event("warning", f"{channel.name}: Telegram відхилив головне фото, публікую анонс без фото")
+                        self.on_event("warning", f"{channel.name}: Telegram відхилив фото, публікую цей самий пост без медіа")
                         result = send_text(token, channel.telegram_chat_id, caption)
                     else:
                         raise
+
                 self.db.update_article(
                     article_id,
                     status="published",
@@ -311,13 +254,6 @@ class AutopilotService:
                     "publish",
                     f"{channel.name}: опубліковано #{article_id}, Telegram {result.message_id}, медіа {result.media_count}",
                 )
-            except TelegraphError as exc:
-                if exc.outcome_unknown:
-                    status = "unknown"
-                    self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
-                else:
-                    status = self.db.schedule_retry(article_id, str(exc))
-                self.on_event("error", f"{channel.name}: Telegraph ({status}): {exc}")
             except TelegramError as exc:
                 if exc.outcome_unknown:
                     status = "unknown"
