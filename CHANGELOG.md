@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.0-rc11 — 2026-08-18
+
+### Fixed
+- Successful AI Router diagnostics now clear stale production cooldown for the recovered provider.
+- Saving or replacing AI credentials clears stale router cooldowns immediately.
+- Copied RC10 `Data` receives a one-time stale AI cooldown reset on first RC11 startup.
+- Failed local Ollama/llama.cpp fallback enters a short 3-minute cooldown instead of blocking every queued article again.
+- Successful production calls clear both model-level and provider-level cooldowns.
+
+### Preserved production behavior
+- Fresh `new` articles still run before `retry` rows.
+- Retry backoff/cap and cycle limits are unchanged.
+- Evidence Pack and Fact Guard are unchanged.
+- Telegram publication, media fallback, dedupe, source collection and AES-GCM secrets are unchanged.
+- Existing `Data` schema is unchanged.
+
+### Release status
+- Local RC11 regression gate: PASS.
+- RC11 is synchronized as a hotfix candidate and remains subject to live Windows acceptance before promotion to stable `main`.
+
 ## 0.1.0-rc10 — 2026-08-18
 
 ### Added
