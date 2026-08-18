@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -41,6 +42,14 @@ def normalize_url(value: str) -> str:
 def content_hash(title: str, text: str) -> str:
     normalized = " ".join((title + "\n" + text).casefold().split())
     return hashlib.sha256(normalized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _sanitize_audit_detail(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    text = re.sub(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b", "[REDACTED_TELEGRAM_TOKEN]", text)
+    text = re.sub(r"(?i)(access[_-]?token|api[_-]?key|token|key)=([^&\s]+)", r"\1=[REDACTED]", text)
+    text = re.sub(r"(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/-]{12,}", r"\1[REDACTED]", text)
+    return text[:1200]
 
 
 class Database:
@@ -124,6 +133,8 @@ class Database:
                     published_at TEXT,
                     telegram_message_id TEXT,
                     last_error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
                     media_json TEXT NOT NULL DEFAULT '[]',
                     headline_uk TEXT NOT NULL DEFAULT '',
                     teaser_text TEXT NOT NULL DEFAULT '',
@@ -143,10 +154,35 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS source_health (
+                    source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                    last_success_at TEXT,
+                    last_new_at TEXT,
+                    last_error_at TEXT,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    last_inserted_count INTEGER NOT NULL DEFAULT 0,
+                    total_checks INTEGER NOT NULL DEFAULT 0,
+                    total_errors INTEGER NOT NULL DEFAULT 0,
+                    total_inserted INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    channel_id INTEGER,
+                    source_id INTEGER,
+                    article_id INTEGER,
+                    stage TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_article ON audit_log(article_id, created_at DESC);
                 """
             )
             # RC1 -> RC2 migration. Keeping the old fields makes copied Data folders safe.
             for name, declaration in (
+                ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("next_retry_at", "TEXT"),
                 ("media_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("headline_uk", "TEXT NOT NULL DEFAULT ''"),
                 ("teaser_text", "TEXT NOT NULL DEFAULT ''"),
@@ -245,15 +281,76 @@ class Database:
         with self.connect() as con:
             con.execute("DELETE FROM sources WHERE id=?", (source_id,))
 
-    def source_checked(self, source_id: int, *, initialized: bool | None = None, error: str | None = None) -> None:
+    def source_checked(
+        self, source_id: int, *, initialized: bool | None = None, error: str | None = None,
+        inserted_count: int = 0, baseline: bool = False,
+    ) -> None:
+        stamp = now_iso()
+        inserted = max(0, int(inserted_count or 0))
+        safe_error = _sanitize_audit_detail(error or "") if error else None
         with self.connect() as con:
             if initialized is None:
-                con.execute("UPDATE sources SET last_checked_at=?,last_error=? WHERE id=?", (now_iso(), error, source_id))
+                con.execute("UPDATE sources SET last_checked_at=?,last_error=? WHERE id=?", (stamp, safe_error, source_id))
             else:
                 con.execute(
                     "UPDATE sources SET last_checked_at=?,last_error=?,initialized=? WHERE id=?",
-                    (now_iso(), error, int(initialized), source_id),
+                    (stamp, safe_error, int(initialized), source_id),
                 )
+            if safe_error:
+                con.execute(
+                    """INSERT INTO source_health(source_id,last_error_at,last_error,total_checks,total_errors)
+                    VALUES(?,?,?,?,1)
+                    ON CONFLICT(source_id) DO UPDATE SET
+                      last_error_at=excluded.last_error_at,last_error=excluded.last_error,
+                      total_checks=source_health.total_checks+1,total_errors=source_health.total_errors+1""",
+                    (source_id, stamp, safe_error[:1000], 1),
+                )
+            else:
+                last_new = stamp if inserted > 0 and not baseline else None
+                con.execute(
+                    """INSERT INTO source_health(source_id,last_success_at,last_new_at,last_error,last_inserted_count,total_checks,total_inserted)
+                    VALUES(?,?,?,?,?,1,?)
+                    ON CONFLICT(source_id) DO UPDATE SET
+                      last_success_at=excluded.last_success_at,
+                      last_new_at=COALESCE(excluded.last_new_at,source_health.last_new_at),
+                      last_error='',last_inserted_count=excluded.last_inserted_count,
+                      total_checks=source_health.total_checks+1,
+                      total_inserted=source_health.total_inserted+excluded.total_inserted""",
+                    (source_id, stamp, last_new, '', inserted, inserted),
+                )
+
+    def source_health(self, source_id: int) -> dict[str, object]:
+        with self.connect() as con:
+            row = con.execute("SELECT * FROM source_health WHERE source_id=?", (source_id,)).fetchone()
+        if not row:
+            return {
+                "last_success_at": "", "last_new_at": "", "last_error_at": "", "last_error": "",
+                "last_inserted_count": 0, "total_checks": 0, "total_errors": 0, "total_inserted": 0,
+            }
+        return dict(row)
+
+    def audit(
+        self, stage: str, outcome: str, detail: str = "", *, channel_id: int | None = None,
+        source_id: int | None = None, article_id: int | None = None,
+    ) -> None:
+        safe_detail = _sanitize_audit_detail(detail)
+        with self.connect() as con:
+            con.execute(
+                "INSERT INTO audit_log(created_at,channel_id,source_id,article_id,stage,outcome,detail) VALUES(?,?,?,?,?,?,?)",
+                (now_iso(), channel_id, source_id, article_id, str(stage)[:80], str(outcome)[:40], safe_detail),
+            )
+
+    def recent_audit(self, channel_id: int | None = None, limit: int = 300) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            if channel_id:
+                return con.execute(
+                    "SELECT * FROM audit_log WHERE channel_id=? OR channel_id IS NULL ORDER BY id DESC LIMIT ?",
+                    (channel_id, max(1, min(2000, int(limit)))),
+                ).fetchall()
+            return con.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?",
+                (max(1, min(2000, int(limit))),),
+            ).fetchall()
 
     def insert_collected(self, source: Source, item: CollectedArticle, *, baseline: bool) -> int | None:
         h = content_hash(item.title, item.raw_text)
@@ -282,12 +379,52 @@ class Database:
             ).fetchone()
 
     def pending_articles(self, channel_id: int, limit: int = 20) -> list[sqlite3.Row]:
+        """Return publish candidates without allowing old retries to starve fresh news.
+
+        Fresh ``new`` rows always have priority. ``retry`` rows are eligible only
+        after their backoff deadline. Existing RC8/early-RC9 retry rows have no
+        deadline, so they remain recoverable but are processed only after fresh news.
+        """
         with self.connect() as con:
             return con.execute(
                 """SELECT a.*,s.name AS source_name FROM articles a JOIN sources s ON s.id=a.source_id
-                WHERE a.channel_id=? AND a.status IN ('new','retry') ORDER BY a.id ASC LIMIT ?""",
+                WHERE a.channel_id=? AND (
+                    a.status='new' OR (
+                        a.status='retry' AND (
+                            a.next_retry_at IS NULL OR a.next_retry_at='' OR datetime(a.next_retry_at) <= datetime('now')
+                        )
+                    )
+                )
+                ORDER BY CASE WHEN a.status='new' THEN 0 ELSE 1 END, a.id ASC
+                LIMIT ?""",
                 (channel_id, limit),
             ).fetchall()
+
+    def schedule_retry(self, article_id: int, error: str, *, max_attempts: int = 5) -> str:
+        """Apply bounded exponential-ish backoff for a failed article.
+
+        After ``max_attempts`` failures the row becomes ``error`` so one broken
+        historical item can never occupy the automatic queue forever.
+        """
+        delays = (120, 300, 900, 1800)
+        with self.connect() as con:
+            row = con.execute("SELECT retry_count FROM articles WHERE id=?", (article_id,)).fetchone()
+            if not row:
+                return "error"
+            attempt = int(row[0] or 0) + 1
+            if attempt >= max(1, int(max_attempts)):
+                con.execute(
+                    "UPDATE articles SET status='error',retry_count=?,next_retry_at=NULL,last_error=? WHERE id=?",
+                    (attempt, str(error)[:2000], article_id),
+                )
+                return "error"
+            delay = delays[min(attempt - 1, len(delays) - 1)]
+            next_retry = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(timespec="seconds")
+            con.execute(
+                "UPDATE articles SET status='retry',retry_count=?,next_retry_at=?,last_error=? WHERE id=?",
+                (attempt, next_retry, str(error)[:2000], article_id),
+            )
+            return "retry"
 
     def recent_published(self, channel_id: int, hours: int, limit: int = 30) -> list[sqlite3.Row]:
         with self.connect() as con:
@@ -312,7 +449,7 @@ class Database:
             "status", "language", "reject_reason", "duplicate_of", "event_key", "event_summary", "rewrite_text",
             "headline_uk", "teaser_text", "full_article_uk", "telegraph_url", "telegraph_path", "telegraph_created_at",
             "telegram_media_count", "ai_provider", "ai_model", "processing_started_at", "published_at",
-            "telegram_message_id", "last_error", "raw_text", "media_json", "article_layout_json",
+            "telegram_message_id", "last_error", "retry_count", "next_retry_at", "raw_text", "media_json", "article_layout_json",
             "media_captions_json", "content_hash",
         }
         pairs = [(k, v) for k, v in fields.items() if k in allowed]
