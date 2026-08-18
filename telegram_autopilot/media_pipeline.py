@@ -21,6 +21,7 @@ _HARD_REJECT = (
     "doubleclick", "googlesyndication", "googleadservices", "amazon-adsystem", "adserver", "ad-unit",
     "ad_slot", "ad-slot", "banner", "tracking", "pixel.gif", "1x1.gif", "favicon", "sprite",
     "avatar", "headshot", "profile-photo", "social-share", "share-icon", "analytics",
+    "click to follow", "follow us", "follow on google", "google news", "follow tom's hardware",
 )
 _LOGO_WORDS = ("logo", "wordmark", "brandmark", "app-icon", "site-icon", "badge")
 _STOP = {
@@ -64,6 +65,8 @@ class PreparedArticleMedia:
 
     @property
     def telegram_hero(self) -> PreparedMedia | None:
+        # Prefer an early, strongly relevant image from the real article body.
+        # A later recommendation-card image must never win merely because it is larger.
         early = [
             item for item in self.body
             if item.kind == "image" and item.data and item.relevance_score >= 38 and item.position <= 0.45
@@ -156,6 +159,9 @@ def _classify(item: PreparedMedia) -> str:
 def _score(item: PreparedMedia, *, title: str, article_text: str) -> float:
     if _hard_reject(item):
         return -100.0
+    # A large image is not automatically relevant. The old score started every
+    # body image at the acceptance threshold, so unrelated recommendation cards
+    # passed on size alone. Start lower and require article-position or semantic evidence.
     score = 10.0 if item.featured else 16.0
     if item.caption:
         score += 10.0
@@ -317,7 +323,7 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             seen_urls.add(item.url)
             prepared.append(item)
         seen_identities.add(identity)
-        if len(prepared) >= 4:
+        if len(prepared) >= 3:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
     return PreparedArticleMedia(featured, prepared)
