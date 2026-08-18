@@ -119,6 +119,8 @@ def editorial_media_candidate(
         return ""
     if parts.scheme not in {"http", "https"} or not parts.hostname or not _media_url_allowed(url):
         return ""
+    # Featured metadata is not trusted. Publishers frequently put sponsor banners or
+    # AI-summary promos into og:image, so the same hard editorial filters apply.
     if _looks_noneditorial_media_context(" ".join((alt, context))):
         return ""
     if (width and width < 220) or (height and height < 140):
@@ -147,6 +149,13 @@ def _clean_text(text: str) -> str:
 
 
 class _ArticleHTMLParser(HTMLParser):
+    """Extract article text and preserve editorial media in source order.
+
+    RC6 collected a flat media bag and Telegraph sprinkled it every three paragraphs.
+    RC7 records media as blocks at their actual article position. Featured metadata is
+    kept separately for the Telegram hero and is not blindly duplicated in Telegraph.
+    """
+
     def __init__(self, base_url: str, *, include_main: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
@@ -230,6 +239,8 @@ class _ArticleHTMLParser(HTMLParser):
         candidates = list(self.figure.get("candidates") or [])
         caption = " ".join("".join(self.figure.get("caption_chunks") or []).split()).strip()[:1000]
         if candidates:
+            # Choose the largest declared rendition inside a figure. srcset variants
+            # and lazy placeholders are therefore collapsed before publication.
             candidates.sort(key=lambda row: (int(row.get("width") or 0) * int(row.get("height") or 0), int(row.get("width") or 0)), reverse=True)
             media = dict(candidates[0])
             media.update({"type": "media", "caption": caption})
@@ -281,7 +292,7 @@ class _ArticleHTMLParser(HTMLParser):
                 candidate = self._image_candidate(values)
                 if candidate:
                     if self.figure is not None:
-                        self.figure["candidates"].append(candidate)
+                        self.figure["candidates"].append(candidate)  # type: ignore[index]
                     else:
                         self._finish_text_capture()
                         self.blocks.append({"type": "media", **candidate, "caption": ""})
@@ -346,7 +357,7 @@ class _ArticleHTMLParser(HTMLParser):
             self.title_chunks.append(stripped)
         self.all_chunks.append(stripped + " ")
         if self.figure is not None and self.figcaption_depth:
-            self.figure["caption_chunks"].append(stripped + " ")
+            self.figure["caption_chunks"].append(stripped + " ")  # type: ignore[index]
         elif self.text_capture is not None:
             self.text_capture[2].append(text)
 
@@ -393,6 +404,7 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str) -> tuple[l
 
     if featured and featured not in media_urls:
         media_urls.insert(0, featured)
+    layout = {"version": 3, "featured": featured, "blocks": normalized}
     return normalized, media_urls[:24]
 
 
@@ -406,6 +418,11 @@ def _parse_scope(html: str, base_url: str, *, include_main: bool) -> _ArticleHTM
 
 
 def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
+    # Prefer the semantic <article> element. Large publisher pages commonly keep
+    # related-story cards, carousels and recommendation images inside <main>, and
+    # treating all of <main> as article content is how unrelated cars/banners leaked
+    # into Telegraph and Telegram. Only fall back to <main> when no usable <article>
+    # exists at all.
     article_parser = _parse_scope(html, base_url, include_main=False)
     article_blocks, article_media = _normalize_layout(article_parser.blocks, article_parser.featured_media)
     article_text = _clean_text("\n".join(
