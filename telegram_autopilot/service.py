@@ -9,7 +9,7 @@ from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
 from .database import Database, content_hash, now_iso
-from .production_pipeline_rc9 import POST_FORMAT_PREFIX, decide
+from .production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, decide
 from .language import looks_english, normalize_ukrainian_terminology
 from .models import Channel
 from .secrets_store import load_secrets
@@ -164,8 +164,21 @@ class AutopilotService:
                     self.db.update_article(article_id, status="duplicate", duplicate_of=exact, reject_reason=f"Точний дубль #{exact}.")
                     continue
 
+                media_urls = self.db.media_urls(row)
+                prepared_media = prepare_article_media(
+                    self.db.article_layout_json(row), media_urls,
+                    title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
+                )
+                hero = prepared_media.telegram_hero
+                telegram_hard_limit = MEDIA_POST_HARD_LIMIT if hero is not None else TEXT_POST_HARD_LIMIT
+                source_footer = ""
+                if channel.include_source_link and str(row["url"] or "").strip():
+                    source_footer = f"\n\nДжерело: {str(row['url'] or '').strip()}"
+                rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer))
+                format_marker = f"{POST_FORMAT_PREFIX}{telegram_hard_limit}:{rewrite_hard_limit}:"
+
                 event_key = str(row["event_key"] or "").strip()
-                current_format = event_key.startswith(POST_FORMAT_PREFIX)
+                current_format = event_key.startswith(format_marker)
                 headline = normalize_ukrainian_terminology(str(row["headline_uk"] or "").strip()) if current_format else ""
                 body = normalize_ukrainian_terminology(str(row["teaser_text"] or "").strip()) if current_format else ""
                 event_summary = str(row["event_summary"] or "").strip() if current_format else ""
@@ -174,7 +187,9 @@ class AutopilotService:
 
                 if not (headline and body and event_summary):
                     recent = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=30)
-                    decision = decide(channel, row, recent)
+                    decision = decide(
+                        channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
+                    )
                     if decision.decision == "duplicate":
                         self.db.update_article(
                             article_id, status="duplicate", duplicate_of=decision.duplicate_of,
@@ -208,23 +223,18 @@ class AutopilotService:
                         media_captions_json="{}",
                     )
 
-                media_urls = self.db.media_urls(row)
-                prepared_media = prepare_article_media(
-                    self.db.article_layout_json(row), media_urls,
-                    title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
-                )
                 caption = build_post_text(
                     headline,
                     body,
                     source_url=str(row["url"] or ""),
                     include_source_link=bool(channel.include_source_link),
+                    hard_limit=telegram_hard_limit,
                 )
 
                 secrets = load_secrets()
                 token = secrets.channel_bot_tokens.get(str(channel.id), "") or secrets.default_telegram_bot_token
                 self.db.update_article(article_id, status="telegram_writing", rewrite_text=caption)
                 try:
-                    hero = prepared_media.telegram_hero
                     if hero is not None:
                         result = send_prepared_photo(
                             token, channel.telegram_chat_id, caption,
