@@ -22,7 +22,7 @@ _COMMON_LATIN = {
 }
 
 # Capitalized English words at a sentence boundary are not automatically named
-# entities. RC18 treated ordinary fragments such as `Bring`, `Own` and `Your` as
+# entities. An older rule treated ordinary fragments such as `Bring`, `Own` and `Your` as
 # hallucinated product names. Keep the entity guard focused on actual names/models
 # while language QA remains responsible for accidental English prose.
 _COMMON_ENGLISH = {
