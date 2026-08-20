@@ -83,6 +83,9 @@ def build_evidence_pack(article: Row, *, char_budget: int) -> EvidencePack:
     def current_len(indices: set[int]) -> int:
         return len(" ".join(sentences[i] for i in sorted(indices)))
 
+    # The lead is important context, but a pathological giant lead must not crowd
+    # every later fact out of the bounded pack. Keep complete lead sentences only
+    # when they fit.
     for idx in range(min(2, len(sentences))):
         candidate = set(chosen)
         candidate.add(idx)
