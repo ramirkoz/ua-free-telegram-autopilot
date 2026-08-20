@@ -6,7 +6,13 @@ _EN_WORDS = {"the","and","that","this","with","from","for","into","after","befor
 _UA_LETTERS = set("іїєґІЇЄҐ")
 _CYRILLIC = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
 _LATIN = re.compile(r"[A-Za-z]")
-_WORD = re.compile(r"[A-Za-z']+")
+_WORD = re.compile(r"[A-Za-zА-Яа-яІіЇїЄєҐґ’\'-]+")
+_UA_COMMON = {
+    "і","й","та","але","що","це","для","через","після","від","із","зі","який","яка","яке","які",
+    "може","можуть","вже","ще","також","його","її","їх","під час","щоб","коли","де","тому","проте",
+}
+_UA_WORD_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ’\'-]+")
+_LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9._+/-]*")
 
 # Small editorial glossary of mistakes actually observed in production. This is not a
 # universal translator: it exists to stop known calques from escaping into autopublish.
@@ -44,11 +50,34 @@ def looks_english(text: str) -> bool:
 
 
 def looks_ukrainian(text: str) -> bool:
+    """Recognize Ukrainian prose without punishing technical Latin names.
+
+    The old character-ratio rule (Cyrillic > Latin * 2) rejected perfectly normal
+    Ukrainian tech posts containing product/model/company names.  Work at word level
+    instead: require a real Ukrainian sentence base and reject English function-word
+    prose, while allowing many Latin entities such as Pixel, NVIDIA, OAuth or GPU.
+    """
     sample = (text or "")[:8000]
-    cyr = len(_CYRILLIC.findall(sample))
-    latin = len(_LATIN.findall(sample))
-    ua = sum(ch in _UA_LETTERS for ch in sample)
-    return cyr >= 80 and cyr > latin * 2 and ua >= 2
+    cyr_chars = len(_CYRILLIC.findall(sample))
+    ua_specific = sum(ch in _UA_LETTERS for ch in sample)
+    cyr_words = _UA_WORD_RE.findall(sample)
+    latin_words = _LATIN_WORD_RE.findall(sample)
+    low_cyr = [w.casefold().strip("’'-") for w in cyr_words]
+    low_latin = [w.casefold().strip("'-") for w in latin_words]
+    ua_hits = sum(1 for w in low_cyr if w in _UA_COMMON)
+    en_hits = sum(1 for w in low_latin if w in _EN_WORDS)
+
+    if cyr_chars < 45 or len(cyr_words) < 8:
+        return False
+    if ua_specific < 1 and ua_hits < 2:
+        return False
+    # A few English product words are fine; English grammatical prose is not.
+    if en_hits >= max(5, len(cyr_words) // 3):
+        return False
+    if len(cyr_words) >= 12 and (ua_hits >= 2 or ua_specific >= 2):
+        return True
+    latin_chars = len(_LATIN.findall(sample))
+    return cyr_chars >= max(45, int(latin_chars * 0.55)) and (ua_hits >= 2 or ua_specific >= 2)
 
 
 def normalize_ukrainian_terminology(text: str) -> str:
