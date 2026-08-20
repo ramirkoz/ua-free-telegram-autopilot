@@ -37,7 +37,7 @@ def _source_fetch(url: str, **kwargs):
 
     A number of otherwise public RSS/news endpoints reject bare library user
     agents with HTTP 403. Keep this behavior scoped to source collection so API
-    calls to Telegram, Telegraph and AI providers retain their own headers.
+    calls to Telegram and AI providers retain their own headers.
     """
     supplied = dict(kwargs.pop("headers", {}) or {})
     headers = dict(_SOURCE_REQUEST_HEADERS)
@@ -514,6 +514,33 @@ def _collect_telegram(source: Source) -> list[CollectedArticle]:
     return parser.items[-40:]
 
 
+def _common_feed_candidates(url: str) -> list[str]:
+    parts = urlsplit(str(url or ""))
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return []
+    origin = f"{parts.scheme}://{parts.hostname}"
+    return [origin + path for path in ("/feed/", "/feed", "/rss", "/rss.xml")]
+
+
+def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
+    """Recover page sources whose front page rate-limits bots but public RSS still works."""
+    for candidate in _common_feed_candidates(source.url):
+        try:
+            response = _source_fetch(
+                candidate, max_bytes=8 * 1024 * 1024,
+                allowed_content_types={"application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "text/plain"},
+                timeout=20,
+            )
+            items = parse_rss(response.body)
+            if not items:
+                continue
+            for item in items[:20]:
+                _enrich_article(item)
+            return items[:40]
+        except Exception:
+            continue
+    return []
+
 def collect_source(source: Source) -> list[CollectedArticle]:
     try:
         if source.kind == "telegram":
@@ -530,12 +557,19 @@ def collect_source(source: Source) -> list[CollectedArticle]:
                 _enrich_article(item)
             return items[:40]
         if source.kind == "page":
-            response = _source_fetch(
-                source.url,
-                max_bytes=5 * 1024 * 1024,
-                allowed_content_types={"text/html", "application/xhtml+xml"},
-                timeout=35,
-            )
+            try:
+                response = _source_fetch(
+                    source.url,
+                    max_bytes=5 * 1024 * 1024,
+                    allowed_content_types={"text/html", "application/xhtml+xml"},
+                    timeout=35,
+                )
+            except NetworkError as exc:
+                if "HTTP 429" in str(exc) or "HTTP 403" in str(exc):
+                    fallback = _collect_common_feed_fallback(source)
+                    if fallback:
+                        return fallback
+                raise
             html = response.body.decode("utf-8", errors="replace")
             parser = _LinkParser(source.url)
             parser.feed(html)
