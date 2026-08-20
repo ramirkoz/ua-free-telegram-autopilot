@@ -139,9 +139,6 @@ class Database:
                     headline_uk TEXT NOT NULL DEFAULT '',
                     teaser_text TEXT NOT NULL DEFAULT '',
                     full_article_uk TEXT NOT NULL DEFAULT '',
-                    telegraph_url TEXT NOT NULL DEFAULT '',
-                    telegraph_path TEXT NOT NULL DEFAULT '',
-                    telegraph_created_at TEXT,
                     telegram_media_count INTEGER NOT NULL DEFAULT 0,
                     article_layout_json TEXT NOT NULL DEFAULT '',
                     media_captions_json TEXT NOT NULL DEFAULT '{}',
@@ -187,9 +184,6 @@ class Database:
                 ("headline_uk", "TEXT NOT NULL DEFAULT ''"),
                 ("teaser_text", "TEXT NOT NULL DEFAULT ''"),
                 ("full_article_uk", "TEXT NOT NULL DEFAULT ''"),
-                ("telegraph_url", "TEXT NOT NULL DEFAULT ''"),
-                ("telegraph_path", "TEXT NOT NULL DEFAULT ''"),
-                ("telegraph_created_at", "TEXT"),
                 ("telegram_media_count", "INTEGER NOT NULL DEFAULT 0"),
                 ("article_layout_json", "TEXT NOT NULL DEFAULT ''"),
                 ("media_captions_json", "TEXT NOT NULL DEFAULT '{}'"),
@@ -381,9 +375,9 @@ class Database:
     def pending_articles(self, channel_id: int, limit: int = 20) -> list[sqlite3.Row]:
         """Return publish candidates without allowing old retries to starve fresh news.
 
-        Fresh ``new`` rows always have priority. ``retry`` rows are eligible only
-        after their backoff deadline. Existing RC8/early-RC9 retry rows have no
-        deadline, so they remain recoverable but are processed only after fresh news.
+        Fresh ``new`` rows always have priority and newest news is processed first.
+        ``retry`` rows are eligible only after their backoff deadline and run after
+        fresh news, oldest eligible retry first.
         """
         with self.connect() as con:
             return con.execute(
@@ -395,7 +389,7 @@ class Database:
                         )
                     )
                 )
-                ORDER BY CASE WHEN a.status='new' THEN 0 ELSE 1 END, a.id ASC
+                ORDER BY CASE WHEN a.status='new' THEN 0 ELSE 1 END, CASE WHEN a.status='new' THEN a.id END DESC, CASE WHEN a.status='retry' THEN datetime(COALESCE(NULLIF(a.next_retry_at,''),a.discovered_at)) END ASC, a.id DESC
                 LIMIT ?""",
                 (channel_id, limit),
             ).fetchall()
@@ -447,7 +441,7 @@ class Database:
     def update_article(self, article_id: int, **fields: object) -> None:
         allowed = {
             "status", "language", "reject_reason", "duplicate_of", "event_key", "event_summary", "rewrite_text",
-            "headline_uk", "teaser_text", "full_article_uk", "telegraph_url", "telegraph_path", "telegraph_created_at",
+            "headline_uk", "teaser_text", "full_article_uk",
             "telegram_media_count", "ai_provider", "ai_model", "processing_started_at", "published_at",
             "telegram_message_id", "last_error", "retry_count", "next_retry_at", "raw_text", "media_json", "article_layout_json",
             "media_captions_json", "content_hash",
@@ -512,7 +506,7 @@ class Database:
         with self.connect() as con:
             return con.execute(
                 f"""SELECT a.id,c.name channel_name,s.name source_name,a.title,a.headline_uk,a.status,a.reject_reason,a.discovered_at,
-                a.published_at,a.ai_provider,a.telegram_message_id,a.telegraph_url,a.telegram_media_count,a.last_error FROM articles a
+                a.published_at,a.ai_provider,a.telegram_message_id,a.telegram_media_count,a.last_error FROM articles a
                 JOIN channels c ON c.id=a.channel_id JOIN sources s ON s.id=a.source_id {clause}
                 ORDER BY a.id DESC LIMIT ?""",
                 tuple(params) + (limit,),
