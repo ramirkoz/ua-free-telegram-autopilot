@@ -43,7 +43,7 @@ def normalize_chat_target(value: str) -> str:
         return raw
     if raw.isdigit():
         return raw
-    if raw.startswith("@"):
+    if raw.startswith("@"): 
         username = raw[1:].strip()
         if username and all(ch.isalnum() or ch == "_" for ch in username):
             return "@" + username
@@ -83,7 +83,7 @@ def build_post_text(
 ) -> str:
     """Build one body-only Telegram post with no separate headline.
 
-    ``body`` keeps compatibility with older RC9 service code that still passes
+    ``body`` keeps compatibility with older cached service calls that still pass
     an internal headline/cache marker as the first positional argument. The
     marker is deliberately ignored and is never rendered to Telegram.
     """
@@ -94,17 +94,6 @@ def build_post_text(
         clean += f"\n\nДжерело: {source_url.strip()}"
     if len(clean) > hard_limit:
         raise TelegramError(f"Telegram-пост перевищує ліміт {hard_limit} символів.", retryable=False)
-    return clean
-
-
-def build_caption(teaser: str, telegraph_url: str = "") -> str:
-    """Deprecated compatibility helper for old callers/tests.
-
-    New production code uses build_post_text() and never appends Telegraph links.
-    """
-    clean = _clean_paragraphs(teaser)
-    if len(clean) > 900:
-        raise TelegramError("Telegram-пост перевищує ліміт 900 символів.", retryable=False)
     return clean
 
 
@@ -262,6 +251,35 @@ def _request_file(
         raise TelegramError(f"Telegram: {desc} (код {code})", retryable=retryable, media_rejected=media_rejected)
     return payload.get("result")
 
+
+
+def send_video_url(
+    token: str,
+    chat_id: str,
+    caption: str,
+    video_url: str,
+    *,
+    timeout: float = 60.0,
+) -> TelegramResult:
+    """Ask Telegram to fetch a direct public video URL.
+
+    Embedded players (YouTube/Vimeo iframe URLs) are deliberately not sent as
+    videos; production publishes their preview image plus a canonical watch link.
+    """
+    token = token.strip(); chat_id = normalize_chat_target(chat_id); caption = caption.strip(); video_url = video_url.strip()
+    if not token or not chat_id:
+        raise TelegramError("Telegram bot token або Chat ID не налаштовано.", retryable=False)
+    parsed = valid_public_media("video|" + video_url)
+    if not parsed or parsed[0] != "video":
+        raise TelegramError("Некоректна адреса відео.", retryable=False, media_rejected=True)
+    if len(caption) > 1024:
+        raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
+    result = _request(
+        token, "sendVideo", {"chat_id": chat_id, "video": parsed[1], "caption": caption, "show_caption_above_media": "true"},
+        timeout=timeout, media_write=True,
+    )
+    ids = _result_ids(result)
+    return TelegramResult(ids[0], ids, 1)
 
 def send_prepared_photo(
     token: str,
