@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -57,23 +58,127 @@ MODEL_SLOTS: tuple[Slot, ...] = (
 )
 
 
-def _state() -> dict:
+def _read_state_unlocked() -> dict:
     path = ai_state_path()
     if not path.exists():
         return {"cooldowns": {}, "last_provider": "", "last_model": "", "last_label": "", "last_success_at": 0.0}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {"cooldowns": {}}
+        if not isinstance(value, dict):
+            return {"cooldowns": {}}
+        if not isinstance(value.get("cooldowns"), dict):
+            value["cooldowns"] = {}
+        return value
     except Exception:
         return {"cooldowns": {}}
 
 
-def _save_state(value: dict) -> None:
+_ROUTER_STATE_LOCK = threading.RLock()
+
+
+def _state() -> dict:
+    # Return a snapshot. Mutating callers must use _mutate_state() so one
+    # worker can never overwrite a newer diagnostic/health update.
+    with _ROUTER_STATE_LOCK:
+        return _read_state_unlocked()
+
+
+def _save_state_unlocked(value: dict) -> None:
     path = ai_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
 
+
+def _save_state(value: dict) -> None:
+    with _ROUTER_STATE_LOCK:
+        _save_state_unlocked(value)
+
+
+def _mutate_state(mutator) -> object:
+    with _ROUTER_STATE_LOCK:
+        state = _read_state_unlocked()
+        result = mutator(state)
+        _save_state_unlocked(state)
+        return result
+
+
+def clear_router_cooldowns(provider: str | None = None) -> None:
+    """Clear production cooldowns without racing the Autopilot worker."""
+
+    name = str(provider or "").strip().casefold()
+
+    def mutate(state: dict) -> None:
+        cooldowns = state.setdefault("cooldowns", {})
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            state["cooldowns"] = cooldowns
+        if name:
+            provider_key = f"provider:{name}"
+            model_prefix = f"model:{name}:"
+            for key in list(cooldowns):
+                low = str(key).casefold()
+                if low == provider_key or low.startswith(model_prefix):
+                    cooldowns.pop(key, None)
+        else:
+            cooldowns.clear()
+
+    _mutate_state(mutate)
+
+
+def _clear_slot_cooldowns(state: dict, slot: Slot) -> None:
+    cooldowns = state.setdefault("cooldowns", {})
+    if not isinstance(cooldowns, dict):
+        state["cooldowns"] = {}
+        return
+    cooldowns.pop(_cooldown_key(slot), None)
+    cooldowns.pop(_cooldown_key(slot, provider=True), None)
+
+
+def _slot_on_cooldown(slot: Slot, now: float | None = None) -> bool:
+    stamp = time.time() if now is None else float(now)
+    with _ROUTER_STATE_LOCK:
+        state = _read_state_unlocked()
+        cooldowns = state.setdefault("cooldowns", {})
+        dirty = False
+        active = False
+        for key in (_cooldown_key(slot, provider=True), _cooldown_key(slot)):
+            entry = cooldowns.get(key, {}) if isinstance(cooldowns, dict) else {}
+            try:
+                until = float(entry.get("until", 0) or 0)
+            except Exception:
+                until = 0.0
+            if until > stamp:
+                active = True
+            elif key in cooldowns:
+                cooldowns.pop(key, None)
+                dirty = True
+        if dirty:
+            _save_state_unlocked(state)
+        return active
+
+
+def _set_slot_cooldown(slot: Slot, seconds: int, reason: str, *, provider: bool = False) -> None:
+    key = _cooldown_key(slot, provider=provider)
+
+    def mutate(state: dict) -> None:
+        _put_cooldown(state, key, seconds, reason)
+
+    _mutate_state(mutate)
+
+
+def _mark_slot_success(slot: Slot, runtime_slot: Slot) -> None:
+    def mutate(state: dict) -> None:
+        state.update({
+            "last_provider": runtime_slot.provider,
+            "last_model": runtime_slot.model,
+            "last_label": runtime_slot.label,
+            "last_success_at": time.time(),
+        })
+        _clear_slot_cooldowns(state, slot)
+
+    _mutate_state(mutate)
 
 def _configured(slot: Slot, cfg: SecretConfig) -> bool:
     if slot.provider == "codex":
@@ -160,7 +265,7 @@ def _openai(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
             max_redirects=1, allow_http_errors=True,
         )
     except NetworkError as exc:
-        raise AIModelError(str(exc), kind="temporary") from exc
+        raise AIModelError(str(exc), kind="network") from exc
     detail = _detail(response)
     if response.status in {401, 403}:
         raise AIModelError(f"{slot.label}: ключ або доступ відхилено (HTTP {response.status}).", kind="auth")
@@ -188,7 +293,7 @@ def _gemini(slot: Slot, cfg: SecretConfig, prompt: str, *, max_output_tokens: in
     try:
         response = fetch_url(url, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json, application/problem+json"}, body=json.dumps(payload, ensure_ascii=False).encode("utf-8"), timeout=max(3, int(timeout_seconds)), max_bytes=4 * 1024 * 1024, allowed_content_types={"application/json", "application/problem+json", "text/json", "text/plain"}, max_redirects=1, allow_http_errors=True)
     except NetworkError as exc:
-        raise AIModelError(str(exc), kind="temporary") from exc
+        raise AIModelError(str(exc), kind="network") from exc
     detail = _detail(response)
     if response.status in {401, 403}:
         raise AIModelError("Gemini: ключ або доступ відхилено.", kind="auth")
@@ -229,10 +334,65 @@ def _cooldown_seconds(exc: AIModelError) -> int:
         return 6 * 3600
     if exc.kind == "gone":
         return 7 * 24 * 3600
+    if exc.kind == "network":
+        return 45
     if exc.kind == "temporary":
-        return 5 * 60
-    return 10 * 60
+        return 45
+    if exc.kind in {"bad_response", "model"}:
+        return 60
+    return 120
 
+
+
+def _repair_local_output(
+    cfg: Secrets,
+    original_prompt: str,
+    bad_output: str,
+    validation_error: Exception,
+    *,
+    max_output_tokens: int,
+    timeout_seconds: int,
+):
+    """One bounded local repair turn for format/QA failures; result is revalidated."""
+    repair_prompt = (
+        "Виправ попередню відповідь так, щоб вона пройшла вказану перевірку. "
+        "НЕ додавай нових фактів, чисел, дат, назв чи висновків. "
+        "Збережи зміст, скороти або виправ лише форму/структуру/мову.\n\n"
+        f"ПОМИЛКА ПЕРЕВІРКИ: {validation_error}\n\n"
+        f"ПОПЕРЕДНЯ ВІДПОВІДЬ:\n{bad_output[:2600]}\n\n"
+        f"ПОЧАТКОВА ІНСТРУКЦІЯ:\n{original_prompt[:1800]}"
+    )
+    return generate_local_text(
+        preferred_model=cfg.local_model,
+        manual_base_url=cfg.local_base_url,
+        manual_model=cfg.local_model,
+        prompt=repair_prompt,
+        max_output_tokens=max(96, min(int(max_output_tokens), 720)),
+        temperature=0.0,
+        timeout_seconds=max(15, min(int(timeout_seconds), 60)),
+    )
+
+
+def _ordered_model_slots(suppressed: set[str], suppressed_models: set[str]) -> list[Slot]:
+    """Prefer the last successful CLOUD model, while keeping local as emergency fallback."""
+    slots = list(MODEL_SLOTS)
+    try:
+        with _ROUTER_STATE_LOCK:
+            state = _read_state_unlocked()
+        last_provider = str(state.get("last_provider", "") or "").casefold()
+        last_model = str(state.get("last_model", "") or "").casefold()
+    except Exception:
+        last_provider = last_model = ""
+    if last_provider and last_provider != "local":
+        slots.sort(key=lambda slot: (
+            0 if (slot.provider.casefold() == last_provider and slot.model.casefold() == last_model) else
+            1 if slot.provider.casefold() == last_provider else
+            2,
+            slot.priority,
+        ))
+        # Local must remain last even if sort keys change.
+        slots.sort(key=lambda slot: 1 if slot.provider == "local" else 0)
+    return slots
 
 
 def run_ai(
@@ -247,6 +407,7 @@ def run_ai(
     cloud_timeout_seconds: int = 25,
     task_timeout_seconds: int | None = 90,
     skip_providers: set[str] | frozenset[str] | tuple[str, ...] = (),
+    skip_models: set[str] | frozenset[str] | tuple[str, ...] = (),
     suppress_provider_on_quota: bool = True,
 ) -> Result:
     text_prompt = str(prompt or "").strip()
@@ -257,16 +418,17 @@ def run_ai(
     cloud_budget = max(64, min(4096, int(max_output_tokens)))
     deadline = time.monotonic() + max(3, int(task_timeout_seconds)) if task_timeout_seconds is not None else None
     suppressed = {str(x).strip().casefold() for x in skip_providers if str(x).strip()}
+    suppressed_models = {str(x).strip().casefold() for x in skip_models if str(x).strip()}
     cfg = load_secrets()
-    state = _state()
-    now = time.time()
     attempted: list[str] = []
     failures: list[str] = []
+    validation_failures = 0
 
-    for slot in MODEL_SLOTS:
-        if slot.provider.casefold() in suppressed or not _configured(slot, cfg):
+    local_slot = next((item for item in MODEL_SLOTS if item.provider == "local"), None)
+    for slot in _ordered_model_slots(suppressed, suppressed_models):
+        if slot.provider.casefold() in suppressed or slot.model.casefold() in suppressed_models or not _configured(slot, cfg):
             continue
-        if slot.provider != "local" and (_cooldown_active(state, _cooldown_key(slot, provider=True), now) or _cooldown_active(state, _cooldown_key(slot), now)):
+        if _slot_on_cooldown(slot):
             continue
         if deadline is not None and time.monotonic() >= deadline:
             failures.append("Загальний ліміт часу AI-завдання вичерпано.")
@@ -277,13 +439,26 @@ def run_ai(
             remaining = None if deadline is None else max(0, int(deadline - time.monotonic()))
             if remaining is not None and remaining < 3:
                 break
+            # Reserve a final slice for the installed local fallback instead of
+            # allowing a chain of cloud timeouts to consume the whole article
+            # deadline before Ollama is even tried.
+            if slot.provider != "local" and remaining is not None and local_slot is not None:
+                local_ready = (
+                    "local" not in suppressed
+                    and _configured(local_slot, cfg)
+                    and not _slot_on_cooldown(local_slot)
+                )
+                reserve = min(60, max(30, int(local_timeout_seconds) * 3 // 4))
+                if local_ready and remaining <= reserve:
+                    continue
             if slot.provider == "local":
-                if remaining is not None and remaining < 20:
+                if remaining is not None and remaining < 8:
                     failures.append("Недостатньо часу для локального fallback у межах поточного AI-завдання.")
                     break
-                local_timeout = max(20, int(local_timeout_seconds))
-                if remaining is not None:
-                    local_timeout = min(local_timeout, remaining)
+                if remaining is None:
+                    local_timeout = max(15, int(local_timeout_seconds))
+                else:
+                    local_timeout = max(8, min(int(local_timeout_seconds), remaining))
                 output, target = generate_local_text(
                     preferred_model=cfg.local_model,
                     manual_base_url=cfg.local_base_url,
@@ -309,36 +484,60 @@ def run_ai(
             if not output:
                 raise AIModelError("Порожня відповідь.", kind="bad_response")
             if validator is not None:
-                validator(output)
+                try:
+                    validator(output)
+                except Exception as first_validation_error:
+                    if slot.provider != "local" or not local_repair:
+                        raise
+                    repaired, target = _repair_local_output(
+                        cfg,
+                        local_text_prompt,
+                        output,
+                        first_validation_error,
+                        max_output_tokens=local_budget,
+                        timeout_seconds=local_timeout,
+                    )
+                    output = str(repaired).strip()
+                    runtime_slot = Slot(
+                        slot.priority,
+                        "local",
+                        str(getattr(target, "model", "") or runtime_slot.model),
+                        str(getattr(target, "label", "") or runtime_slot.label),
+                        "local",
+                    )
+                    validator(output)
         except LocalAIRuntimeError as exc:
             failures.append(f"{runtime_slot.label}: {exc}")
+            _set_slot_cooldown(slot, 90, str(exc), provider=False)
             continue
         except AIModelError as exc:
             failures.append(f"{runtime_slot.label}: {exc}")
             if suppress_provider_on_quota and exc.kind == "quota":
                 suppressed.add(slot.provider.casefold())
             if slot.provider != "local" and exc.kind != "request_too_large":
-                provider_level = exc.kind in {"auth", "configuration", "quota"}
-                key = _cooldown_key(slot, provider=provider_level)
-                _put_cooldown(state, key, _cooldown_seconds(exc), str(exc))
-                _save_state(state)
+                provider_level = exc.kind in {"auth", "configuration", "quota", "network"}
+                _set_slot_cooldown(slot, _cooldown_seconds(exc), str(exc), provider=provider_level)
             continue
         except Exception as exc:
+            validation_failures += 1
+            # This is an ARTICLE-SPECIFIC validation failure (format, Fact Guard,
+            # numbers, readability, etc.), not evidence that the provider/model is
+            # unhealthy. RC10/RC11 persisted a 10-minute model cooldown here, so a
+            # handful of difficult stories could suppress every healthy cloud model
+            # and make the next articles report “no provider available”. Never
+            # persist health cooldowns for content validation failures.
             failures.append(f"{runtime_slot.label}: відповідь не пройшла перевірку ({exc})")
-            if slot.provider != "local":
-                _put_cooldown(state, _cooldown_key(slot), 10 * 60, f"validation: {exc}")
-                _save_state(state)
             continue
 
-        state.update({"last_provider": runtime_slot.provider, "last_model": runtime_slot.model, "last_label": runtime_slot.label, "last_success_at": time.time()})
-        state.setdefault("cooldowns", {}).pop(_cooldown_key(slot), None)
-        _save_state(state)
+        _mark_slot_success(slot, runtime_slot)
         return Result(output, runtime_slot.provider, runtime_slot.model, runtime_slot.label, tuple(attempted))
 
     if not attempted:
         raise AIRouterError("Немає доступного AI-провайдера. Підключіть API-ключ або увімкніть локальний fallback; cooldown буде перевірено автоматично пізніше.")
     tail = " | ".join(failures[-6:])
-    raise AIRouterError("Усі доступні AI-моделі цього разу відмовили. " + tail)
+    if attempted and validation_failures >= len(attempted):
+        raise AIRouterError("AI-моделі відповіли, але редакційний QA відхилив усі кандидати. " + tail)
+    raise AIRouterError("Усі доступні AI-моделі цього разу відмовили або не дали придатного кандидата. " + tail)
 
 
 def test_all() -> list[tuple[str, str, str]]:
@@ -356,6 +555,9 @@ def test_all() -> list[tuple[str, str, str]]:
                 continue
             try:
                 target = test_local_runtime(preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model)
+                clear_router_cooldowns(provider)
+                local_slot = slots[0]
+                _mark_slot_success(local_slot, Slot(local_slot.priority, "local", target.model, target.label, "local"))
                 rows.append((provider, "✓", f"працює · {target.label}"))
             except Exception as exc:
                 rows.append((provider, "⚠", str(exc)))
@@ -368,15 +570,18 @@ def test_all() -> list[tuple[str, str, str]]:
         for slot in slots:
             try:
                 if slot.family == "codex":
-                    text = run_codex("Return exactly: UA_FREE_AUTOPILOT_OK")
+                    text = run_codex("Reply with a short non-empty plain-text health response.")
                 elif slot.family == "gemini":
-                    text = _gemini(slot, cfg, "Return exactly: UA_FREE_AUTOPILOT_OK", max_output_tokens=64, timeout_seconds=15)
+                    text = _gemini(slot, cfg, "Reply with a short non-empty plain-text health response.", max_output_tokens=64, timeout_seconds=15)
                 else:
-                    text = _openai(slot, cfg, "Return exactly: UA_FREE_AUTOPILOT_OK", max_output_tokens=64, timeout_seconds=15)
-                if "UA_FREE_AUTOPILOT_OK" in text:
-                    rows.append((provider, "✓", f"працює · {slot.model}"))
+                    text = _openai(slot, cfg, "Reply with a short non-empty plain-text health response.", max_output_tokens=64, timeout_seconds=15)
+                text = str(text or "").strip()
+                if text:
+                    clear_router_cooldowns(provider)
+                    _mark_slot_success(slot, slot)
+                    rows.append((provider, "✓", f"API працює · відповідь отримано · {slot.model}"))
                     break
-                failures.append(f"{slot.model}: контрольний текст не збігся")
+                failures.append(f"{slot.model}: порожня контрольна відповідь")
             except AIModelError as exc:
                 failures.append(f"{slot.model}: {exc}")
                 if exc.kind in {"auth", "configuration"}:
@@ -393,3 +598,31 @@ def test_all() -> list[tuple[str, str, str]]:
             continue
         rows.append((provider, mark, failures[-1] if failures else "помилка"))
     return rows
+
+def test_production_route() -> Result:
+    """Run a realistic-size, write-free rewrite probe through the actual Router."""
+    from .language import looks_ukrainian
+    source = (
+        "A technology company announced a software update after researchers found a security flaw. "
+        "The flaw could expose private data only when a user opened a specially crafted file. "
+        "The company says the update closes the vulnerability and recommends installing it. "
+        "Researchers did not report evidence of mass exploitation. "
+        "The update is available to supported devices starting today. "
+    ) * 4
+    prompt = f"""You are testing the production rewrite path of a Ukrainian technology-news autopilot.
+Write ONLY a natural Ukrainian Telegram news body, 500-850 characters, 2-3 short paragraphs.
+Use only the facts below. Preserve uncertainty and attribution. No headline, labels, URLs or commentary.
+SOURCE EVIDENCE PACK:
+{source}"""
+    def validator(value: str) -> None:
+        text = str(value or "").strip()
+        if len(text) < 220:
+            raise ValueError("production probe: відповідь надто коротка")
+        if not looks_ukrainian(text):
+            raise ValueError("production probe: відповідь не схожа на природний український текст")
+    return run_ai(
+        prompt, validator=validator, max_output_tokens=420, local_prompt=prompt,
+        local_max_output_tokens=460, cloud_timeout_seconds=16, local_timeout_seconds=75,
+        task_timeout_seconds=165, local_repair=False, skip_providers={"codex"},
+        suppress_provider_on_quota=True,
+    )
