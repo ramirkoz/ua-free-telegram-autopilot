@@ -43,7 +43,7 @@ class Result:
     attempted: tuple[str, ...] = ()
 
 
-MODEL_SLOTS: tuple[Slot, ...] = (
+FALLBACK_MODEL_SLOTS: tuple[Slot, ...] = (
     Slot(1, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
     Slot(2, "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash / Google", "gemini"),
     # Live-verified NVIDIA slots. Models that returned HTTP 410 (EOL) on
@@ -56,6 +56,144 @@ MODEL_SLOTS: tuple[Slot, ...] = (
     Slot(8, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
     Slot(9, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
 )
+
+# Compatibility alias for external imports; runtime routing uses live discovery.
+MODEL_SLOTS = FALLBACK_MODEL_SLOTS
+
+_MODEL_DISCOVERY_LOCK = threading.RLock()
+_MODEL_DISCOVERY_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
+_MODEL_DISCOVERY_TTL = 900.0
+
+
+def _model_is_text_candidate(model: str) -> bool:
+    low = str(model or "").casefold()
+    if not low:
+        return False
+    blocked = (
+        "embed", "embedding", "rerank", "whisper", "speech", "audio", "tts",
+        "image", "vision", "guard", "safety", "moderation", "reward", "classifier",
+    )
+    return not any(token in low for token in blocked)
+
+
+def _model_rank(model: str) -> tuple[int, int, str]:
+    low = str(model or "").casefold()
+    score = 0
+    for token, value in (
+        ("flash", 60), ("instruct", 45), ("qwen", 42), ("llama", 40),
+        ("mistral", 36), ("nemotron", 34), ("deepseek", 32), ("gpt-oss", 30),
+        ("gemma", 28), ("chat", 18),
+    ):
+        if token in low:
+            score += value
+    for token, penalty in (("550b", 25), ("405b", 20), ("671b", 25), ("preview", 6)):
+        if token in low:
+            score -= penalty
+    return (score, -len(low), low)
+
+
+def _discover_provider_model_ids(provider: str, cfg: SecretConfig, *, force: bool = False) -> tuple[str, ...]:
+    """Discover live text-capable model IDs without making discovery a liveness dependency."""
+    name = str(provider or "").casefold()
+    now = time.monotonic()
+    with _MODEL_DISCOVERY_LOCK:
+        cached = _MODEL_DISCOVERY_CACHE.get(name)
+        if cached and not force and now - cached[0] < _MODEL_DISCOVERY_TTL:
+            return cached[1]
+    try:
+        if name == "nvidia" and cfg.nvidia_api_key:
+            response = fetch_url(
+                "https://integrate.api.nvidia.com/v1/models", method="GET",
+                headers={"Authorization": f"Bearer {cfg.nvidia_api_key}", "Accept": "application/json"},
+                timeout=12, max_bytes=4 * 1024 * 1024,
+                allowed_content_types={"application/json", "text/json", "text/plain"},
+                max_redirects=1, allow_http_errors=True,
+            )
+            if response.status >= 400:
+                return ()
+            payload = response.json()
+            items = payload.get("data", []) if isinstance(payload, dict) else []
+            models = [str(item.get("id") or "").strip() for item in items if isinstance(item, dict)]
+        elif name == "groq" and cfg.groq_api_key:
+            response = fetch_url(
+                "https://api.groq.com/openai/v1/models", method="GET",
+                headers={"Authorization": f"Bearer {cfg.groq_api_key}", "Accept": "application/json"},
+                timeout=12, max_bytes=4 * 1024 * 1024,
+                allowed_content_types={"application/json", "text/json", "text/plain"},
+                max_redirects=1, allow_http_errors=True,
+            )
+            if response.status >= 400:
+                return ()
+            payload = response.json()
+            items = payload.get("data", []) if isinstance(payload, dict) else []
+            models = [str(item.get("id") or "").strip() for item in items if isinstance(item, dict)]
+        elif name == "gemini" and cfg.gemini_api_key:
+            response = fetch_url(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={quote(cfg.gemini_api_key, safe='')}",
+                method="GET", headers={"Accept": "application/json"}, timeout=12,
+                max_bytes=4 * 1024 * 1024,
+                allowed_content_types={"application/json", "text/json", "text/plain"},
+                max_redirects=1, allow_http_errors=True,
+            )
+            if response.status >= 400:
+                return ()
+            payload = response.json()
+            items = payload.get("models", []) if isinstance(payload, dict) else []
+            models = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                methods = item.get("supportedGenerationMethods") or []
+                if methods and "generateContent" not in methods:
+                    continue
+                model = str(item.get("name") or "").strip()
+                if model.startswith("models/"):
+                    model = model[7:]
+                models.append(model)
+        else:
+            return ()
+    except Exception:
+        return ()
+    clean = tuple(sorted({m for m in models if _model_is_text_candidate(m)}, key=lambda m: _model_rank(m), reverse=True))
+    with _MODEL_DISCOVERY_LOCK:
+        _MODEL_DISCOVERY_CACHE[name] = (now, clean)
+    return clean
+
+
+def _runtime_model_slots(cfg: SecretConfig, *, force_refresh: bool = False) -> tuple[Slot, ...]:
+    """Build the current Router list from provider model catalogs with static fallbacks."""
+    output: list[Slot] = []
+    priority = 1
+    # Codex and Cloudflare/local do not have a stable compatible model-list route here.
+    codex = next(slot for slot in FALLBACK_MODEL_SLOTS if slot.provider == "codex")
+    output.append(Slot(priority, codex.provider, codex.model, codex.label, codex.family)); priority += 1
+    for provider in ("gemini", "nvidia", "groq"):
+        fallback = [slot for slot in FALLBACK_MODEL_SLOTS if slot.provider == provider]
+        discovered = list(_discover_provider_model_ids(provider, cfg, force=force_refresh))
+        chosen: list[str] = []
+        if discovered:
+            discovered_set = {m.casefold() for m in discovered}
+            for slot in fallback:
+                if slot.model.casefold() in discovered_set:
+                    chosen.append(slot.model)
+            for model in discovered:
+                if model.casefold() not in {m.casefold() for m in chosen}:
+                    chosen.append(model)
+                if len(chosen) >= 4:
+                    break
+        else:
+            chosen = [slot.model for slot in fallback]
+        family = "gemini" if provider == "gemini" else "openai"
+        suffix = {"gemini":"Google", "nvidia":"NVIDIA", "groq":"Groq"}[provider]
+        for model in chosen:
+            known = next((slot for slot in fallback if slot.model.casefold() == model.casefold()), None)
+            label = known.label if known else f"{model} / {suffix}"
+            output.append(Slot(priority, provider, model, label, family)); priority += 1
+    for provider in ("cloudflare", "local"):
+        for slot in FALLBACK_MODEL_SLOTS:
+            if slot.provider == provider:
+                output.append(Slot(priority, slot.provider, slot.model, slot.label, slot.family)); priority += 1
+    return tuple(output)
 
 
 def _read_state_unlocked() -> dict:
@@ -345,7 +483,7 @@ def _cooldown_seconds(exc: AIModelError) -> int:
 
 
 def _repair_local_output(
-    cfg: Secrets,
+    cfg: SecretConfig,
     original_prompt: str,
     bad_output: str,
     validation_error: Exception,
@@ -373,9 +511,9 @@ def _repair_local_output(
     )
 
 
-def _ordered_model_slots(suppressed: set[str], suppressed_models: set[str]) -> list[Slot]:
+def _ordered_model_slots(slots_source: tuple[Slot, ...], suppressed: set[str], suppressed_models: set[str]) -> list[Slot]:
     """Prefer the last successful CLOUD model, while keeping local as emergency fallback."""
-    slots = list(MODEL_SLOTS)
+    slots = list(slots_source)
     try:
         with _ROUTER_STATE_LOCK:
             state = _read_state_unlocked()
@@ -420,12 +558,13 @@ def run_ai(
     suppressed = {str(x).strip().casefold() for x in skip_providers if str(x).strip()}
     suppressed_models = {str(x).strip().casefold() for x in skip_models if str(x).strip()}
     cfg = load_secrets()
+    runtime_slots = _runtime_model_slots(cfg)
     attempted: list[str] = []
     failures: list[str] = []
     validation_failures = 0
 
-    local_slot = next((item for item in MODEL_SLOTS if item.provider == "local"), None)
-    for slot in _ordered_model_slots(suppressed, suppressed_models):
+    local_slot = next((item for item in runtime_slots if item.provider == "local"), None)
+    for slot in _ordered_model_slots(runtime_slots, suppressed, suppressed_models):
         if slot.provider.casefold() in suppressed or slot.model.casefold() in suppressed_models or not _configured(slot, cfg):
             continue
         if _slot_on_cooldown(slot):
@@ -515,15 +654,15 @@ def run_ai(
             if suppress_provider_on_quota and exc.kind == "quota":
                 suppressed.add(slot.provider.casefold())
             if slot.provider != "local" and exc.kind != "request_too_large":
-                provider_level = exc.kind in {"auth", "configuration", "quota", "network"}
+                provider_level = exc.kind in {"auth", "configuration", "network"} or (exc.kind == "quota" and suppress_provider_on_quota)
                 _set_slot_cooldown(slot, _cooldown_seconds(exc), str(exc), provider=provider_level)
             continue
         except Exception as exc:
             validation_failures += 1
             # This is an ARTICLE-SPECIFIC validation failure (format, Fact Guard,
             # numbers, readability, etc.), not evidence that the provider/model is
-            # unhealthy. RC10/RC11 persisted a 10-minute model cooldown here, so a
-            # handful of difficult stories could suppress every healthy cloud model
+            # unhealthy. Older builds persisted model cooldowns here, so a few
+            # difficult stories could suppress every healthy cloud model
             # and make the next articles report “no provider available”. Never
             # persist health cooldowns for content validation failures.
             failures.append(f"{runtime_slot.label}: відповідь не пройшла перевірку ({exc})")
@@ -542,13 +681,14 @@ def run_ai(
 
 def test_all() -> list[tuple[str, str, str]]:
     cfg = load_secrets()
+    slots_now = _runtime_model_slots(cfg, force_refresh=True)
     rows: list[tuple[str, str, str]] = []
     providers: list[str] = []
-    for slot in MODEL_SLOTS:
+    for slot in slots_now:
         if slot.provider not in providers:
             providers.append(slot.provider)
     for provider in providers:
-        slots = [slot for slot in MODEL_SLOTS if slot.provider == provider]
+        slots = [slot for slot in slots_now if slot.provider == provider]
         if provider == "local":
             if not cfg.local_enabled:
                 rows.append((provider, "—", "не увімкнено"))
@@ -565,8 +705,10 @@ def test_all() -> list[tuple[str, str, str]]:
         if not any(_configured(slot, cfg) for slot in slots):
             rows.append((provider, "—", "не налаштовано"))
             continue
+        discovered_count = len(_discover_provider_model_ids(provider, cfg, force=False)) if provider in {"gemini","nvidia","groq"} else 0
         failures: list[str] = []
         mark = "⚠"
+        success = False
         for slot in slots:
             try:
                 if slot.family == "codex":
@@ -579,7 +721,9 @@ def test_all() -> list[tuple[str, str, str]]:
                 if text:
                     clear_router_cooldowns(provider)
                     _mark_slot_success(slot, slot)
-                    rows.append((provider, "✓", f"API працює · відповідь отримано · {slot.model}"))
+                    extra = f" · каталог: {discovered_count} моделей" if discovered_count else ""
+                    rows.append((provider, "✓", f"API працює · {slot.model}{extra}"))
+                    success = True
                     break
                 failures.append(f"{slot.model}: порожня контрольна відповідь")
             except AIModelError as exc:
@@ -587,16 +731,12 @@ def test_all() -> list[tuple[str, str, str]]:
                 if exc.kind in {"auth", "configuration"}:
                     mark = "✗"
                     break
-                if exc.kind == "quota":
-                    break
+                # Quota can be model-specific; continue to another discovered model.
             except Exception as exc:
                 failures.append(f"{slot.model}: {exc}")
-        else:
-            rows.append((provider, mark, failures[-1] if failures else "помилка"))
-            continue
-        if rows and rows[-1][0] == provider:
-            continue
-        rows.append((provider, mark, failures[-1] if failures else "помилка"))
+        if not success:
+            extra = f" · каталог: {discovered_count} моделей" if discovered_count else ""
+            rows.append((provider, mark, (failures[-1] if failures else "помилка") + extra))
     return rows
 
 def test_production_route() -> Result:
@@ -622,7 +762,7 @@ SOURCE EVIDENCE PACK:
             raise ValueError("production probe: відповідь не схожа на природний український текст")
     return run_ai(
         prompt, validator=validator, max_output_tokens=420, local_prompt=prompt,
-        local_max_output_tokens=460, cloud_timeout_seconds=16, local_timeout_seconds=75,
-        task_timeout_seconds=165, local_repair=False, skip_providers={"codex"},
+        local_max_output_tokens=460, cloud_timeout_seconds=16, local_timeout_seconds=45,
+        task_timeout_seconds=90, local_repair=False, skip_providers={"codex"},
         suppress_provider_on_quota=True,
     )
