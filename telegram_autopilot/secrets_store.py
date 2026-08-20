@@ -22,7 +22,6 @@ class SecretConfig:
     groq_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
-    telegraph_access_token: str = ""
     local_enabled: bool = False
     local_base_url: str = "http://127.0.0.1:8080/v1"
     local_model: str = "local-model"
@@ -36,7 +35,6 @@ class SecretConfig:
             groq_api_key=self.groq_api_key.strip(),
             cloudflare_account_id=self.cloudflare_account_id.strip(),
             cloudflare_api_token=self.cloudflare_api_token.strip(),
-            telegraph_access_token=self.telegraph_access_token.strip(),
             local_enabled=bool(self.local_enabled),
             local_base_url=self.local_base_url.strip() or "http://127.0.0.1:8080/v1",
             local_model=self.local_model.strip() or "local-model",
