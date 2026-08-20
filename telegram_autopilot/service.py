@@ -8,13 +8,16 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
+from .ai_router import AIRouterError, clear_router_cooldowns
 from .database import Database, content_hash, now_iso
-from .production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, decide
+from .event_dedupe import find_event_duplicate
+from .production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, PostAIQAExhausted, decide
 from .language import looks_english, normalize_ukrainian_terminology
 from .models import Channel
 from .secrets_store import load_secrets
-from .telegram import TelegramError, build_post_text, send_prepared_photo, send_text
+from .telegram import TelegramError, build_post_text, send_prepared_photo, send_text, send_video_url
 from .media_pipeline import prepare_article_media
+from .language_tool_local import LanguageToolUnavailable, ensure_languagetool_async, languagetool_status
 
 
 class AutopilotService:
@@ -25,6 +28,57 @@ class AutopilotService:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_collect: dict[int, float] = {}
+        # RC12 supersedes the RC11 cooldown migration. RC10/RC11 Data may
+        # contain stale provider-health cooldowns, including article-validation
+        # failures incorrectly persisted as model cooldowns. Clear once, then
+        # mark both migrations complete so a fresh install also performs only
+        # one state reset.
+        try:
+            rc11_done = self.db.get_state("rc11_ai_liveness_migrated", "0") == "1"
+            rc12_done = self.db.get_state("rc12_ai_router_state_v2_migrated", "0") == "1"
+            if not rc12_done:
+                clear_router_cooldowns()
+                if not rc11_done:
+                    self.db.set_state("rc11_ai_liveness_migrated", "1")
+                self.db.set_state("rc12_ai_router_state_v2_migrated", "1")
+                self._audit("ai_router", "cooldown_reset", "RC12 stale validation/provider cooldown reset")
+        except Exception as exc:
+            self.log.debug("RC12 AI cooldown migration skipped: %s", exc)
+
+        # RC18 shortens transient/model cooldowns and changes cycle liveness.
+        # Clear the old RC17 router state exactly once so copied Data starts from
+        # a clean health snapshot instead of waiting out stale 5-10 minute
+        # cooldowns created by the previous build. Real quota/auth failures are
+        # rediscovered immediately and receive their normal strict cooldown.
+        try:
+            if self.db.get_state("rc18_router_liveness_migrated", "0") != "1":
+                clear_router_cooldowns()
+                self.db.set_state("rc18_router_liveness_migrated", "1")
+                self._audit("ai_router", "cooldown_reset", "RC18 one-time stale router cooldown reset")
+        except Exception as exc:
+            self.log.debug("RC18 AI cooldown migration skipped: %s", exc)
+
+        # RC19 fixes false post-AI QA failures (number grouping / parser / entity
+        # classification) and uses tighter generation budgets. Start copied RC18
+        # Data from a fresh transient health snapshot once; real quota/auth state
+        # is rediscovered immediately by the normal Router path.
+        try:
+            if self.db.get_state("rc19_precision_liveness_migrated", "0") != "1":
+                clear_router_cooldowns()
+                self.db.set_state("rc19_precision_liveness_migrated", "1")
+                self._audit("ai_router", "cooldown_reset", "RC19 one-time transient router cooldown reset")
+        except Exception as exc:
+            self.log.debug("RC19 AI cooldown migration skipped: %s", exc)
+
+        # RC20 separates soft language QA from provider health and changes
+        # endpoint/network cooldown semantics. Clear inherited transient state once.
+        try:
+            if self.db.get_state("rc20_router_qa_migrated", "0") != "1":
+                clear_router_cooldowns()
+                self.db.set_state("rc20_router_qa_migrated", "1")
+                self._audit("ai_router", "cooldown_reset", "RC20 one-time router/QA state reset")
+        except Exception as exc:
+            self.log.debug("RC20 AI cooldown migration skipped: %s", exc)
 
     @property
     def running(self) -> bool:
@@ -37,12 +91,20 @@ class AutopilotService:
         except Exception as exc:
             self.log.debug("Audit write skipped: %s", exc)
 
+    def _languagetool_event(self, kind: str, text: str) -> None:
+        self._audit("languagetool", kind, text)
+        self.on_event(kind, text)
+
     def start(self) -> None:
         if self.running:
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="Autopilot", daemon=True)
         self._thread.start()
+        lt_ready = ensure_languagetool_async(self._languagetool_event)
+        lt = languagetool_status()
+        self._audit("languagetool", "ready" if lt_ready or lt.get("ready") else "starting", str(lt.get("text") or ""))
+        self.on_event("languagetool", str(lt.get("text") or "LanguageTool: перевірка/встановлення у фоні"))
         self.on_event("service", "Автопілот запущено")
 
     def stop(self) -> None:
@@ -126,6 +188,16 @@ class AutopilotService:
             return True
 
     def _process(self, channel: Channel) -> None:
+        # RC25: LanguageTool is a global prerequisite for automatic publication.
+        # Keep collecting sources while the portable installer/server starts, but
+        # do not spend AI quota or mutate article retry state until the final
+        # Ukrainian proofreader is actually reachable.
+        lt = languagetool_status()
+        if not lt.get("ready"):
+            ensure_languagetool_async(self._languagetool_event)
+            self._audit("languagetool", "queue_wait", str(lt.get("text") or "LanguageTool not ready"), channel_id=channel.id)
+            self.on_event("languagetool", str(lt.get("text") or "LanguageTool: очікування готовності"))
+            return
         posted = 0
         attempted = 0
         max_attempts = max(4, min(8, int(channel.max_posts_per_cycle) * 2))
@@ -136,7 +208,7 @@ class AutopilotService:
             attempted += 1
             article_id = int(row["id"])
             try:
-                self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None)
+                self.db.update_article(article_id, status="processing", processing_started_at=now_iso(), last_error=None, reject_reason=None)
                 self._audit(
                     "article", "processing", str(row["title"] or "")[:300],
                     channel_id=channel.id, source_id=int(row["source_id"]), article_id=article_id,
@@ -150,7 +222,7 @@ class AutopilotService:
                     layout_version = int((json.loads(layout_existing or "{}") or {}).get("version") or 0)
                 except Exception:
                     layout_version = 0
-                if layout_version < 4 and str(row["url"] or "").startswith(("http://", "https://")):
+                if layout_version < 5 and str(row["url"] or "").startswith(("http://", "https://")):
                     hydrated = hydrate_article_page(
                         str(row["url"] or ""),
                         str(row["title"] or ""),
@@ -196,11 +268,15 @@ class AutopilotService:
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
                 )
                 hero = prepared_media.telegram_hero
-                telegram_hard_limit = MEDIA_POST_HARD_LIMIT if hero is not None else TEXT_POST_HARD_LIMIT
+                direct_video = prepared_media.telegram_direct_video
+                video_link = prepared_media.video_link
+                media_present = hero is not None or direct_video is not None
+                telegram_hard_limit = MEDIA_POST_HARD_LIMIT if media_present else TEXT_POST_HARD_LIMIT
                 source_footer = ""
                 if channel.include_source_link and str(row["url"] or "").strip():
                     source_footer = f"\n\nДжерело: {str(row['url'] or '').strip()}"
-                rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer))
+                video_footer = f"\n\n🎬 Відео: {video_link}" if video_link else ""
+                rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer) - len(video_footer))
                 format_marker = f"{POST_FORMAT_PREFIX}{telegram_hard_limit}:{rewrite_hard_limit}:"
 
                 event_key = str(row["event_key"] or "").strip()
@@ -213,9 +289,31 @@ class AutopilotService:
 
                 if not (body and event_summary):
                     recent = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=30)
-                    decision = decide(
-                        channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
-                    )
+                    try:
+                        decision = decide(
+                            channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
+                        )
+                    except PostAIQAExhausted as exc:
+                        # Media is optional. If the 900-character caption contract
+                        # is what made otherwise healthy AI candidates fail QA,
+                        # retry the story once as a normal text Telegram post.
+                        # This preserves factual validation while preventing an
+                        # optional image from becoming a publication blocker.
+                        if not media_present or not exc.media_fallback_recommended:
+                            raise
+                        hero = None
+                        direct_video = None
+                        media_present = False
+                        telegram_hard_limit = TEXT_POST_HARD_LIMIT
+                        rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer) - len(video_footer))
+                        format_marker = f"{POST_FORMAT_PREFIX}{telegram_hard_limit}:{rewrite_hard_limit}:"
+                        self._audit(
+                            "rewrite", "media_to_text_fallback", str(exc)[:1200],
+                            channel_id=channel.id, article_id=article_id,
+                        )
+                        decision = decide(
+                            channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
+                        )
                     if decision.decision == "duplicate":
                         self.db.update_article(
                             article_id, status="duplicate", duplicate_of=decision.duplicate_of,
@@ -251,12 +349,37 @@ class AutopilotService:
                         media_captions_json="{}",
                     )
                     self._audit(
-                        "rewrite", "pass", f"{ai_provider}/{ai_model}; chars={len(body)}; media={'yes' if hero else 'no'}",
+                        "rewrite", "pass", f"{ai_provider}/{ai_model}; chars={len(body)}; media={'video' if direct_video else ('image' if hero else 'no')}; {decision.reason[:1200]}",
                         channel_id=channel.id, article_id=article_id,
                     )
 
+                # RC13: re-check semantic duplicates immediately before the
+                # Telegram write, including cached/retry rewrites. A retry may
+                # have been created before another source for the same event was
+                # successfully published, so the old RC12 path could later send
+                # both posts. Compare the final Ukrainian body against fresh
+                # published bodies, not only source-title similarity.
+                recent_for_event = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=80)
+                semantic_duplicate = find_event_duplicate(str(row["title"] or ""), body, recent_for_event)
+                if semantic_duplicate is not None:
+                    reason = (
+                        f"Семантичний дубль #{semantic_duplicate.article_id}: "
+                        f"{semantic_duplicate.reason}."
+                    )
+                    self.db.update_article(
+                        article_id,
+                        status="duplicate",
+                        duplicate_of=semantic_duplicate.article_id,
+                        reject_reason=reason,
+                        ai_provider="local-rule",
+                        ai_model="event-dedupe-v1",
+                    )
+                    self._audit("dedupe", "duplicate", reason, channel_id=channel.id, article_id=article_id)
+                    continue
+
+                publication_body = body + video_footer
                 caption = build_post_text(
-                    body,
+                    publication_body,
                     source_url=str(row["url"] or ""),
                     include_source_link=bool(channel.include_source_link),
                     hard_limit=telegram_hard_limit,
@@ -266,11 +389,13 @@ class AutopilotService:
                 token = secrets.channel_bot_tokens.get(str(channel.id), "") or secrets.default_telegram_bot_token
                 self.db.update_article(article_id, status="telegram_writing", rewrite_text=caption)
                 self._audit(
-                    "telegram", "writing", f"chars={len(caption)}; media={'yes' if hero else 'no'}",
+                    "telegram", "writing", f"chars={len(caption)}; media={'video' if direct_video else ('image' if hero else 'no')}",
                     channel_id=channel.id, article_id=article_id,
                 )
                 try:
-                    if hero is not None:
+                    if direct_video is not None:
+                        result = send_video_url(token, channel.telegram_chat_id, caption, direct_video.url)
+                    elif hero is not None:
                         result = send_prepared_photo(
                             token, channel.telegram_chat_id, caption,
                             filename=hero.filename, mime_type=hero.mime_type, data=hero.data,
@@ -279,8 +404,23 @@ class AutopilotService:
                         result = send_text(token, channel.telegram_chat_id, caption)
                 except TelegramError as exc:
                     if exc.media_rejected:
-                        self.on_event("warning", f"{channel.name}: Telegram відхилив фото, публікую цей самий пост без медіа")
-                        result = send_text(token, channel.telegram_chat_id, caption)
+                        kind_label = "відео" if direct_video is not None else "фото"
+                        self.on_event("warning", f"{channel.name}: Telegram відхилив {kind_label}, публікую цей самий пост без нього")
+                        # If a direct video was rejected but a validated article/YouTube
+                        # preview exists, keep the visual fallback. Otherwise the
+                        # canonical watch link remains in the text.
+                        if direct_video is not None and hero is not None:
+                            try:
+                                result = send_prepared_photo(
+                                    token, channel.telegram_chat_id, caption,
+                                    filename=hero.filename, mime_type=hero.mime_type, data=hero.data,
+                                )
+                            except TelegramError as photo_exc:
+                                if not photo_exc.media_rejected:
+                                    raise
+                                result = send_text(token, channel.telegram_chat_id, caption)
+                        else:
+                            result = send_text(token, channel.telegram_chat_id, caption)
                     else:
                         raise
 
@@ -293,6 +433,7 @@ class AutopilotService:
                     retry_count=0,
                     next_retry_at=None,
                     last_error=None,
+                    reject_reason=None,
                 )
                 posted += 1
                 self._audit(
@@ -303,6 +444,28 @@ class AutopilotService:
                     "publish",
                     f"{channel.name}: опубліковано #{article_id}, Telegram {result.message_id}, медіа {result.media_count}",
                 )
+            except LanguageToolUnavailable as exc:
+                status = self.db.schedule_retry(article_id, str(exc))
+                self._audit("languagetool", status, str(exc), channel_id=channel.id, article_id=article_id)
+                self.on_event("warning", f"{channel.name}: #{article_id} ({status}): {exc}")
+                break
+            except PostAIQAExhausted as exc:
+                status = self.db.schedule_retry(article_id, str(exc))
+                self._audit("post_ai_qa", status, str(exc), channel_id=channel.id, article_id=article_id)
+                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
+                if exc.provider_outage:
+                    self._audit("ai_router", "cycle_pause", "Post-AI QA exhausted because all providers are temporarily unavailable; remaining articles left new", channel_id=channel.id, article_id=article_id)
+                    break
+            except AIRouterError as exc:
+                status = self.db.schedule_retry(article_id, str(exc))
+                self._audit("ai_router", status, str(exc), channel_id=channel.id, article_id=article_id)
+                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
+                # A provider-availability outage is global, not article-specific.
+                # Do not turn the next several fresh stories into identical retry
+                # rows in the same cycle; leave them new and try again next cycle.
+                if "Немає доступного AI-провайдера" in str(exc):
+                    self._audit("ai_router", "cycle_pause", "No AI provider currently available; remaining articles left pending", channel_id=channel.id, article_id=article_id)
+                    break
             except TelegramError as exc:
                 if exc.outcome_unknown:
                     status = "unknown"
