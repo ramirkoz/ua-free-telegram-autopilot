@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from . import APP_NAME, __version__
-from .ai_router import test_all
+from .ai_router import clear_router_cooldowns, test_all, test_production_route
 from .local_ai_runtime import test_local_runtime
 from .codex_engine import inspect_codex, install_codex, login_chatgpt
 from .collector import detect_source
@@ -13,6 +13,7 @@ from .database import Database
 from .models import Channel, Source
 from .secrets_store import SecretConfig, load_secrets, save_secrets
 from .service import AutopilotService
+from .language_tool_local import ensure_languagetool, languagetool_status
 from .telegram import normalize_chat_target, test_bot
 from .telegraph import create_account, test_account
 
@@ -202,6 +203,11 @@ class MainWindow:
         self.local_enabled=tk.BooleanVar(); ttk.Checkbutton(form,text="Локальний fallback: Ollama автоматично → llama.cpp",variable=self.local_enabled).grid(row=6,column=0,sticky="w",pady=4)
         self.local_url=ttk.Entry(form,width=45); self.local_url.grid(row=6,column=1,sticky="w"); self.local_model=ttk.Entry(form,width=30); self.local_model.grid(row=6,column=1,sticky="e")
         ttk.Label(form,text="Використовує вже встановлену Ollama та наявні моделі; нічого автоматично не завантажує. URL/модель праворуч — лише запасний llama.cpp.",wraplength=850).grid(row=7,column=0,columnspan=2,sticky="w",pady=(0,6))
+        ltbar=ttk.Frame(self.ai_tab); ltbar.pack(fill="x",pady=(4,0))
+        ttk.Label(ltbar,text="LanguageTool:").pack(side="left")
+        self.lt_status_var=tk.StringVar(value="перевіряється…")
+        ttk.Label(ltbar,textvariable=self.lt_status_var).pack(side="left",padx=(6,10))
+        ttk.Button(ltbar,text="Перевірити / встановити LanguageTool",command=self.test_languagetool_ui).pack(side="left")
         btn=ttk.Frame(self.ai_tab); btn.pack(fill="x",pady=12)
         ttk.Button(btn,text="Зберегти токени",command=self.save_secret_ui).pack(side="left",padx=3)
         ttk.Button(btn,text="Тест AI Router",command=self.test_ai_ui).pack(side="left",padx=3)
@@ -285,7 +291,13 @@ class MainWindow:
         for i in self.history_tree.get_children(): self.history_tree.delete(i)
         status=self.history_status.get() if hasattr(self,"history_status") else "усі"; status=None if status=="усі" else status
         for r in self.db.history(self.current_channel_id,status,limit=500):
-            reason=r["reject_reason"] or r["last_error"] or ""
+            row_status=str(r["status"] or "")
+            if row_status in {"retry","error","unknown","processing","telegram_writing","telegraph_writing"}:
+                reason=r["last_error"] or r["reject_reason"] or ""
+            elif row_status in {"rejected","duplicate"}:
+                reason=r["reject_reason"] or r["last_error"] or ""
+            else:
+                reason=r["last_error"] or r["reject_reason"] or ""
             self.history_tree.insert("","end",iid=f"h{r['id']}",values=(r["id"],r["channel_name"],r["source_name"],r["headline_uk"] or r["title"],r["status"],reason,r["published_at"] or "",r["ai_provider"] or "",r["telegram_media_count"] or 0,r["telegraph_url"] or "",r["telegram_message_id"] or ""))
 
     def refresh_stats(self):
@@ -424,18 +436,45 @@ class MainWindow:
     def save_secret_ui(self,quiet=False):
         try:
             old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; sec=SecretConfig(**data,channel_bot_tokens=old.channel_bot_tokens,telegraph_access_token=old.telegraph_access_token,local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); save_secrets(sec)
-            if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено.")
+            clear_router_cooldowns()
+            if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено. AI cooldown скинуто, провайдери перевірятимуться заново.")
         except Exception as exc: messagebox.showerror(APP_NAME,str(exc))
 
     def test_ai_ui(self):
         self.save_secret_ui(quiet=True)
         def work():
             try:
-                rows=test_all(); text="\n".join(f"{mark} {provider}: {detail}" for provider,mark,detail in rows)
+                rows=test_all()
+                lines=[f"{mark} {provider}: {detail}" for provider,mark,detail in rows]
+                try:
+                    prod=test_production_route()
+                    lines.append(f"✓ production-route: реальний rewrite prompt пройшов · {prod.label}")
+                except Exception as exc:
+                    lines.append(f"⚠ production-route: {exc}")
+                lines.append(str(languagetool_status().get("text") or "LanguageTool: невідомий стан"))
+                text="\n".join(lines)
             except Exception as exc:text=str(exc)
             self.root.after(0,lambda:self._set_ai_result(text))
-        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Перевірка...")
+        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Перевірка API + production-route...")
     def _set_ai_result(self,text): self.ai_result.delete("1.0","end"); self.ai_result.insert("1.0",text)
+
+    def test_languagetool_ui(self):
+        def work():
+            try:
+                ready=ensure_languagetool(self._service_event)
+                status=languagetool_status()
+                text=str(status.get("text") or "LanguageTool: невідомий стан")
+                if not ready and not status.get("ready"):
+                    text += "\nАвтопублікація чекатиме, доки локальний коректор не стане готовим."
+            except Exception as exc:
+                text=f"✗ LanguageTool: {exc}"
+            self.root.after(0,lambda:self._set_lt_result(text))
+        threading.Thread(target=work,daemon=True).start()
+        self.lt_status_var.set("перевірка/встановлення…")
+
+    def _set_lt_result(self, text):
+        self.lt_status_var.set(str(text).splitlines()[0])
+        self._set_ai_result(str(text))
 
     def test_local_ai_ui(self):
         self.save_secret_ui(quiet=True)
@@ -486,7 +525,10 @@ class MainWindow:
         threading.Thread(target=self.service.run_once,daemon=True).start(); self.last_event.set("Ручний цикл запущено...")
     def _service_event(self,kind,text): self.root.after(0,lambda:self._record_event(kind,text))
     def _record_event(self,kind,text):
-        self.last_event.set(text); self.log_text.configure(state="normal"); self.log_text.insert("end",f"[{kind}] {text}\n"); self.log_text.see("end"); self.log_text.configure(state="disabled"); self.refresh_sources(); self.refresh_history(); self.refresh_stats()
+        self.last_event.set(text)
+        if hasattr(self,"lt_status_var") and kind in {"languagetool","warning","error"} and "LanguageTool" in str(text):
+            self.lt_status_var.set(str(text))
+        self.log_text.configure(state="normal"); self.log_text.insert("end",f"[{kind}] {text}\n"); self.log_text.see("end"); self.log_text.configure(state="disabled"); self.refresh_sources(); self.refresh_history(); self.refresh_stats()
     def _tick(self):
         self.status_var.set("Автопілот: працює" if self.service.running else "Автопілот: зупинено"); self.root.after(2000,self._tick)
     def close(self): self.service.stop(); self.root.destroy()
