@@ -5,7 +5,7 @@ import json
 import re
 import struct
 from dataclasses import dataclass
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 from .media import valid_public_media
 from .network import NetworkError, fetch_url
@@ -62,9 +62,37 @@ class PreparedMedia:
 class PreparedArticleMedia:
     featured: PreparedMedia | None
     body: list[PreparedMedia]
+    video_preview: PreparedMedia | None = None
+
+    @property
+    def primary_video(self) -> PreparedMedia | None:
+        candidates = [
+            item for item in self.body
+            if item.kind in {"video", "iframe"} and item.relevance_score >= 45
+        ]
+        return min(candidates, key=lambda item: (item.position, -item.relevance_score), default=None)
+
+    @property
+    def video_link(self) -> str:
+        item = self.primary_video
+        return _canonical_video_link(item.url) if item is not None else ""
+
+    @property
+    def telegram_direct_video(self) -> PreparedMedia | None:
+        item = self.primary_video
+        if item is None or item.kind != "video":
+            return None
+        path = urlsplit(item.url).path.casefold()
+        if path.endswith((".mp4", ".m4v", ".mov", ".webm")):
+            return item
+        return None
 
     @property
     def telegram_hero(self) -> PreparedMedia | None:
+        # When the article itself is about a trailer/video and we have a safe
+        # preview, that preview outranks a generic hero/OG image.
+        if self.primary_video is not None and self.video_preview is not None and self.video_preview.data:
+            return self.video_preview
         # Prefer an early, strongly relevant image from the real article body.
         # A later recommendation-card image must never win merely because it is larger.
         early = [
@@ -80,6 +108,67 @@ class PreparedArticleMedia:
             if item.kind == "image" and item.data and item.relevance_score >= 45
         ]
         return max(candidates, key=lambda item: (item.relevance_score, -item.position), default=None)
+
+
+_VIDEO_TITLE_WORDS = (
+    "trailer", "teaser", "video", "watch", "featurette", "clip", "footage",
+    "трейлер", "тизер", "відео", "ролик",
+)
+
+
+def _youtube_id(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    host = (parts.hostname or "").casefold()
+    path = parts.path.strip("/")
+    candidate = ""
+    if host in {"youtu.be", "www.youtu.be"}:
+        candidate = path.split("/", 1)[0]
+    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"}:
+        if path.startswith("embed/") or path.startswith("shorts/") or path.startswith("live/"):
+            candidate = path.split("/", 1)[1].split("/", 1)[0]
+        elif path == "watch":
+            candidate = (parse_qs(parts.query).get("v") or [""])[0]
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{6,20}", candidate or "") else ""
+
+
+def _canonical_video_link(url: str) -> str:
+    video_id = _youtube_id(url)
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    host = (parts.hostname or "").casefold()
+    if host in {"player.vimeo.com", "www.player.vimeo.com"}:
+        match = re.search(r"/video/(\d+)", parts.path)
+        if match:
+            return f"https://vimeo.com/{match.group(1)}"
+    return url
+
+
+def _youtube_preview(item: PreparedMedia) -> PreparedMedia | None:
+    video_id = _youtube_id(item.url)
+    if not video_id:
+        return None
+    for idx, url in enumerate((
+        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+    )):
+        preview = PreparedMedia(
+            index=-100 - idx, kind="image", url=url, caption=item.caption,
+            alt=(item.alt or "Video preview")[:500], position=item.position,
+            featured=True, context="youtube video preview", classification="photo",
+            relevance_score=max(80.0, item.relevance_score),
+        )
+        resolved = _probe_image(preview)
+        if resolved:
+            resolved.relevance_score = max(80.0, item.relevance_score)
+            return resolved
+    return None
 
 
 def _image_dimensions(data: bytes, mime: str) -> tuple[int, int]:
@@ -145,7 +234,7 @@ def _hard_reject(item: PreparedMedia) -> bool:
 
 def _classify(item: PreparedMedia) -> str:
     low = _candidate_text(item).casefold()
-    if item.kind == "video":
+    if item.kind in {"video", "iframe"}:
         return "video"
     if any(x in low for x in ("screenshot", "screen shot", "скриншот")):
         return "screenshot"
@@ -162,7 +251,15 @@ def _score(item: PreparedMedia, *, title: str, article_text: str) -> float:
     # A large image is not automatically relevant. The old score started every
     # body image at the acceptance threshold, so unrelated recommendation cards
     # passed on size alone. Start lower and require article-position or semantic evidence.
-    score = 10.0 if item.featured else 16.0
+    if item.kind in {"video", "iframe"}:
+        score = 42.0 if item.featured else 38.0
+        if item.position <= 0.20:
+            score += 10.0
+        title_low = (title or "").casefold()
+        if any(word in title_low for word in _VIDEO_TITLE_WORDS):
+            score += 24.0
+    else:
+        score = 10.0 if item.featured else 16.0
     if item.caption:
         score += 10.0
     if item.alt:
@@ -231,12 +328,18 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
         layout = {}
     if isinstance(layout, dict):
         featured_raw = str(layout.get("featured") or "").strip()
+        featured_video_raw = str(layout.get("featured_video") or "").strip()
         featured_meta = layout.get("featured_meta") if isinstance(layout.get("featured_meta"), dict) else {}
         if featured_raw:
             parsed = valid_public_media(featured_raw)
             if parsed:
                 kind, url = parsed
                 featured = PreparedMedia(0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True)
+        if featured_video_raw:
+            parsed_video = valid_public_media(featured_video_raw)
+            if parsed_video:
+                video_kind, video_url = parsed_video
+                body.append(PreparedMedia(0, video_kind, video_url, position=0.0, featured=True, context="featured video"))
         blocks = layout.get("blocks")
         if isinstance(blocks, list):
             for block in blocks:
@@ -316,7 +419,10 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             item.relevance_score = _score(item, title=title, article_text=article_text)
             candidate_tokens = _text_tokens(_candidate_text(item))
             reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
-            if item.position > 0.45 and not (candidate_tokens & reference_tokens):
+            video_story = item.kind in {"video", "iframe"} and any(
+                word in (title or "").casefold() for word in _VIDEO_TITLE_WORDS
+            )
+            if item.position > 0.45 and not video_story and not (candidate_tokens & reference_tokens):
                 continue
             if item.relevance_score < 38:
                 continue
@@ -328,4 +434,8 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
         if len(prepared) >= 3:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
-    return PreparedArticleMedia(featured, prepared)
+    result = PreparedArticleMedia(featured, prepared)
+    primary_video = result.primary_video
+    if primary_video is not None and primary_video.kind == "iframe":
+        result.video_preview = _youtube_preview(primary_video)
+    return result
