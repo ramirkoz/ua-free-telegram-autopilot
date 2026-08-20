@@ -1,84 +1,43 @@
-# UA FREE Telegram Autopilot v0.1.0-rc21
+# UA FREE Telegram Autopilot v0.1.0-rc29
 
-Окремий Windows portable продукт для автоматизованого збору, редакційної обробки та прямої публікації технологічних і науково-популярних новин у Telegram.
+Windows portable застосунок для збору технологічних/наукових новин, AI-рерайту українською, фактологічного та мовного QA і прямої публікації в Telegram.
 
-## RC21 language-quality hotfix
+## Поточний production-конвеєр
 
-- Conservative deterministic cleanup of live-observed Ukrainian spelling/russism errors before publication.
-- Optional copy-edit pass now targets spelling, idiom, calques and unsupported evaluative wording as well as agreement.
-- Non-attributed hype sentences such as «один з найкращих» are dropped rather than presented as facts.
-- Language repair is revalidated through the existing year/number/Fact Guard checks and remains non-blocking when a copy-edit provider is unavailable.
+`джерело → очищення статті → exact/title/event dedupe → Evidence Pack → AI Router → Fact Guard + український QA → LanguageTool (якщо готовий) → Telegram`
 
-## RC20: liveness + Ukrainian QA + fact-relation repair
+## AI Router
 
-RC20 is based only on the live-tested RC19 portable. It fixes the remaining failure pattern where technical Ukrainian posts were falsely rejected, temporary endpoint failures exhausted the article deadline before local fallback, and a wrapped provider outage could turn many following fresh stories into identical retry rows. It also tightens relation-preservation after the live TerraPower post exposed a coolant/storage and agreement/purchase binding error.
+- Google Gemini, NVIDIA NIM і Groq тепер читають актуальні каталоги моделей через API та формують runtime-список моделей автоматично.
+- Якщо каталог провайдера недоступний, використовуються перевірені fallback-ID.
+- Ліміт однієї моделі не блокує автоматично всі інші моделі того самого провайдера.
+- Cloudflare лишається на статичних моделях, бо сумісний стабільний model-list endpoint у цьому контурі не використовується.
+- Локальний fallback: Ollama → запасний llama.cpp.
+- Кнопка «Знайти локальні моделі» показує реально встановлені Ollama-моделі та може запустити встановлену Ollama, але нічого не завантажує.
 
-- Ukrainian language detection now works at word/function-word level and tolerates Latin product/model/company names.
-- A healthy cloud model gets one targeted repair turn for soft format/language/length QA before that model is skipped.
-- Network failures create a short provider-level cooldown for shared endpoints, avoiding repeated timeouts on a second model at the same endpoint.
-- The last successful cloud provider/model is preferred, while local remains an emergency fallback and receives reserved deadline time.
-- Post-AI QA propagates provider-outage state so the service pauses the cycle after one affected article instead of poisoning the remaining `new` queue.
-- Main rewrite instructions explicitly preserve subject/object/component relations and agreement-vs-purchase strength.
-- Fact Guard blocks observed relation-strengthening errors such as deployment agreements rewritten as purchases and sodium-cooling confused with molten-salt storage.
-- Longer finished posts receive an optional bounded grammar proofread, revalidated by the same factual guards; proofread failure never blocks an already-safe candidate.
-- Pending/retry cache format advances to `telegram-post-v11`.
+## LanguageTool
 
-## RC15: provider health separated from post-AI QA
+- Працює локально на `127.0.0.1:8081` і не є блокером живучості автопілота.
+- Java/LanguageTool запускаються портативно з `Data/Tools` і завершуються разом із програмою.
+- UI показує накопичувальну кількість реальних перевірок, виправлень та останню застосовану правку.
+- Статистика зберігається у `Data/Tools/languagetool_stats.json`.
+- Навіть без LanguageTool перед публікацією працюють deterministic Ukrainian fixes, hard-language blockers, number/year QA і Fact Guard.
 
-RC15 fixes the live failure mode where a healthy provider response could be treated as a provider failure merely because an article-specific format, Fact Guard, language, completeness or length check rejected the candidate. Provider diagnostics now require a successful endpoint/auth response and non-empty text, not an exact magic phrase. Production routing obtains raw model output first; article QA runs afterwards and can request another model without changing provider health. A single bounded local format-repair turn remains available as post-AI QA.
+## Черга та джерела
 
-## RC13: event dedupe + Ukrainian grammar assurance
+- `new` має пріоритет над `retry`; серед `new` першими обробляються найсвіжіші матеріали.
+- Один складний матеріал має обмежений AI/QA budget і не повинен забирати весь цикл.
+- Свіжі технічні AI/QA помилки після переходу на RC28 один раз повертаються в `new` для чистої повторної обробки.
+- Для web-page джерел, що відповідають HTTP 403/429, Autopilot пробує типові публічні RSS/Atom endpoints як fallback.
+- Налаштована «Мін. пауза між постами» лишається свідомим обмеженням частоти Telegram-публікацій.
 
-RC12 відновив живу публікацію через AI Router. Live-тест RC12 показав два наступні дефекти якості: різні джерела могли окремо опублікувати одну й ту саму подію, а Fact Guard/readability не ловили окремі помилки граматичного узгодження українських закінчень.
+## Що прибрано
 
-RC13:
+- runtime Telegraph;
+- старий `decision_engine.py`;
+- UI-костиль `ui_direct_format.py`;
+- старе ім'я `production_pipeline_rc9.py` (активний модуль тепер `production_pipeline.py`);
+- накопичені release notes RC9–RC27 і старі RC9 gate-файли;
+- версійні one-time cooldown-міграції з `service.py`.
 
-- зберігає title/exact dedupe, але додає high-precision event-level порівняння фінального українського рерайту з уже опублікованими текстами;
-- повторює event-level dedupe безпосередньо перед Telegram write, тому старий `retry` із кешованим рерайтом не може наздогнати вже опублікований матеріал про ту саму подію;
-- порівнює до 80 свіжих опублікованих матеріалів у межах налаштованого `dedupe_window_hours`;
-- явно вимагає в основному rewrite prompt перевірити рід, число, відмінок, підмет-присудок, прикметник-іменник, займенники та керування прийменників;
-- для синтаксично ризикового тексту може виконати короткий grammar proofread іншим cloud-провайдером;
-- приймає proofread тільки після повторного Fact Guard/number/year QA та перевірки збереження чисел, Latin entities і основного змісту;
-- не блокує публікацію, якщо додатковий grammar provider недоступний;
-- використовує `telegram-post-v6`, тому pending/retry кандидати RC12 переписуються за новими правилами перед майбутньою публікацією.
-
-## Збережений RC12 AI Router liveness fix
-
-- article-specific Fact Guard / format / number / readability failure не створює provider/model cooldown;
-- зміни `ai_router_state.json` серіалізовані та не перезаписують свіжий стан старим snapshot;
-- прострочені cooldown-и прибираються автоматично;
-- cooldown лишається тільки для реальних health-проблем: quota/auth/network/model/runtime;
-- local Ollama/llama.cpp при реальній недоступності має короткий cooldown.
-
-## Production-конвеєр
-
-`джерело → очищена стаття → exact/title dedupe → Evidence Pack → AI-рерайт → Fact Guard + grammar/readability QA → event-level dedupe → один медіафайл або без медіа → Telegram`
-
-Ключові правила:
-
-- прямий Telegram, без Telegraph у production pipeline;
-- без окремого заголовка;
-- медіа: один релевантний файл + до 900 символів;
-- без медіа: текст до 4096 символів;
-- `new` має пріоритет над `retry`;
-- retry має bounded backoff і cap;
-- Telegram publisher, Media Engine, source collection, SQLite schema та AES-GCM secrets не переписані;
-- існуюча portable `Data` сумісна без destructive migration.
-
-Поточна версія: `0.1.0-rc21`.
-
-
-## RC22 media priority
-Embedded YouTube/Vimeo/HTML5 video is preserved as editorial media. Trailer/video stories prefer the embedded video; YouTube uses a thumbnail plus watch link when Telegram cannot embed the player directly.
-
-## RC24 — автоматичний LanguageTool
-
-RC24 автоматично забезпечує локальний LanguageTool для української граматики:
-
-- при старті Autopilot перевіряє `127.0.0.1:8081` у фоновому потоці;
-- якщо LanguageTool відсутній, завантажує офіційний snapshot у `Data/Tools/LanguageTool`;
-- якщо немає Java 17+, завантажує портативний Eclipse Temurin JRE 17 у `Data/Tools/Java17`;
-- системна Java, реєстр Windows і права адміністратора не потрібні;
-- зовнішній LanguageTool cloud API не використовується;
-- після копіювання всієї `Data` в нову portable-версію LanguageTool та Java переносяться разом з нею;
-- якщо інтернет тимчасово недоступний, Autopilot не блокує поточний матеріал і повторює встановлення не частіше ніж раз на 5 хвилин.
+Історичні `telegraph_*` поля SQLite не виконують код і залишені лише для безпечного читання існуючої `Data` без destructive migration.
