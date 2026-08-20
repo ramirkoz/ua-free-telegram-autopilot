@@ -151,9 +151,9 @@ def _clean_text(text: str) -> str:
 class _ArticleHTMLParser(HTMLParser):
     """Extract article text and preserve editorial media in source order.
 
-    RC6 collected a flat media bag and Telegraph sprinkled it every three paragraphs.
+    RC6 collected a flat media bag and the old renderer mixed it into article content.
     RC7 records media as blocks at their actual article position. Featured metadata is
-    kept separately for the Telegram hero and is not blindly duplicated in Telegraph.
+    kept separately for the Telegram hero and is not blindly duplicated in the article body.
     """
 
     def __init__(self, base_url: str, *, include_main: bool = False) -> None:
@@ -175,6 +175,7 @@ class _ArticleHTMLParser(HTMLParser):
         self.figcaption_depth = 0
         self.featured_media = ""
         self.featured_alt = ""
+        self.featured_video = ""
 
     @property
     def in_article(self) -> bool:
@@ -278,6 +279,13 @@ class _ArticleHTMLParser(HTMLParser):
                 url = editorial_media_candidate(self.base_url, values.get("content", ""), alt=self.featured_alt, featured=True)
                 if url:
                     self.featured_media = encode_media("image", url)
+            if prop in {"og:video", "og:video:url", "og:video:secure_url", "twitter:player"} and not self.featured_video:
+                candidate = values.get("content", "").strip()
+                low = candidate.casefold()
+                kind = "iframe" if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")) else "video"
+                url = editorial_media_candidate(self.base_url, candidate, context="featured video")
+                if url:
+                    self.featured_video = encode_media(kind, url)
 
         if self.in_article and not self.skipping:
             if tag == "figure" and self.figure is None:
@@ -301,21 +309,58 @@ class _ArticleHTMLParser(HTMLParser):
                 url = editorial_media_candidate(self.base_url, candidate, context=self._context())
                 if url:
                     self._finish_text_capture()
-                    self.blocks.append({"type": "media", "kind": "video", "url": url, "caption": "", "alt": ""})
+                    self.blocks.append({
+                        "type": "media", "kind": "video", "url": url, "caption": "",
+                        "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
+                        "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                    })
             elif tag == "source":
                 candidate = values.get("src", "")
                 url = editorial_media_candidate(self.base_url, candidate, context=self._context())
                 if url:
                     self._finish_text_capture()
-                    self.blocks.append({"type": "media", "kind": "video", "url": url, "caption": "", "alt": ""})
+                    self.blocks.append({
+                        "type": "media", "kind": "video", "url": url, "caption": "",
+                        "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
+                        "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                    })
             elif tag == "iframe":
-                candidate = values.get("src", "")
+                candidate = values.get("src") or values.get("data-src") or values.get("data-lazy-src") or ""
                 low = candidate.casefold()
-                if any(host in low for host in ("youtube.com", "youtu.be", "vimeo.com", "player.vimeo.com")):
+                if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")):
                     url = editorial_media_candidate(self.base_url, candidate, context=self._context())
                     if url:
                         self._finish_text_capture()
-                        self.blocks.append({"type": "media", "kind": "iframe", "url": url, "caption": "", "alt": ""})
+                        self.blocks.append({
+                            "type": "media", "kind": "iframe", "url": url, "caption": "",
+                            "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
+                            "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                        })
+            elif "youtube" in tag or "youtube" in (values.get("class") or "").casefold():
+                video_id = values.get("videoid") or values.get("video-id") or values.get("data-videoid") or values.get("data-video-id") or ""
+                if re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+                    url = editorial_media_candidate(
+                        self.base_url, f"https://www.youtube.com/embed/{video_id}", context=self._context(self._attrs_text(values))
+                    )
+                    if url:
+                        self._finish_text_capture()
+                        self.blocks.append({
+                            "type": "media", "kind": "iframe", "url": url, "caption": "",
+                            "alt": " ".join((values.get("title") or values.get("aria-label") or "YouTube video").split())[:500],
+                            "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                        })
+            elif tag == "a":
+                candidate = values.get("href", "")
+                low = candidate.casefold()
+                if any(host in low for host in ("youtube.com/watch", "youtu.be/", "vimeo.com/")):
+                    url = editorial_media_candidate(self.base_url, candidate, context=self._context(self._attrs_text(values)))
+                    if url:
+                        self._finish_text_capture()
+                        self.blocks.append({
+                            "type": "media", "kind": "iframe", "url": url, "caption": "",
+                            "alt": " ".join((values.get("title") or values.get("aria-label") or "Video").split())[:500],
+                            "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                        })
 
         if tag in _VOID_TAGS:
             self.context_by_depth.pop(self.depth, None)
@@ -362,7 +407,7 @@ class _ArticleHTMLParser(HTMLParser):
             self.text_capture[2].append(text)
 
 
-def _normalize_layout(blocks: list[dict[str, object]], featured: str) -> tuple[list[dict[str, object]], list[str]]:
+def _normalize_layout(blocks: list[dict[str, object]], featured: str, featured_video: str = "") -> tuple[list[dict[str, object]], list[str]]:
     normalized: list[dict[str, object]] = []
     media_urls: list[str] = []
     seen_url: set[str] = set()
@@ -404,7 +449,9 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str) -> tuple[l
 
     if featured and featured not in media_urls:
         media_urls.insert(0, featured)
-    layout = {"version": 3, "featured": featured, "blocks": normalized}
+    if featured_video and featured_video not in media_urls:
+        media_urls.insert(0, featured_video)
+    layout = {"version": 5, "featured": featured, "featured_video": featured_video, "blocks": normalized}
     return normalized, media_urls[:24]
 
 
@@ -421,10 +468,10 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     # Prefer the semantic <article> element. Large publisher pages commonly keep
     # related-story cards, carousels and recommendation images inside <main>, and
     # treating all of <main> as article content is how unrelated cars/banners leaked
-    # into Telegraph and Telegram. Only fall back to <main> when no usable <article>
+    # into publication pipelines. Only fall back to <main> when no usable <article>
     # exists at all.
     article_parser = _parse_scope(html, base_url, include_main=False)
-    article_blocks, article_media = _normalize_layout(article_parser.blocks, article_parser.featured_media)
+    article_blocks, article_media = _normalize_layout(article_parser.blocks, article_parser.featured_media, article_parser.featured_video)
     article_text = _clean_text("\n".join(
         str(block.get("text") or "") for block in article_blocks if block.get("type") == "text"
     ))
@@ -435,7 +482,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     text = article_text
     if not article_parser.article_seen or len(article_text) < 50:
         main_parser = _parse_scope(html, base_url, include_main=True)
-        main_blocks, main_media = _normalize_layout(main_parser.blocks, main_parser.featured_media)
+        main_blocks, main_media = _normalize_layout(main_parser.blocks, main_parser.featured_media, main_parser.featured_video)
         main_text = _clean_text("\n".join(
             str(block.get("text") or "") for block in main_blocks if block.get("type") == "text"
         ))
@@ -446,7 +493,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
         text = _clean_text("".join(parser.all_chunks))
     title = " ".join(parser.title_chunks or article_parser.title_chunks).strip()
     layout_json = json.dumps({
-        "version": 4, "featured": parser.featured_media,
+        "version": 5, "featured": parser.featured_media, "featured_video": parser.featured_video,
         "featured_meta": {"alt": parser.featured_alt}, "blocks": blocks,
     }, ensure_ascii=False, separators=(",", ":"))
     return ExtractedArticle(title[:500], text[:120_000], media, layout_json)
