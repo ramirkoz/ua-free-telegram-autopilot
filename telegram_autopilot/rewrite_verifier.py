@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .ukrainian_quality import language_quality_issues
+
 
 @dataclass(frozen=True, slots=True)
 class QualityAssessment:
@@ -106,6 +108,14 @@ def assess_rewrite(body: str, *, hard_limit: int) -> QualityAssessment:
     if awkward:
         score -= min(24, 10 + 5 * (len(awkward) - 1))
         issues.append("неприродна або калькована українська")
+
+    language_issues = language_quality_issues(text)
+    if language_issues:
+        penalty = min(24, 8 + 4 * (len(language_issues) - 1))
+        severe = sum(1 for issue in language_issues if any(mark in issue for mark in ("оціночне", "реклам", "безапеляційне")))
+        penalty += min(12, 8 * severe)
+        score -= penalty
+        issues.extend(language_issues[:4])
 
     # Repeated sentence starts make short Telegram posts sound mechanical.
     starts: list[str] = []
