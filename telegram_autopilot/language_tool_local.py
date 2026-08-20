@@ -31,10 +31,12 @@ _NUMBER_RE = re.compile(r"\d")
 _LATIN_ENTITY_RE = re.compile(r"\b(?:[A-Z][A-Za-z0-9._+-]{2,}|[A-Z]{2,}[A-Z0-9._+-]*)\b")
 _JAVA_VERSION_RE = re.compile(r'version\s+"(?P<major>\d+)(?:[._-][^\"]*)?"', re.I)
 _INSTALL_LOCK = threading.RLock()
+_STATS_LOCK = threading.RLock()
 _INSTALL_THREAD: threading.Thread | None = None
 _SERVER_PROCESS: subprocess.Popen | None = None
 _SERVER_LOCK = threading.RLock()
 _NEXT_INSTALL_AT = 0.0
+_SHUTDOWN_EVENT = threading.Event()
 
 
 class LanguageToolUnavailable(RuntimeError):
@@ -49,7 +51,7 @@ class LanguageToolEditResult:
 
 
 def languagetool_status() -> dict[str, object]:
-    """Cheap operator-facing status snapshot. No external network call."""
+    """Operator-facing status plus persistent proof of actual LanguageTool work."""
     ready = _probe_server(timeout=0.25)
     with _INSTALL_LOCK:
         installing = bool(_INSTALL_THREAD and _INSTALL_THREAD.is_alive())
@@ -57,20 +59,30 @@ def languagetool_status() -> dict[str, object]:
     jar = _find_server_jar()
     root = _java_root()
     bundled_java = (root / "bin" / "java.exe").is_file() or (root / "bin" / "java").is_file()
+    with _STATS_LOCK:
+        stats = _read_stats()
+    checks = int(stats.get("checks", 0) or 0)
+    corrections = int(stats.get("corrections", 0) or 0)
+    details = [str(x) for x in (stats.get("last_details") or []) if str(x).strip()]
+    proof = f" · перевірок: {checks} · виправлень: {corrections}"
+    if details:
+        proof += f" · останнє: {details[0]}"
     if ready:
-        state, text = "ready", "✓ LanguageTool працює локально · 127.0.0.1:8081"
+        state, text = "ready", "✓ LanguageTool працює локально · 127.0.0.1:8081" + proof
     elif installing:
-        state, text = "installing", "… LanguageTool встановлюється/запускається у фоні"
+        state, text = "installing", "… LanguageTool встановлюється/запускається у фоні" + proof
     elif retry_seconds:
-        state, text = "retry_wait", f"⚠ LanguageTool недоступний · повтор приблизно через {retry_seconds} с"
+        state, text = "retry_wait", f"⚠ LanguageTool недоступний · повтор приблизно через {retry_seconds} с" + proof
     elif jar:
-        state, text = "installed_stopped", "⚠ LanguageTool встановлений, але локальний сервер не відповідає"
+        state, text = "installed_stopped", "⚠ LanguageTool встановлений, але локальний сервер не відповідає" + proof
     else:
-        state, text = "missing", "⚠ LanguageTool ще не встановлений"
+        state, text = "missing", "⚠ LanguageTool ще не встановлений" + proof
     return {
         "ready": ready, "installing": installing, "state": state, "text": text,
         "endpoint": _endpoint(), "installed": bool(jar), "bundled_java": bundled_java,
-        "retry_seconds": retry_seconds,
+        "retry_seconds": retry_seconds, "checks": checks, "corrections": corrections,
+        "last_details": tuple(details), "last_checked_at": str(stats.get("last_checked_at") or ""),
+        "last_error": str(stats.get("last_error") or ""),
     }
 
 
@@ -98,6 +110,40 @@ def _java_root() -> Path:
 
 def _state_path() -> Path:
     return _tools_dir() / "languagetool_install.json"
+
+
+def _stats_path() -> Path:
+    return _tools_dir() / "languagetool_stats.json"
+
+
+def _read_stats() -> dict[str, object]:
+    path = _stats_path()
+    if not path.exists():
+        return {"checks": 0, "changed_checks": 0, "corrections": 0, "last_checked_at": "", "last_details": [], "last_error": ""}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _record_check(changes: int, details: tuple[str, ...] = (), *, error: str = "") -> None:
+    with _STATS_LOCK:
+        data = _read_stats()
+        if not error:
+            data["checks"] = int(data.get("checks", 0) or 0) + 1
+            if int(changes) > 0:
+                data["changed_checks"] = int(data.get("changed_checks", 0) or 0) + 1
+                data["corrections"] = int(data.get("corrections", 0) or 0) + int(changes)
+            data["last_checked_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            data["last_details"] = list(details[:8])
+            data["last_error"] = ""
+        else:
+            data["last_error"] = str(error)[:500]
+        path = _stats_path()
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, path)
 
 
 def _emit(callback: Callable[[str, str], None] | None, kind: str, text: str) -> None:
@@ -131,7 +177,7 @@ def _probe_server(*, timeout: float = 0.45) -> bool:
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc25"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.1, float(timeout))) as response:
@@ -227,7 +273,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
     part = target.with_suffix(target.suffix + ".part")
     digest = hashlib.sha256()
     total = 0
-    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc25", "Accept": "*/*"})
+    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29", "Accept": "*/*"})
     try:
         with urllib.request.urlopen(req, timeout=45) as response, open(part, "wb") as out:
             while True:
@@ -252,7 +298,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
 
 
 def _adoptium_package() -> tuple[str, str]:
-    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc25", "Accept": "application/json"})
+    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as response:
         raw = response.read(2 * 1024 * 1024)
     data = json.loads(raw.decode("utf-8", errors="replace"))
@@ -339,28 +385,97 @@ def _install_languagetool(callback: Callable[[str, str], None] | None) -> Path:
     return jar
 
 
+def _pid_path() -> Path:
+    return _tools_dir() / "languagetool_server.pid"
+
+
+def _terminate_pid_tree(pid: int) -> None:
+    if pid <= 0 or pid == os.getpid():
+        return
+    try:
+        if _is_windows():
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=8, check=False, creationflags=flags,
+            )
+        else:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+
+
+def _discover_our_languagetool_pids() -> set[int]:
+    """Find only LanguageTool JVMs launched from this portable Data/Tools tree."""
+    if not _is_windows():
+        return set()
+    root = str(_lt_root().resolve()).replace("'", "''").lower()
+    script = (
+        "$root='" + root + "'; "
+        "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | "
+        "Where-Object { $_.CommandLine -and "
+        "$_.CommandLine.ToLowerInvariant().Contains('org.languagetool.server.httpserver') -and "
+        "$_.CommandLine.ToLowerInvariant().Contains($root) } | "
+        "ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=8, check=False, creationflags=flags, text=True, errors="replace",
+        )
+        return {int(line.strip()) for line in (proc.stdout or "").splitlines() if line.strip().isdigit()}
+    except Exception:
+        return set()
+
+
 def _stop_owned_server() -> None:
     global _SERVER_PROCESS
     with _SERVER_LOCK:
         proc = _SERVER_PROCESS
         _SERVER_PROCESS = None
-    if not proc:
-        return
-    try:
-        proc.terminate()
-        proc.wait(timeout=2)
-    except Exception:
+    pids: set[int] = set()
+    if proc is not None:
         try:
-            proc.kill()
+            pids.add(int(proc.pid))
         except Exception:
             pass
+    try:
+        raw = _pid_path().read_text(encoding="utf-8").strip()
+        if raw.isdigit():
+            pids.add(int(raw))
+    except Exception:
+        pass
+    pids.update(_discover_our_languagetool_pids())
+    for pid in pids:
+        _terminate_pid_tree(pid)
+    if proc is not None:
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            pass
+    try:
+        _pid_path().unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
-atexit.register(_stop_owned_server)
+def shutdown_languagetool() -> None:
+    """Stop this portable's LanguageTool JVM and prevent restart during app shutdown."""
+    _SHUTDOWN_EVENT.set()
+    _stop_owned_server()
+
+
+atexit.register(shutdown_languagetool)
 
 
 def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | None) -> bool:
     global _SERVER_PROCESS
+    if _SHUTDOWN_EVENT.is_set():
+        return False
     if _probe_server(timeout=0.35):
         return True
     root = jar.parent
@@ -372,28 +487,51 @@ def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | 
         "org.languagetool.server.HTTPServer",
         "--config", str(config), "--port", "8081",
     ]
+    log_path = _tools_dir() / "languagetool_server.log"
+    log_handle = open(log_path, "ab", buffering=0)
     kwargs: dict[str, object] = {
         "cwd": str(root),
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        "stdout": log_handle,
+        "stderr": subprocess.STDOUT,
     }
     if _is_windows():
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    with _SERVER_LOCK:
-        if _SERVER_PROCESS and _SERVER_PROCESS.poll() is None:
-            proc = _SERVER_PROCESS
-        else:
-            proc = subprocess.Popen(cmd, **kwargs)  # type: ignore[arg-type]
-            _SERVER_PROCESS = proc
-    for _ in range(30):
-        if proc.poll() is not None:
-            break
-        if _probe_server(timeout=0.35):
-            _emit(callback, "languagetool", "LanguageTool локальний сервер готовий (127.0.0.1:8081).")
-            return True
-        time.sleep(0.4)
-    return False
+    try:
+        with _SERVER_LOCK:
+            if _SERVER_PROCESS and _SERVER_PROCESS.poll() is None:
+                proc = _SERVER_PROCESS
+                log_handle.close()
+            else:
+                proc = subprocess.Popen(cmd, **kwargs)  # type: ignore[arg-type]
+                _SERVER_PROCESS = proc
+                try:
+                    _pid_path().write_text(str(proc.pid), encoding="utf-8")
+                except Exception:
+                    pass
+        if _SHUTDOWN_EVENT.is_set():
+            _stop_owned_server()
+            return False
+        # A cold LanguageTool/JVM start can be noticeably slower on Windows,
+        # especially while Defender scans a freshly unpacked snapshot.
+        for _ in range(120):
+            if _SHUTDOWN_EVENT.is_set():
+                _stop_owned_server()
+                return False
+            if proc.poll() is not None:
+                _emit(callback, "error", f"LanguageTool server завершився з кодом {proc.returncode}; див. Data/Tools/languagetool_server.log")
+                break
+            if _probe_server(timeout=0.35):
+                _emit(callback, "languagetool", "LanguageTool локальний сервер готовий (127.0.0.1:8081).")
+                return True
+            time.sleep(0.5)
+        return False
+    finally:
+        try:
+            if not log_handle.closed:
+                log_handle.close()
+        except Exception:
+            pass
 
 
 def ensure_languagetool(callback: Callable[[str, str], None] | None = None) -> bool:
@@ -404,6 +542,8 @@ def ensure_languagetool(callback: Callable[[str, str], None] | None = None) -> b
     LanguageTool API are used.
     """
     global _NEXT_INSTALL_AT
+    if _SHUTDOWN_EVENT.is_set():
+        return False
     if os.environ.get("UA_FREE_DISABLE_LANGUAGETOOL") == "1":
         return False
     if os.environ.get("UA_FREE_LANGUAGETOOL_URL"):
@@ -445,6 +585,8 @@ def ensure_languagetool_async(callback: Callable[[str, str], None] | None = None
     """Start a non-blocking installation/startup check; return current readiness."""
     global _INSTALL_THREAD
     global _NEXT_INSTALL_AT
+    if _SHUTDOWN_EVENT.is_set():
+        return False
     if os.environ.get("UA_FREE_DISABLE_LANGUAGETOOL") == "1":
         return False
     if _probe_server(timeout=0.2):
@@ -474,9 +616,8 @@ def apply_local_languagetool_detailed(
 ) -> LanguageToolEditResult:
     """Apply conservative local LanguageTool suggestions and report the edits.
 
-    In RC25 ``require_ready=True`` is used by the final publication gate. If the
-    local proofreader is still installing/starting, the article is delayed rather
-    than published without the promised Ukrainian check.
+    ``require_ready`` is retained for explicit diagnostics, while production uses
+    the non-blocking local proofreader path.
     """
     text = str(value or "").strip()
     if not text:
@@ -502,13 +643,14 @@ def apply_local_languagetool_detailed(
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc25"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as response:
             raw = response.read(512_000)
         data = json.loads(raw.decode("utf-8", errors="replace"))
     except Exception as exc:
+        _record_check(0, (), error=str(exc))
         ensure_languagetool_async()
         if require_ready and os.environ.get("UA_FREE_ALLOW_WITHOUT_LANGUAGETOOL") != "1":
             raise LanguageToolUnavailable(f"LanguageTool перестав відповідати: {exc}") from exc
@@ -539,6 +681,7 @@ def apply_local_languagetool_detailed(
         edits.append((offset, offset + length, new))
 
     if not edits:
+        _record_check(0, ())
         return LanguageToolEditResult(text, 0, ())
     out = text
     applied = 0
@@ -553,7 +696,9 @@ def apply_local_languagetool_detailed(
         applied += 1
         if len(details) < 8:
             details.append(f"{old} → {replacement}")
-    return LanguageToolEditResult(out.strip(), applied, tuple(details))
+    result_details = tuple(details)
+    _record_check(applied, result_details)
+    return LanguageToolEditResult(out.strip(), applied, result_details)
 
 
 def apply_local_languagetool(
