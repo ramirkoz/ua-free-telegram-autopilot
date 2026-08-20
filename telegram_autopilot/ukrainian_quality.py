@@ -32,7 +32,7 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bAndroid\s+флагман", re.I), "Android-флагман"),
     (re.compile(r"\bне\s+дивлячись\s+на\b", re.I), "попри"),
     (re.compile(r"\bслідуюч(ий|а|е|і|ого|ому|ою|ими)\b", re.I), r"наступн\1"),
-    # RC23: live-corpus fixes. These are narrow lexical/grammar repairs and do
+    # Live-corpus fixes. These are narrow lexical/grammar repairs and do
     # not create facts or alter named entities/numbers.
     (re.compile(r"\bРанніше\b"), "Раніше"),
     (re.compile(r"\bранніше\b", re.I), "раніше"),
@@ -66,7 +66,7 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bсертифікуюч(а|ої|у|ою)\s+організаці", re.I), r"сертифікаційн\1 організаці"),
     (re.compile(r"\bпроект(?!or)(у|ом|і|ах|ами|ів|и)?\b", re.I), r"проєкт\1"),
     (re.compile(r"\bпонад\s+у\s+три\s+рази\b", re.I), "більш ніж утричі"),
-    # RC25: gross agreement/calque errors observed in live RC24 posts.
+    # Gross agreement/calque errors observed in live posts.
     (re.compile(r"\bПодібний\s+тепловий\s+мап\b"), "Подібна теплова карта"),
     (re.compile(r"\bподібний\s+тепловий\s+мап\b", re.I), "подібна теплова карта"),
     (re.compile(r"\bТепловий\s+мап\b"), "Теплова карта"),
@@ -83,6 +83,9 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bвідео\s+з\s+моменту\b", re.I), "відео цього моменту"),
     (re.compile(r"\bсаме\s+в\s+тиждень,\s+коли\b", re.I), "саме того тижня, коли"),
     (re.compile(r"\bвиглядає\s+сировим\b", re.I), "виглядає сирим"),
+    (re.compile(r"\bзгоріть\b", re.I), "згорить"),
+    (re.compile(r"\bмісія\s+рятування\s+спостерігача\s+Swift\b", re.I), "місія порятунку обсерваторії Swift"),
+    (re.compile(r"\bмісію\s+рятування\s+спостерігача\s+Swift\b", re.I), "місію порятунку обсерваторії Swift"),
 )
 
 # These are not blindly replaced because the right wording depends on context.
@@ -171,6 +174,7 @@ _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bпрямий\s+у\s+басейн\b", re.I), "неправильна форма «прямий у басейн»"),
     (re.compile(r"\bтерміни\s+релізу\s+немає\b", re.I), "порушене узгодження «терміни релізу немає»"),
     (re.compile(r"\bвиглядає\s+сировим\b", re.I), "калькована форма «виглядає сировим»"),
+    (re.compile(r"\bзгоріть\b", re.I), "наказова форма «згоріть» замість майбутнього часу «згорить»"),
     (re.compile(r"\bчех(ол|ла|ли|лів|лом|лу|лі)\b", re.I), "русизм «чехол/чехли»"),
     (re.compile(r"\bползунк", re.I), "русизм «ползунок»"),
     (re.compile(r"\bплательник", re.I), "русизм «плательник»"),
