@@ -134,6 +134,23 @@ def _list_ollama_models(timeout: int = 3) -> list[str]:
     return [str(item.get("name")) for item in models if isinstance(item, dict) and item.get("name")]
 
 
+def discover_local_models(*, auto_start: bool = True) -> list[str]:
+    """Return installed Ollama text-generation models, starting Ollama when possible."""
+    try:
+        models = _list_ollama_models(timeout=4)
+    except OllamaError as first_error:
+        if not auto_start:
+            raise LocalAIRuntimeError(str(first_error)) from first_error
+        start_installed_ollama(wait_seconds=15.0)
+        try:
+            models = _list_ollama_models(timeout=4)
+        except OllamaError as exc:
+            raise LocalAIRuntimeError(str(exc)) from exc
+    clean = [str(item).strip() for item in models if str(item).strip()]
+    usable = [item for item in clean if not _looks_like_embedding_model(item)]
+    return sorted(dict.fromkeys(usable or clean), key=str.casefold)
+
+
 def _hidden_popen(command: list[str], *, cwd: Path | None = None) -> subprocess.Popen[bytes]:
     kwargs: dict[str, object] = {
         "cwd": str(cwd) if cwd else None,
