@@ -1,51 +1,52 @@
 from __future__ import annotations
 
-import json
-
+from .ai_router import clear_router_cooldowns
 from .database import Database
-from .paths import ai_state_path
 
 
-def _clear_stale_model_cooldowns_once(db: Database) -> int:
-    """Clear model penalties created by the pre-one-rewrite AI pipeline.
-
-    Provider-level cooldowns (quota/auth) are preserved. The cleanup is guarded
-    by app_state so later legitimate model cooldowns survive normal restarts.
-    """
-    key = 'rc9_one_rewrite_model_cooldowns_reset_v2'
-    if db.get_state(key, '') == '1':
+def _reset_runtime_health_once(db: Database) -> int:
+    key = "runtime_health_cleanup_v1"
+    if db.get_state(key, "") == "1":
         return 0
-    path = ai_state_path()
-    removed = 0
-    if path.exists():
-        try:
-            state = json.loads(path.read_text(encoding='utf-8'))
-        except Exception:
-            state = {}
-        cooldowns = state.get('cooldowns') if isinstance(state, dict) else None
-        if isinstance(cooldowns, dict):
-            for cooldown_key in list(cooldowns):
-                if str(cooldown_key).startswith('model:'):
-                    cooldowns.pop(cooldown_key, None)
-                    removed += 1
-            if removed:
-                temp = path.with_suffix('.tmp')
-                temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
-                temp.replace(path)
-    db.set_state(key, '1')
-    return removed
+    clear_router_cooldowns()
+    db.set_state(key, "1")
+    return 1
+
+
+def _requeue_recent_technical_failures_once(db: Database) -> int:
+    """Give recent AI/QA infrastructure failures one clean chance after cleanup."""
+    key = "runtime_recent_technical_requeue_v1"
+    if db.get_state(key, "") == "1":
+        return 0
+    patterns = (
+        "%ai-%", "%ai %", "%router%", "%провайдер%", "%модел%", "%ollama%",
+        "%languagetool%", "%qa:%", "%network%", "%http 429%", "%ліміт%",
+    )
+    with db.connect() as con:
+        where = " OR ".join("lower(COALESCE(last_error,'')) LIKE ?" for _ in patterns)
+        params = tuple(x.casefold() for x in patterns)
+        rows = con.execute(
+            f"""SELECT id FROM articles
+            WHERE status IN ('retry','error')
+              AND datetime(discovered_at) >= datetime('now','-48 hours')
+              AND ({where})""", params
+        ).fetchall()
+        ids = [int(row[0]) for row in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            con.execute(
+                f"""UPDATE articles SET status='new',retry_count=0,next_retry_at=NULL,last_error=NULL,
+                processing_started_at=NULL WHERE id IN ({placeholders})""", ids
+            )
+    db.set_state(key, "1")
+    return len(ids)
 
 
 def recover_interrupted_work(db: Database) -> dict[str, int]:
-    """Recover transient rows after a previous process exit.
-
-    ``processing`` happens before irreversible external writes, so it is safe to
-    return it to the retry queue. Telegraph/Telegram write states are quarantined
-    as ``unknown`` because their remote outcome may already have succeeded.
-    """
+    """Recover interrupted local work and quarantine uncertain external writes."""
     with db.connect() as con:
         processing = int(con.execute("SELECT COUNT(*) FROM articles WHERE status='processing'").fetchone()[0] or 0)
-        external = int(con.execute("SELECT COUNT(*) FROM articles WHERE status IN ('telegraph_writing','telegram_writing')").fetchone()[0] or 0)
+        external = int(con.execute("SELECT COUNT(*) FROM articles WHERE status='telegram_writing'").fetchone()[0] or 0)
         if processing:
             con.execute(
                 """UPDATE articles SET status='retry',next_retry_at=NULL,
@@ -56,7 +57,13 @@ def recover_interrupted_work(db: Database) -> dict[str, int]:
             con.execute(
                 """UPDATE articles SET status='unknown',next_retry_at=NULL,
                 last_error=CASE WHEN COALESCE(last_error,'')='' THEN 'Попередній процес завершився під час зовнішньої публікації; потрібна перевірка результату.' ELSE last_error END
-                WHERE status IN ('telegraph_writing','telegram_writing')"""
+                WHERE status='telegram_writing'"""
             )
-    stale = _clear_stale_model_cooldowns_once(db)
-    return {"processing_to_retry": processing, "external_to_unknown": external, "stale_model_cooldowns_removed": stale}
+    health_reset = _reset_runtime_health_once(db)
+    requeued = _requeue_recent_technical_failures_once(db)
+    return {
+        "processing_to_retry": processing,
+        "external_to_unknown": external,
+        "runtime_health_reset": health_reset,
+        "recent_technical_requeued": requeued,
+    }
