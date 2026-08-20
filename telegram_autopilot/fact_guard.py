@@ -18,6 +18,21 @@ class FactGuardAssessment:
 _COMMON_LATIN = {
     "AI", "API", "CPU", "GPU", "RAM", "SSD", "USB", "GPS", "NASA", "ESA", "EU", "US", "USA", "UK",
     "CEO", "CVE", "WiFi", "Wi-Fi", "HTTP", "HTTPS", "RSS", "PDF", "LLM", "VR", "AR", "OS",
+    "OAuth", "DNS", "TCP", "IP", "VPN", "LAN", "WAN", "URL", "HTML", "JSON", "SQL", "SSH", "TLS",
+}
+
+# Capitalized English words at a sentence boundary are not automatically named
+# entities. RC18 treated ordinary fragments such as `Bring`, `Own` and `Your` as
+# hallucinated product names. Keep the entity guard focused on actual names/models
+# while language QA remains responsible for accidental English prose.
+_COMMON_ENGLISH = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could",
+    "do", "does", "for", "from", "get", "gets", "got", "had", "has", "have", "how",
+    "if", "in", "into", "is", "it", "its", "may", "more", "most", "new", "no", "not",
+    "of", "on", "one", "or", "our", "out", "own", "said", "say", "says", "so", "than",
+    "that", "the", "their", "them", "there", "these", "they", "this", "to", "up", "use",
+    "used", "using", "was", "we", "were", "what", "when", "where", "which", "who",
+    "why", "will", "with", "would", "you", "your", "bring", "brings", "make", "makes",
 }
 
 # High-risk claims are deliberately conservative. They are blocked only when the
@@ -52,8 +67,14 @@ def _row_text(article: Row, key: str) -> str:
 
 def _protected_latin_tokens(value: str) -> set[str]:
     result: set[str] = set()
-    for token in _LATIN_TOKEN_RE.findall(value or ""):
-        if token in _COMMON_LATIN:
+    for raw_token in _LATIN_TOKEN_RE.findall(value or ""):
+        # Hyphenated Ukrainian compounds such as ``AI-навантаження`` expose a
+        # regex token ``AI-``.  Normalize harmless edge punctuation before entity
+        # classification so common acronyms do not become invented models.
+        token = raw_token.strip("._+/-")
+        if not token:
+            continue
+        if token in _COMMON_LATIN or token.casefold() in _COMMON_ENGLISH:
             continue
         # Protect product/version-like tokens and proper-name shaped Latin tokens.
         if any(ch.isdigit() for ch in token) or (token[0].isupper() and any(ch.islower() for ch in token[1:])) or token.isupper():
@@ -62,7 +83,7 @@ def _protected_latin_tokens(value: str) -> set[str]:
 
 
 def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
-    source = " ".join((_row_text(article, "title"), _row_text(article, "raw_text"), _row_text(article, "source_published_at")))
+    source = " ".join((_row_text(article, "title"), _row_text(article, "raw_text")))
     source_low = f" {source.casefold()} "
     output_text = str(output or "")
 
@@ -71,6 +92,21 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     invented = sorted(output_tokens - source_tokens)
     if invented:
         raise FactGuardError("AI додав назву/модель, якої немає у джерелі: " + ", ".join(invented[:8]))
+
+    # Conservative relation-strengthening guards for failure modes seen live.
+    # They do not try to understand every fact; they only block transformations
+    # that are clearly stronger or technically different from SOURCE.
+    output_low = output_text.casefold()
+    purchase_words = ("придбав", "придбала", "придбали", "придбання", "купив", "купила", "купили", "купівл")
+    source_purchase = (" buy ", " buys ", " bought ", " purchase", " acquire", " acquisition", " order")
+    source_deal = ("agreement", " deal ", "develop", "deployment", "deploy")
+    if any(word in output_low for word in purchase_words) and any(sig in source_low for sig in source_deal) and not any(sig in source_low for sig in source_purchase):
+        raise FactGuardError("AI посилив тип домовленості: угода/розгортання перетворені на купівлю або придбання.")
+
+    sodium_cooling = any(sig in source_low for sig in ("sodium-cooled", "sodium cooled", "cooled by sodium", "liquid sodium"))
+    molten_salt = "molten salt" in source_low
+    if sodium_cooling and molten_salt and re.search(r"охолоджу\w*.{0,60}розплавлен\w*\s+с(?:ол|іл)\w*", output_low, re.I | re.S):
+        raise FactGuardError("AI переплутав зв'язок компонентів: натрієве охолодження реактора та накопичення тепла у розплавленій солі.")
 
     checked_claims = 0
     for pattern, source_signals, label in _CLAIM_RULES:
