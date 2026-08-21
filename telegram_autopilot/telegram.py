@@ -43,7 +43,7 @@ def normalize_chat_target(value: str) -> str:
         return raw
     if raw.isdigit():
         return raw
-    if raw.startswith("@"):
+    if raw.startswith("@"): 
         username = raw[1:].strip()
         if username and all(ch.isalnum() or ch == "_" for ch in username):
             return "@" + username
