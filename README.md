@@ -1,43 +1,50 @@
-# UA FREE Telegram Autopilot v0.1.0-rc29
+# UA FREE Telegram Autopilot v0.1.0-rc32
 
-Windows portable застосунок для збору технологічних/наукових новин, AI-рерайту українською, фактологічного та мовного QA і прямої публікації в Telegram.
+Windows portable застосунок для збору технологічних/наукових новин, безпечного AI-рерайту українською та прямої публікації в Telegram.
 
-## Поточний production-конвеєр
+## Production-конвеєр RC30
 
-`джерело → очищення статті → exact/title/event dedupe → Evidence Pack → AI Router → Fact Guard + український QA → LanguageTool (якщо готовий) → Telegram`
+`джерело → очищення → exact/title/event dedupe → Evidence Pack → reviewed AI writer → Fact Guard → trusted editor за потреби → Ukrainian hard gate → optional LanguageTool → Telegram`
 
-## AI Router
+### AI Router
 
-- Google Gemini, NVIDIA NIM і Groq тепер читають актуальні каталоги моделей через API та формують runtime-список моделей автоматично.
-- Якщо каталог провайдера недоступний, використовуються перевірені fallback-ID.
-- Ліміт однієї моделі не блокує автоматично всі інші моделі того самого провайдера.
-- Cloudflare лишається на статичних моделях, бо сумісний стабільний model-list endpoint у цьому контурі не використовується.
-- Локальний fallback: Ollama → запасний llama.cpp.
-- Кнопка «Знайти локальні моделі» показує реально встановлені Ollama-моделі та може запустити встановлену Ollama, але нічого не завантажує.
+- Production використовує лише статичний allowlist перевірених моделей. Автоматичне додавання випадкових моделей із provider `/models` у unattended publication вимкнено.
+- Пріоритет стабільний: Codex/ChatGPT → Gemini → reviewed NVIDIA/Groq/Cloudflare → local Ollama/llama.cpp.
+- Відновлений Codex знову є першим production writer; старий quota cooldown Codex обмежено приблизно 5 хвилинами, щоб відновлений ChatGPT-ліміт не залишався прихованим.
+- Остання випадково успішна fallback-модель більше не стає автоматично першим writer наступної новини.
+- Якщо перший придатний draft створив NVIDIA/Groq/Cloudflare/local, він не може піти в Telegram напряму: фінальний текст повинен підтвердити trusted editor Codex або Gemini.
+- Якщо trusted editor недоступний, матеріал іде в bounded retry, а не в autopublish.
 
-## LanguageTool
+### Editorial safety
 
-- Працює локально на `127.0.0.1:8081` і не є блокером живучості автопілота.
-- Java/LanguageTool запускаються портативно з `Data/Tools` і завершуються разом із програмою.
-- UI показує накопичувальну кількість реальних перевірок, виправлень та останню застосовану правку.
-- Статистика зберігається у `Data/Tools/languagetool_stats.json`.
-- Навіть без LanguageTool перед публікацією працюють deterministic Ukrainian fixes, hard-language blockers, number/year QA і Fact Guard.
+- Fact Guard, number/year checks, attribution/relationship protections залишаються hard gates.
+- Додано загальний structural corruption gate: зациклені фрази, повторені речення/слова, аномально низька лексична різноманітність, домінування однієї словоформи/основи, Russian-only letters, злиті Latin+Cyrillic слова, незакриті лапки.
+- Технічні форми на кшталт `AI-сервіс`, `OAuth-потік`, `Xtra-версія` не блокуються лише через різні абетки по обидва боки дефіса.
+- Фінальний deterministic editorial threshold: 82/100. Старий аварійний fail-open поріг 58 прибрано.
+- LanguageTool лишається локальним додатковим proofreader, але не є єдиною лінією захисту: після нього знову працюють Fact/UA/structural gates.
 
-## Черга та джерела
+### Source health
 
-- `new` має пріоритет над `retry`; серед `new` першими обробляються найсвіжіші матеріали.
-- Один складний матеріал має обмежений AI/QA budget і не повинен забирати весь цикл.
-- Свіжі технічні AI/QA помилки після переходу на RC28 один раз повертаються в `new` для чистої повторної обробки.
-- Для web-page джерел, що відповідають HTTP 403/429, Autopilot пробує типові публічні RSS/Atom endpoints як fallback.
-- Налаштована «Мін. пауза між постами» лишається свідомим обмеженням частоти Telegram-публікацій.
+- HTTP 429 отримує 20-хвилинний backoff, HTTP 403 — 10 хвилин, тимчасова network/DNS помилка — 3 хвилини.
+- Backoff читається з уже наявного `source_health`, тому перезапуск програми не змушує одразу знову бити rate-limited джерело. Ручний цикл `Перевірити зараз` свідомо обходить цей backoff.
 
-## Що прибрано
+### Dedupe
 
-- runtime Telegraph;
-- старий `decision_engine.py`;
-- UI-костиль `ui_direct_format.py`;
-- старе ім'я `production_pipeline_rc9.py` (активний модуль тепер `production_pipeline.py`);
-- накопичені release notes RC9–RC27 і старі RC9 gate-файли;
-- версійні one-time cooldown-міграції з `service.py`.
+- Збережені exact/title/high-precision event правила.
+- Додано safe cross-length event rule для ситуації, коли перший короткий матеріал і пізніший довший follow-up описують ту саму конкретну подію.
+- Pending/retry rewrite cache marker піднято до `telegram-post-v17`, тому незапубліковані RC29-кандидати не обходять новий RC30 editorial pipeline після перенесення `Data`.
 
-Історичні `telegraph_*` поля SQLite не виконують код і залишені лише для безпечного читання існуючої `Data` без destructive migration.
+### Діагностика
+
+У `telegram_autopilot.log` тепер видно production route без текстів/секретів:
+
+- provider/model AI attempt;
+- transport/provider failure;
+- успішний generator;
+- потребу trusted-editor pass;
+- trusted editor provider/model;
+- final editorial score, LanguageTool changes та довжину фінального body.
+
+## Дані та portable-режим
+
+Сумісність існуючої папки `Data` і SQLite-схеми збережена. Для оновлення розпакуйте RC30 в нову папку та перенесіть туди всю `Data` з RC29. Не накладайте runtime-файли поверх старої збірки.
