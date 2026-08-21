@@ -255,6 +255,50 @@ class Database:
             rows = con.execute("SELECT * FROM sources WHERE channel_id=? ORDER BY name COLLATE NOCASE", (channel_id,)).fetchall()
         return [Source(**{**dict(r), "enabled": bool(r["enabled"]), "initialized": bool(r["initialized"])}) for r in rows]
 
+    def list_sources_with_health(self, channel_id: int) -> list[tuple[Source, dict[str, object]]]:
+        """Return source rows and health in one query for the GUI.
+
+        The service keeps using the existing methods. This only removes the GUI's
+        previous N+1 pattern (one SQLite connection per source on every refresh).
+        """
+        with self.connect() as con:
+            rows = con.execute(
+                """SELECT s.*,
+                          h.last_success_at AS h_last_success_at,
+                          h.last_new_at AS h_last_new_at,
+                          h.last_error_at AS h_last_error_at,
+                          h.last_error AS h_last_error,
+                          h.last_inserted_count AS h_last_inserted_count,
+                          h.total_checks AS h_total_checks,
+                          h.total_errors AS h_total_errors,
+                          h.total_inserted AS h_total_inserted
+                   FROM sources s
+                   LEFT JOIN source_health h ON h.source_id=s.id
+                   WHERE s.channel_id=?
+                   ORDER BY s.name COLLATE NOCASE""",
+                (channel_id,),
+            ).fetchall()
+        result=[]
+        for r in rows:
+            src=Source(
+                id=int(r["id"]), channel_id=int(r["channel_id"]), kind=str(r["kind"]),
+                name=str(r["name"]), url=str(r["url"]), enabled=bool(r["enabled"]),
+                initialized=bool(r["initialized"]), last_checked_at=r["last_checked_at"],
+                last_error=r["last_error"],
+            )
+            health={
+                "last_success_at":r["h_last_success_at"] or "",
+                "last_new_at":r["h_last_new_at"] or "",
+                "last_error_at":r["h_last_error_at"] or "",
+                "last_error":r["h_last_error"] or "",
+                "last_inserted_count":int(r["h_last_inserted_count"] or 0),
+                "total_checks":int(r["h_total_checks"] or 0),
+                "total_errors":int(r["h_total_errors"] or 0),
+                "total_inserted":int(r["h_total_inserted"] or 0),
+            }
+            result.append((src,health))
+        return result
+
     def save_source(self, *, source_id: int | None, channel_id: int, kind: str, name: str, url: str, enabled: bool) -> int:
         with self.connect() as con:
             if source_id:
