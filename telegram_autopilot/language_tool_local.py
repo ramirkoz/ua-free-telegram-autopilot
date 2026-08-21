@@ -177,7 +177,7 @@ def _probe_server(*, timeout: float = 0.45) -> bool:
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.1, float(timeout))) as response:
@@ -273,7 +273,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
     part = target.with_suffix(target.suffix + ".part")
     digest = hashlib.sha256()
     total = 0
-    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29", "Accept": "*/*"})
+    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32", "Accept": "*/*"})
     try:
         with urllib.request.urlopen(req, timeout=45) as response, open(part, "wb") as out:
             while True:
@@ -298,7 +298,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
 
 
 def _adoptium_package() -> tuple[str, str]:
-    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29", "Accept": "application/json"})
+    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as response:
         raw = response.read(2 * 1024 * 1024)
     data = json.loads(raw.decode("utf-8", errors="replace"))
@@ -643,7 +643,7 @@ def apply_local_languagetool_detailed(
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as response:
