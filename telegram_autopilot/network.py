@@ -133,7 +133,7 @@ def fetch_url(
     resolver: Callable[[str, int], list[str]] = resolve_public,
 ) -> HttpResponse:
     current = url
-    request_headers = {"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc29", "Accept": "*/*"}
+    request_headers = {"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32", "Accept": "*/*"}
     if headers:
         request_headers.update(headers)
 
