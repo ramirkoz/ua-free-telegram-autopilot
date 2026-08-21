@@ -223,6 +223,39 @@ def _candidate_text(item: PreparedMedia) -> str:
     return " ".join((item.caption, item.alt, item.context, path))
 
 
+def _semantic_media_evidence(item: PreparedMedia, *, title: str, article_text: str) -> tuple[int, int, int]:
+    """Return (title_overlap, article_overlap, candidate_token_count).
+
+    Media must describe the same story, not merely occur near it on the source page.
+    Position/size are ranking signals only; they are never semantic evidence.
+    """
+    candidate = _text_tokens(_candidate_text(item))
+    title_tokens = _text_tokens(title)
+    # The opening part of an article carries the event anchors and avoids giving
+    # recommendation/footer vocabulary undue influence.
+    article_tokens = _text_tokens((title or "") + " " + (article_text or "")[:4500])
+    return len(candidate & title_tokens), len(candidate & article_tokens), len(candidate)
+
+
+def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str) -> bool:
+    """Conservative publication gate for editorial media.
+
+    For body media require actual lexical evidence that the caption/alt/context/file
+    belongs to this story.  A metadata-empty featured/OG image is kept as a last-resort source hint,
+    but a featured image whose metadata explicitly points elsewhere is rejected.
+    """
+    title_overlap, article_overlap, token_count = _semantic_media_evidence(
+        item, title=title, article_text=article_text
+    )
+    if item.featured:
+        if token_count == 0:
+            return True
+        return title_overlap >= 1 or article_overlap >= 2
+    if item.classification in {"infographic", "screenshot", "map"}:
+        return title_overlap >= 1 or article_overlap >= 1
+    return title_overlap >= 1 or article_overlap >= 2
+
+
 def _hard_reject(item: PreparedMedia) -> bool:
     low = (item.url + " " + _candidate_text(item)).casefold().replace("_", "-")
     if any(term in low for term in _HARD_REJECT):
@@ -381,7 +414,7 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
         featured = _probe_image(featured)
         if featured:
             featured.relevance_score = _score(featured, title=title, article_text=article_text)
-            if featured.relevance_score < 35:
+            if featured.relevance_score < 35 or not _semantic_media_match(featured, title=title, article_text=article_text):
                 featured = None
 
     prepared: list[PreparedMedia] = []
@@ -402,12 +435,10 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             if resolved.url in seen_urls:
                 continue
             resolved.relevance_score = _score(resolved, title=title, article_text=article_text)
-            candidate_tokens = _text_tokens(_candidate_text(resolved))
-            reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
-            semantic_overlap = len(candidate_tokens & reference_tokens)
-            # Late body images need semantic evidence. This blocks unrelated
-            # recommendation-card photos even when they are high-resolution.
-            if resolved.position > 0.45 and semantic_overlap < 1:
+            # Position and resolution can rank a relevant image, but can never
+            # make an unrelated one relevant. This deliberately prefers no photo
+            # over a visually plausible recommendation-card/stock image.
+            if not _semantic_media_match(resolved, title=title, article_text=article_text):
                 continue
             if resolved.relevance_score < 38:
                 continue
@@ -417,12 +448,10 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             prepared.append(resolved)
         else:
             item.relevance_score = _score(item, title=title, article_text=article_text)
-            candidate_tokens = _text_tokens(_candidate_text(item))
-            reference_tokens = _text_tokens((title or "") + " " + (article_text or "")[:5000])
             video_story = item.kind in {"video", "iframe"} and any(
                 word in (title or "").casefold() for word in _VIDEO_TITLE_WORDS
             )
-            if item.position > 0.45 and not video_story and not (candidate_tokens & reference_tokens):
+            if not video_story and not _semantic_media_match(item, title=title, article_text=article_text):
                 continue
             if item.relevance_score < 38:
                 continue
