@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from .local_ai_runtime import LocalAIRuntimeError, generate_local_text, test_loc
 from .network import NetworkError, fetch_url
 from .paths import ai_state_path
 from .secrets_store import SecretConfig, load_secrets
+
+
+LOG = logging.getLogger("telegram_autopilot.ai_router")
 
 
 class AIRouterError(RuntimeError):
@@ -57,12 +61,36 @@ FALLBACK_MODEL_SLOTS: tuple[Slot, ...] = (
     Slot(9, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
 )
 
-# Compatibility alias for external imports; runtime routing uses live discovery.
+# Compatibility alias for external imports; production routing uses the reviewed static allow-list.
 MODEL_SLOTS = FALLBACK_MODEL_SLOTS
 
 _MODEL_DISCOVERY_LOCK = threading.RLock()
 _MODEL_DISCOVERY_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
 _MODEL_DISCOVERY_TTL = 900.0
+
+_CODEX_STATUS_LOCK = threading.RLock()
+_CODEX_STATUS_CACHE: tuple[float, bool] = (0.0, False)
+_CODEX_STATUS_TTL = 30.0
+
+
+def _codex_configured_cached() -> bool:
+    """Avoid starting a second Codex account probe for every article.
+
+    ``run_codex`` performs the authoritative account check again when the provider
+    is actually selected.  This short cache only answers the Router's cheap
+    configured/not-configured question and naturally refreshes after login.
+    """
+    global _CODEX_STATUS_CACHE
+    now = time.monotonic()
+    with _CODEX_STATUS_LOCK:
+        stamp, ready = _CODEX_STATUS_CACHE
+        if stamp and now - stamp < _CODEX_STATUS_TTL:
+            return bool(ready)
+    status = inspect_codex()
+    ready = bool(status.installed and status.authenticated)
+    with _CODEX_STATUS_LOCK:
+        _CODEX_STATUS_CACHE = (now, ready)
+    return ready
 
 
 def _model_is_text_candidate(model: str) -> bool:
@@ -161,39 +189,15 @@ def _discover_provider_model_ids(provider: str, cfg: SecretConfig, *, force: boo
 
 
 def _runtime_model_slots(cfg: SecretConfig, *, force_refresh: bool = False) -> tuple[Slot, ...]:
-    """Build the current Router list from provider model catalogs with static fallbacks."""
-    output: list[Slot] = []
-    priority = 1
-    # Codex and Cloudflare/local do not have a stable compatible model-list route here.
-    codex = next(slot for slot in FALLBACK_MODEL_SLOTS if slot.provider == "codex")
-    output.append(Slot(priority, codex.provider, codex.model, codex.label, codex.family)); priority += 1
-    for provider in ("gemini", "nvidia", "groq"):
-        fallback = [slot for slot in FALLBACK_MODEL_SLOTS if slot.provider == provider]
-        discovered = list(_discover_provider_model_ids(provider, cfg, force=force_refresh))
-        chosen: list[str] = []
-        if discovered:
-            discovered_set = {m.casefold() for m in discovered}
-            for slot in fallback:
-                if slot.model.casefold() in discovered_set:
-                    chosen.append(slot.model)
-            for model in discovered:
-                if model.casefold() not in {m.casefold() for m in chosen}:
-                    chosen.append(model)
-                if len(chosen) >= 4:
-                    break
-        else:
-            chosen = [slot.model for slot in fallback]
-        family = "gemini" if provider == "gemini" else "openai"
-        suffix = {"gemini":"Google", "nvidia":"NVIDIA", "groq":"Groq"}[provider]
-        for model in chosen:
-            known = next((slot for slot in fallback if slot.model.casefold() == model.casefold()), None)
-            label = known.label if known else f"{model} / {suffix}"
-            output.append(Slot(priority, provider, model, label, family)); priority += 1
-    for provider in ("cloudflare", "local"):
-        for slot in FALLBACK_MODEL_SLOTS:
-            if slot.provider == provider:
-                output.append(Slot(priority, slot.provider, slot.model, slot.label, slot.family)); priority += 1
-    return tuple(output)
+    """Return the production allow-list in a deterministic order.
+
+    RC29 dynamically promoted arbitrary text-looking models discovered from provider
+    catalogs into the unattended publication path.  That is unsafe for a newsroom
+    autopilot: a newly exposed model can become a writer without ever passing our
+    Ukrainian/factual regression corpus.  Discovery helpers remain available for
+    diagnostics, but production routing uses only explicitly reviewed slots.
+    """
+    return FALLBACK_MODEL_SLOTS
 
 
 def _read_state_unlocked() -> dict:
@@ -263,6 +267,10 @@ def clear_router_cooldowns(provider: str | None = None) -> None:
             cooldowns.clear()
 
     _mutate_state(mutate)
+    if not name or name == "codex":
+        global _CODEX_STATUS_CACHE
+        with _CODEX_STATUS_LOCK:
+            _CODEX_STATUS_CACHE = (0.0, False)
 
 
 def _clear_slot_cooldowns(state: dict, slot: Slot) -> None:
@@ -288,6 +296,16 @@ def _slot_on_cooldown(slot: Slot, now: float | None = None) -> bool:
             except Exception:
                 until = 0.0
             if until > stamp:
+                # A quota cooldown written by RC29 could hide an already-restored
+                # ChatGPT/Codex window for 30+ minutes.  Cap only Codex quota/usage
+                # cooldowns to five minutes from the current check; other health
+                # cooldowns keep their original semantics.
+                reason = str(entry.get("reason", "") or "").casefold() if isinstance(entry, dict) else ""
+                if slot.provider == "codex" and any(token in reason for token in ("limit", "quota", "usage", "429")) and until - stamp > 300:
+                    entry["until"] = stamp + 300
+                    cooldowns[key] = entry
+                    until = stamp + 300
+                    dirty = True
                 active = True
             elif key in cooldowns:
                 cooldowns.pop(key, None)
@@ -320,8 +338,7 @@ def _mark_slot_success(slot: Slot, runtime_slot: Slot) -> None:
 
 def _configured(slot: Slot, cfg: SecretConfig) -> bool:
     if slot.provider == "codex":
-        status = inspect_codex()
-        return bool(status.installed and status.authenticated)
+        return _codex_configured_cached()
     if slot.provider == "gemini":
         return bool(cfg.gemini_api_key)
     if slot.provider == "nvidia":
@@ -512,25 +529,14 @@ def _repair_local_output(
 
 
 def _ordered_model_slots(slots_source: tuple[Slot, ...], suppressed: set[str], suppressed_models: set[str]) -> list[Slot]:
-    """Prefer the last successful CLOUD model, while keeping local as emergency fallback."""
-    slots = list(slots_source)
-    try:
-        with _ROUTER_STATE_LOCK:
-            state = _read_state_unlocked()
-        last_provider = str(state.get("last_provider", "") or "").casefold()
-        last_model = str(state.get("last_model", "") or "").casefold()
-    except Exception:
-        last_provider = last_model = ""
-    if last_provider and last_provider != "local":
-        slots.sort(key=lambda slot: (
-            0 if (slot.provider.casefold() == last_provider and slot.model.casefold() == last_model) else
-            1 if slot.provider.casefold() == last_provider else
-            2,
-            slot.priority,
-        ))
-        # Local must remain last even if sort keys change.
-        slots.sort(key=lambda slot: 1 if slot.provider == "local" else 0)
-    return slots
+    """Keep the reviewed production priority stable.
+
+    RC29 moved the last successful cloud model to the front.  A mediocre fallback
+    could therefore become the default writer for subsequent articles.  Health
+    cooldowns already skip broken providers, so successful routing must not rewrite
+    editorial priority.
+    """
+    return sorted(slots_source, key=lambda slot: slot.priority)
 
 
 def run_ai(
@@ -547,6 +553,7 @@ def run_ai(
     skip_providers: set[str] | frozenset[str] | tuple[str, ...] = (),
     skip_models: set[str] | frozenset[str] | tuple[str, ...] = (),
     suppress_provider_on_quota: bool = True,
+    allowed_providers: set[str] | frozenset[str] | tuple[str, ...] | None = None,
 ) -> Result:
     text_prompt = str(prompt or "").strip()
     if not text_prompt:
@@ -557,6 +564,7 @@ def run_ai(
     deadline = time.monotonic() + max(3, int(task_timeout_seconds)) if task_timeout_seconds is not None else None
     suppressed = {str(x).strip().casefold() for x in skip_providers if str(x).strip()}
     suppressed_models = {str(x).strip().casefold() for x in skip_models if str(x).strip()}
+    allowed = None if allowed_providers is None else {str(x).strip().casefold() for x in allowed_providers if str(x).strip()}
     cfg = load_secrets()
     runtime_slots = _runtime_model_slots(cfg)
     attempted: list[str] = []
@@ -565,6 +573,8 @@ def run_ai(
 
     local_slot = next((item for item in runtime_slots if item.provider == "local"), None)
     for slot in _ordered_model_slots(runtime_slots, suppressed, suppressed_models):
+        if allowed is not None and slot.provider.casefold() not in allowed:
+            continue
         if slot.provider.casefold() in suppressed or slot.model.casefold() in suppressed_models or not _configured(slot, cfg):
             continue
         if _slot_on_cooldown(slot):
@@ -574,8 +584,10 @@ def run_ai(
             break
         runtime_slot = slot
         attempted.append(slot.label)
+        attempt_started = time.monotonic()
         try:
             remaining = None if deadline is None else max(0, int(deadline - time.monotonic()))
+            LOG.info("AI attempt provider=%s model=%s remaining=%s", slot.provider, slot.model, remaining if remaining is not None else "unbounded")
             if remaining is not None and remaining < 3:
                 break
             # Reserve a final slice for the installed local fallback instead of
@@ -583,7 +595,8 @@ def run_ai(
             # deadline before Ollama is even tried.
             if slot.provider != "local" and remaining is not None and local_slot is not None:
                 local_ready = (
-                    "local" not in suppressed
+                    (allowed is None or "local" in allowed)
+                    and "local" not in suppressed
                     and _configured(local_slot, cfg)
                     and not _slot_on_cooldown(local_slot)
                 )
@@ -646,18 +659,26 @@ def run_ai(
                     )
                     validator(output)
         except LocalAIRuntimeError as exc:
+            LOG.warning("AI failure provider=%s model=%s kind=local_runtime elapsed=%.2fs error=%s", runtime_slot.provider, runtime_slot.model, time.monotonic() - attempt_started, exc)
             failures.append(f"{runtime_slot.label}: {exc}")
             _set_slot_cooldown(slot, 90, str(exc), provider=False)
             continue
         except AIModelError as exc:
+            LOG.warning("AI failure provider=%s model=%s kind=%s elapsed=%.2fs error=%s", runtime_slot.provider, runtime_slot.model, exc.kind, time.monotonic() - attempt_started, exc)
             failures.append(f"{runtime_slot.label}: {exc}")
             if suppress_provider_on_quota and exc.kind == "quota":
                 suppressed.add(slot.provider.casefold())
             if slot.provider != "local" and exc.kind != "request_too_large":
                 provider_level = exc.kind in {"auth", "configuration", "network"} or (exc.kind == "quota" and suppress_provider_on_quota)
-                _set_slot_cooldown(slot, _cooldown_seconds(exc), str(exc), provider=provider_level)
+                cooldown = _cooldown_seconds(exc)
+                if slot.provider == "codex" and exc.kind == "quota":
+                    # ChatGPT usage windows can reopen quickly.  Never hide a restored
+                    # Codex session behind the generic 30-minute cloud quota cooldown.
+                    cooldown = min(cooldown, 5 * 60)
+                _set_slot_cooldown(slot, cooldown, str(exc), provider=provider_level)
             continue
         except Exception as exc:
+            LOG.warning("AI candidate rejected provider=%s model=%s elapsed=%.2fs error=%s", runtime_slot.provider, runtime_slot.model, time.monotonic() - attempt_started, exc)
             validation_failures += 1
             # This is an ARTICLE-SPECIFIC validation failure (format, Fact Guard,
             # numbers, readability, etc.), not evidence that the provider/model is
@@ -669,6 +690,7 @@ def run_ai(
             continue
 
         _mark_slot_success(slot, runtime_slot)
+        LOG.info("AI success provider=%s model=%s elapsed=%.2fs chars=%d", runtime_slot.provider, runtime_slot.model, time.monotonic() - attempt_started, len(output))
         return Result(output, runtime_slot.provider, runtime_slot.model, runtime_slot.label, tuple(attempted))
 
     if not attempted:
@@ -763,6 +785,6 @@ SOURCE EVIDENCE PACK:
     return run_ai(
         prompt, validator=validator, max_output_tokens=420, local_prompt=prompt,
         local_max_output_tokens=460, cloud_timeout_seconds=16, local_timeout_seconds=45,
-        task_timeout_seconds=90, local_repair=False, skip_providers={"codex"},
+        task_timeout_seconds=90, local_repair=False,
         suppress_provider_on_quota=True,
     )
