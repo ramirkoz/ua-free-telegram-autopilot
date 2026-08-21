@@ -43,7 +43,7 @@ def normalize_chat_target(value: str) -> str:
         return raw
     if raw.isdigit():
         return raw
-    if raw.startswith("@"): 
+    if raw.startswith("@"):
         username = raw[1:].strip()
         if username and all(ch.isalnum() or ch == "_" for ch in username):
             return "@" + username
@@ -91,10 +91,31 @@ def build_post_text(
     if not clean:
         raise TelegramError("Порожній текст Telegram-поста.", retryable=False)
     if include_source_link and source_url.strip():
-        clean += f"\n\nДжерело: {source_url.strip()}"
+        clean += "\n\nДжерело"
     if len(clean) > hard_limit:
         raise TelegramError(f"Telegram-пост перевищує ліміт {hard_limit} символів.", retryable=False)
     return clean
+
+
+def _utf16_units(value: str) -> int:
+    return len(str(value or "").encode("utf-16-le")) // 2
+
+
+def _source_link_entities(text: str, source_url: str) -> str:
+    """Return Bot API JSON for a clickable trailing ``Джерело`` label."""
+    url = str(source_url or "").strip()
+    value = str(text or "")
+    label = "Джерело"
+    if not url or not value.rstrip().endswith(label):
+        return ""
+    start = value.rfind(label)
+    entity = [{
+        "type": "text_link",
+        "offset": _utf16_units(value[:start]),
+        "length": _utf16_units(label),
+        "url": url,
+    }]
+    return json.dumps(entity, ensure_ascii=False, separators=(",", ":"))
 
 
 def _request(token: str, method: str, fields: dict[str, str], *, timeout: float = 45.0, media_write: bool = False) -> object:
@@ -138,7 +159,7 @@ def _result_ids(result: object) -> tuple[str, ...]:
     return ids
 
 
-def send_text(token: str, chat_id: str, text: str, *, timeout: float = 45.0) -> TelegramResult:
+def send_text(token: str, chat_id: str, text: str, *, source_url: str = "", timeout: float = 45.0) -> TelegramResult:
     token = token.strip(); chat_id = normalize_chat_target(chat_id); text = text.strip()
     if not token or not chat_id:
         raise TelegramError("Telegram bot token або Chat ID не налаштовано.", retryable=False)
@@ -146,12 +167,16 @@ def send_text(token: str, chat_id: str, text: str, *, timeout: float = 45.0) -> 
         raise TelegramError("Порожній Telegram текст.", retryable=False)
     if len(text) > 4096:
         raise TelegramError("Telegram текст перевищує 4096 символів.", retryable=False)
-    result = _request(token, "sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": "false"}, timeout=timeout)
+    fields = {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}
+    entities = _source_link_entities(text, source_url)
+    if entities:
+        fields["entities"] = entities
+    result = _request(token, "sendMessage", fields, timeout=timeout)
     ids = _result_ids(result)
     return TelegramResult(ids[0], ids, 0)
 
 
-def send_publication(token: str, chat_id: str, caption: str, media_urls: list[str], *, timeout: float = 45.0) -> TelegramResult:
+def send_publication(token: str, chat_id: str, caption: str, media_urls: list[str], *, source_url: str = "", timeout: float = 45.0) -> TelegramResult:
     """Compatibility wrapper that deliberately publishes at most one media file."""
     token = token.strip(); chat_id = normalize_chat_target(chat_id); caption = caption.strip()
     if not token or not chat_id:
@@ -165,13 +190,16 @@ def send_publication(token: str, chat_id: str, caption: str, media_urls: list[st
             selected = parsed
             break
     if selected is None:
-        return send_text(token, chat_id, caption, timeout=timeout)
+        return send_text(token, chat_id, caption, source_url=source_url, timeout=timeout)
     kind, url = selected
     method = "sendVideo" if kind == "video" else "sendPhoto"
     field = "video" if kind == "video" else "photo"
     result = _request(
         token, method,
-        {"chat_id": chat_id, field: url, "caption": caption, "show_caption_above_media": "true"},
+        {
+            "chat_id": chat_id, field: url, "caption": caption, "show_caption_above_media": "true",
+            **({"caption_entities": _source_link_entities(caption, source_url)} if _source_link_entities(caption, source_url) else {}),
+        },
         timeout=timeout, media_write=True,
     )
     ids = _result_ids(result)
@@ -259,6 +287,7 @@ def send_video_url(
     caption: str,
     video_url: str,
     *,
+    source_url: str = "",
     timeout: float = 60.0,
 ) -> TelegramResult:
     """Ask Telegram to fetch a direct public video URL.
@@ -274,10 +303,11 @@ def send_video_url(
         raise TelegramError("Некоректна адреса відео.", retryable=False, media_rejected=True)
     if len(caption) > 1024:
         raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
-    result = _request(
-        token, "sendVideo", {"chat_id": chat_id, "video": parsed[1], "caption": caption, "show_caption_above_media": "true"},
-        timeout=timeout, media_write=True,
-    )
+    fields = {"chat_id": chat_id, "video": parsed[1], "caption": caption, "show_caption_above_media": "true"}
+    entities = _source_link_entities(caption, source_url)
+    if entities:
+        fields["caption_entities"] = entities
+    result = _request(token, "sendVideo", fields, timeout=timeout, media_write=True)
     ids = _result_ids(result)
     return TelegramResult(ids[0], ids, 1)
 
@@ -289,6 +319,7 @@ def send_prepared_photo(
     filename: str,
     mime_type: str,
     data: bytes,
+    source_url: str = "",
     timeout: float = 60.0,
 ) -> TelegramResult:
     """Upload the editorial hero as bytes instead of asking Telegram to hotlink it.
@@ -302,13 +333,16 @@ def send_prepared_photo(
     if len(caption) > 1024:
         raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
     if not data:
-        return send_text(token, chat_id, caption, timeout=timeout)
+        return send_text(token, chat_id, caption, source_url=source_url, timeout=timeout)
     if len(data) > 9_500_000:
         raise TelegramError("Головне фото завелике для безпечного Telegram upload.", retryable=False, media_rejected=True)
     result = _request_file(
         token,
         "sendPhoto",
-        {"chat_id": chat_id, "caption": caption, "show_caption_above_media": "true"},
+        {
+            "chat_id": chat_id, "caption": caption, "show_caption_above_media": "true",
+            **({"caption_entities": _source_link_entities(caption, source_url)} if _source_link_entities(caption, source_url) else {}),
+        },
         file_field="photo",
         filename=filename,
         mime_type=mime_type or "image/jpeg",
