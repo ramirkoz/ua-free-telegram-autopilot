@@ -1,0 +1,132 @@
+name: Autopilot Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION.txt
+      - PUBLIC_VERSION.txt
+      - RELEASE_NOTES_v*.md
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate release metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          $public = (Get-Content PUBLIC_VERSION.txt -Raw).Trim()
+          if (-not $version) { throw 'VERSION.txt is empty' }
+          if ($version -ne $public) { throw "VERSION mismatch: $version vs $public" }
+          $notes = "RELEASE_NOTES_v$version.md"
+          if (-not (Test-Path $notes)) { throw "Missing $notes" }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NOTES=$notes" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install runtime and test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+
+      - name: Compile and test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m compileall -q telegram_autopilot tests app.py
+          if ($LASTEXITCODE -ne 0) { throw 'compileall failed' }
+          python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { throw 'pytest failed' }
+          python -c "from telegram_autopilot import __version__; assert __version__ == '$env:VERSION'; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'version import gate failed' }
+
+      - name: Build Windows portable and source archives
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $portableName = "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Windows_Portable"
+          $stage = Join-Path $dist $portableName
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          $pyHome = (python -c "import sys; print(sys.base_prefix)").Trim()
+          if (-not (Test-Path (Join-Path $pyHome 'python.exe'))) { throw "Python runtime not found: $pyHome" }
+          Copy-Item -Path (Join-Path $pyHome '*') -Destination $stage -Recurse -Force
+
+          Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,$env:NOTES -Destination $stage -Force
+          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
+
+          Copy-Item (Join-Path $stage 'pythonw.exe') (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
+          Copy-Item (Join-Path $stage 'python.exe') (Join-Path $stage '_runtime_console.exe') -Force
+          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth') -Encoding ascii
+          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage '_runtime_console._pth') -Encoding ascii
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
+
+          Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
+
+          $portableZip = Join-Path $dist "$portableName.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portableZip -CompressionLevel Optimal -Force
+
+          $sourceName = "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Source"
+          $sourceStage = Join-Path $dist $sourceName
+          New-Item -ItemType Directory -Force -Path $sourceStage | Out-Null
+          $items = @('.github','docs','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt',$env:NOTES)
+          foreach ($item in $items) {
+            if (Test-Path $item) { Copy-Item $item -Destination $sourceStage -Recurse -Force }
+          }
+          Get-ChildItem $sourceStage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $sourceStage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          $sourceZip = Join-Path $dist "$sourceName.zip"
+          Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $sourceZip -CompressionLevel Optimal -Force
+
+          $shaFile = Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_SHA256SUMS.txt"
+          $portableHash = (Get-FileHash $portableZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceHash = (Get-FileHash $sourceZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          @("$portableHash  $([IO.Path]::GetFileName($portableZip))", "$sourceHash  $([IO.Path]::GetFileName($sourceZip))") | Set-Content $shaFile -Encoding ascii
+          "PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SOURCE_ZIP=$sourceZip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SHA_FILE=$shaFile" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "v$env:VERSION"
+          $body = Get-Content $env:NOTES -Raw
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --title "UA FREE Telegram Autopilot $env:VERSION" --notes "$body" --prerelease
+          } else {
+            gh release create $tag --title "UA FREE Telegram Autopilot $env:VERSION" --notes "$body" --prerelease --target $env:GITHUB_SHA
+          }
+          gh release upload $tag "$env:PORTABLE_ZIP" "$env:SOURCE_ZIP" "$env:SHA_FILE" --clobber
