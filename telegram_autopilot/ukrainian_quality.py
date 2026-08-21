@@ -110,6 +110,50 @@ _EDITORIAL_SENTENCE_PATTERNS = (
     re.compile(r"\bідеально\s+підход", re.I),
     re.compile(r"\bеталонн\w*\s+рішенн", re.I),
 )
+
+_SOURCE_AUTHOR_META_RE = re.compile(
+    r"(?:"
+    r"\bавтор(?:а|у|ом|ові|і|ка|ки|ці|кою)?\s+(?:матеріалу|статті|огляду|публікації)\b|"
+    r"\b(?:за\s+словами|на\s+думку)\s+автор(?:а|у|ом|ові|і|ка|ки|ці|кою)?\b|"
+    r"\b(?:оглядач(?:а|у|ем|еві|і|ка|ки|ці|кою)?|редактор(?:а|у|ом|ові|і|ка|ки|ці|кою)?|журналіст(?:а|у|ом|ові|і|ка|ки|ці|кою)?)"
+    r"\s+(?:видання|сайту|журналу|матеріалу|статті|огляду)\b"
+    r")",
+    re.I,
+)
+
+def remove_source_author_meta_sentences(value: str) -> str:
+    """Remove meta-commentary about the article's writer/reviewer.
+
+    Autopilot posts are impersonal news rewrites.  When a useful factual clause is
+    followed by writer speculation (``...; автор матеріалу очікує ...``), preserve
+    the factual prefix and drop only the meta clause.  A sentence that is entirely
+    writer/reviewer commentary is removed.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return text
+    out: list[str] = []
+    for paragraph in re.split(r"\n+", text):
+        compact = " ".join(paragraph.split()).strip()
+        if not compact:
+            continue
+        kept: list[str] = []
+        for sentence in [x.strip() for x in re.split(r"(?<=[.!?…])\s+", compact) if x.strip()]:
+            match = _SOURCE_AUTHOR_META_RE.search(sentence)
+            if not match:
+                kept.append(sentence)
+                continue
+            # Preserve an objective clause before a clear separator, e.g.
+            # ``Ціни не оголошені; автор матеріалу очікує...``.
+            prefix = sentence[:match.start()].rstrip(" ,;:—–-").strip()
+            if prefix and len(prefix.split()) >= 3:
+                if prefix[-1:] not in ".!?…":
+                    prefix += "."
+                kept.append(prefix)
+        if kept:
+            out.append(" ".join(kept))
+    return "\n\n".join(out).strip()
+
 _ATTRIBUTION_MARKERS = (
     "автор", "авторка", "оглядач", "журналіст", "на думку", "за словами",
     "видання вважає", "компанія вважає", "дослідники вважають", "називає це",
