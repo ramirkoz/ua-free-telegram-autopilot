@@ -13,6 +13,8 @@ _UA_COMMON = {
 }
 _UA_WORD_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ’\'-]+")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9._+/-]*")
+_RUSSIAN_ONLY_LETTERS_RE = re.compile(r"[ыэёъ]", re.I)
+_ALPHA_SEGMENT_RE = re.compile(r"[A-Za-zА-Яа-яІіЇїЄєҐґЁёЫыЭэЪъ]{2,}")
 
 # Small editorial glossary of mistakes actually observed in production. This is not a
 # universal translator: it exists to stop known calques from escaping into autopublish.
@@ -58,6 +60,19 @@ def looks_ukrainian(text: str) -> bool:
     prose, while allowing many Latin entities such as Pixel, NVIDIA, OAuth or GPU.
     """
     sample = (text or "")[:8000]
+    # Hard language corruption is different from ordinary spelling imperfection.
+    # Reject Russian-only letters and visually fused Latin/Cyrillic words such as
+    # ``власnorучного``. Hyphen-separated technical forms (``AI-сервіс``) remain
+    # valid because segments on either side of the hyphen are checked separately.
+    alpha_segments = _ALPHA_SEGMENT_RE.findall(sample)
+    if any(_RUSSIAN_ONLY_LETTERS_RE.search(segment) for segment in alpha_segments):
+        return False
+    if any(
+        re.search(r"[A-Za-z]", segment)
+        and re.search(r"[А-Яа-яІіЇїЄєҐґЁёЫыЭэЪъ]", segment)
+        for segment in alpha_segments
+    ):
+        return False
     cyr_chars = len(_CYRILLIC.findall(sample))
     ua_specific = sum(ch in _UA_LETTERS for ch in sample)
     cyr_words = _UA_WORD_RE.findall(sample)
