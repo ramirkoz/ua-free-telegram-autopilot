@@ -156,6 +156,26 @@ def _pair_score(current_title: str, current_body: str, row: Mapping[str, Any] | 
         score = 0.42 * containment + 0.28 * min(1.0, len(shared) / 16.0) + 0.30 * min(1.0, len(anchor_shared) / 3.0)
         return score, f"збіг події за сутностями й ключовими фактами (shared={len(shared)}, anchors={len(anchor_shared)})"
 
+    # A short first report and a much longer follow-up about the same event can
+    # have low Jaccard simply because the follow-up adds background.  RC29 missed
+    # the Amazon Prime Air pool story for exactly this reason.  Require several
+    # shared proper-name anchors, substantial overlap with the shorter story and
+    # one extra event anchor (matching number or meaningful title overlap).
+    if (
+        len(anchor_shared) >= 3
+        and len(shared) >= 15
+        and containment >= 0.35
+        and (number_anchor or title_jaccard >= 0.20)
+    ):
+        score = (
+            0.46 * containment
+            + 0.24 * min(1.0, len(shared) / 20.0)
+            + 0.20 * min(1.0, len(anchor_shared) / 4.0)
+            + 0.10 * max(title_jaccard, 0.35 if number_anchor else 0.0)
+        )
+        anchor_note = "числом" if number_anchor else "заголовком"
+        return score, f"короткий/розширений опис тієї самої події ({anchor_note}, shared={len(shared)}, anchors={len(anchor_shared)})"
+
     return None
 
 
