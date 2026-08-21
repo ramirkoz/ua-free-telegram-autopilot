@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from .collector import collect_source, hydrate_article_page
-from .ai_router import AIRouterError, clear_router_cooldowns
+from .ai_router import AIRouterError
 from .database import Database, content_hash, now_iso
 from .event_dedupe import find_event_duplicate
-from .production_pipeline_rc9 import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, PostAIQAExhausted, decide
+from .production_pipeline import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT_POST_HARD_LIMIT, PostAIQAExhausted, decide
 from .language import looks_english, normalize_ukrainian_terminology
 from .models import Channel
 from .secrets_store import load_secrets
@@ -28,61 +28,18 @@ class AutopilotService:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_collect: dict[int, float] = {}
-        # RC12 supersedes the RC11 cooldown migration. RC10/RC11 Data may
-        # contain stale provider-health cooldowns, including article-validation
-        # failures incorrectly persisted as model cooldowns. Clear once, then
-        # mark both migrations complete so a fresh install also performs only
-        # one state reset.
-        try:
-            rc11_done = self.db.get_state("rc11_ai_liveness_migrated", "0") == "1"
-            rc12_done = self.db.get_state("rc12_ai_router_state_v2_migrated", "0") == "1"
-            if not rc12_done:
-                clear_router_cooldowns()
-                if not rc11_done:
-                    self.db.set_state("rc11_ai_liveness_migrated", "1")
-                self.db.set_state("rc12_ai_router_state_v2_migrated", "1")
-                self._audit("ai_router", "cooldown_reset", "RC12 stale validation/provider cooldown reset")
-        except Exception as exc:
-            self.log.debug("RC12 AI cooldown migration skipped: %s", exc)
-
-        # RC18 shortens transient/model cooldowns and changes cycle liveness.
-        # Clear the old RC17 router state exactly once so copied Data starts from
-        # a clean health snapshot instead of waiting out stale 5-10 minute
-        # cooldowns created by the previous build. Real quota/auth failures are
-        # rediscovered immediately and receive their normal strict cooldown.
-        try:
-            if self.db.get_state("rc18_router_liveness_migrated", "0") != "1":
-                clear_router_cooldowns()
-                self.db.set_state("rc18_router_liveness_migrated", "1")
-                self._audit("ai_router", "cooldown_reset", "RC18 one-time stale router cooldown reset")
-        except Exception as exc:
-            self.log.debug("RC18 AI cooldown migration skipped: %s", exc)
-
-        # RC19 fixes false post-AI QA failures (number grouping / parser / entity
-        # classification) and uses tighter generation budgets. Start copied RC18
-        # Data from a fresh transient health snapshot once; real quota/auth state
-        # is rediscovered immediately by the normal Router path.
-        try:
-            if self.db.get_state("rc19_precision_liveness_migrated", "0") != "1":
-                clear_router_cooldowns()
-                self.db.set_state("rc19_precision_liveness_migrated", "1")
-                self._audit("ai_router", "cooldown_reset", "RC19 one-time transient router cooldown reset")
-        except Exception as exc:
-            self.log.debug("RC19 AI cooldown migration skipped: %s", exc)
-
-        # RC20 separates soft language QA from provider health and changes
-        # endpoint/network cooldown semantics. Clear inherited transient state once.
-        try:
-            if self.db.get_state("rc20_router_qa_migrated", "0") != "1":
-                clear_router_cooldowns()
-                self.db.set_state("rc20_router_qa_migrated", "1")
-                self._audit("ai_router", "cooldown_reset", "RC20 one-time router/QA state reset")
-        except Exception as exc:
-            self.log.debug("RC20 AI cooldown migration skipped: %s", exc)
 
     @property
     def running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
+
+    def _emit(self, kind: str, text: str) -> None:
+        # UI/telemetry callbacks are observability only. They must never be able
+        # to stop collection, AI processing or Telegram publication.
+        try:
+            self.on_event(kind, text)
+        except Exception as exc:
+            self.log.debug("UI event skipped (%s): %s", kind, exc)
 
     def _audit(self, stage: str, outcome: str, detail: str = "", **refs) -> None:
         # Observability must never become a new production failure mode.
@@ -93,7 +50,7 @@ class AutopilotService:
 
     def _languagetool_event(self, kind: str, text: str) -> None:
         self._audit("languagetool", kind, text)
-        self.on_event(kind, text)
+        self._emit(kind, text)
 
     def start(self) -> None:
         if self.running:
@@ -104,12 +61,12 @@ class AutopilotService:
         lt_ready = ensure_languagetool_async(self._languagetool_event)
         lt = languagetool_status()
         self._audit("languagetool", "ready" if lt_ready or lt.get("ready") else "starting", str(lt.get("text") or ""))
-        self.on_event("languagetool", str(lt.get("text") or "LanguageTool: перевірка/встановлення у фоні"))
-        self.on_event("service", "Автопілот запущено")
+        self._emit("languagetool", str(lt.get("text") or "LanguageTool: перевірка/встановлення у фоні"))
+        self._emit("service", "Автопілот запущено")
 
     def stop(self) -> None:
         self._stop.set()
-        self.on_event("service", "Автопілот зупиняється")
+        self._emit("service", "Автопілот зупиняється")
 
     def run_once(self) -> None:
         for channel in self.db.list_channels():
@@ -126,20 +83,49 @@ class AutopilotService:
                         self._run_channel(channel, force=False)
             except Exception as exc:
                 self.log.exception("Autopilot cycle failed: %s", exc)
-                self.on_event("error", f"Цикл: {exc}")
+                self._emit("error", f"Цикл: {exc}")
             self._stop.wait(15)
 
     def _run_channel(self, channel: Channel, *, force: bool) -> None:
         now = time.monotonic()
         due = now - self._last_collect.get(channel.id, 0) >= channel.poll_interval_minutes * 60
         if force or due:
-            self._collect(channel)
+            self._collect(channel, force=force)
             self._last_collect[channel.id] = now
         self._process(channel)
 
-    def _collect(self, channel: Channel) -> None:
+    def _source_backoff_remaining(self, source_id: int) -> int:
+        """Persist rate-limit/network backoff via the existing source_health row."""
+        try:
+            health = self.db.source_health(source_id)
+            error = str(health.get("last_error") or "")
+            stamp = str(health.get("last_error_at") or "")
+            if not error or not stamp:
+                return 0
+            low = error.casefold()
+            if "http 429" in low:
+                window = 20 * 60
+            elif "http 403" in low:
+                window = 10 * 60
+            elif "network request failed" in low or "no dns result" in low:
+                window = 3 * 60
+            else:
+                return 0
+            failed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            if failed_at.tzinfo is None:
+                failed_at = failed_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - failed_at.astimezone(timezone.utc)).total_seconds()
+            return max(0, int(window - age))
+        except Exception:
+            return 0
+
+    def _collect(self, channel: Channel, *, force: bool = False) -> None:
         for source in self.db.list_sources(channel.id):
             if not source.enabled:
+                continue
+            # Do not hammer a source that just told us to slow down. The state is
+            # read from source_health, so a program restart does not reset the pause.
+            if not force and self._source_backoff_remaining(source.id) > 0:
                 continue
             try:
                 items = collect_source(source)
@@ -155,14 +141,14 @@ class AutopilotService:
                     "collect", "baseline" if baseline else "success", f"{source.name}: +{inserted}",
                     channel_id=channel.id, source_id=source.id,
                 )
-                self.on_event("collect", f"{channel.name}: {source.name}: +{inserted}" + (" (baseline)" if baseline else ""))
+                self._emit("collect", f"{channel.name}: {source.name}: +{inserted}" + (" (baseline)" if baseline else ""))
             except Exception as exc:
                 self.db.source_checked(source.id, error=str(exc)[:1000])
                 self._audit(
                     "collect", "error", f"{source.name}: {exc}", channel_id=channel.id, source_id=source.id
                 )
                 self.log.warning("Source %s failed: %s", source.name, exc)
-                self.on_event("error", f"{source.name}: {exc}")
+                self._emit("error", f"{source.name}: {exc}")
 
     def _is_too_old(self, published: str | None, hours: int) -> bool:
         if not published:
@@ -188,16 +174,17 @@ class AutopilotService:
             return True
 
     def _process(self, channel: Channel) -> None:
-        # RC25: LanguageTool is a global prerequisite for automatic publication.
-        # Keep collecting sources while the portable installer/server starts, but
-        # do not spend AI quota or mutate article retry state until the final
-        # Ukrainian proofreader is actually reachable.
+        # LanguageTool liveness: LanguageTool remains a preferred local proofreader,
+        # but its installer/server may never become ready on a particular Windows
+        # machine.  Do not turn that optional external process into a global kill
+        # switch for the collector -> AI -> Telegram pipeline.  The final
+        # deterministic Ukrainian blockers and Fact Guard still run before publish.
         lt = languagetool_status()
         if not lt.get("ready"):
             ensure_languagetool_async(self._languagetool_event)
-            self._audit("languagetool", "queue_wait", str(lt.get("text") or "LanguageTool not ready"), channel_id=channel.id)
-            self.on_event("languagetool", str(lt.get("text") or "LanguageTool: очікування готовності"))
-            return
+            note = str(lt.get("text") or "LanguageTool not ready")
+            self._audit("languagetool", "degraded", note, channel_id=channel.id)
+            self._emit("languagetool", note + " · автопілот продовжує роботу через вбудований UA-gate")
         posted = 0
         attempted = 0
         max_attempts = max(4, min(8, int(channel.max_posts_per_cycle) * 2))
@@ -214,7 +201,7 @@ class AutopilotService:
                     channel_id=channel.id, source_id=int(row["source_id"]), article_id=article_id,
                 )
 
-                # Pending rows collected by older RC9 builds can contain a page-wide
+                # Historical rows can contain a page-wide
                 # media bag. Refresh them once with the article-only extractor. This
                 # preserves Data while preventing stale Jaguar/banner/related images.
                 try:
@@ -272,9 +259,8 @@ class AutopilotService:
                 video_link = prepared_media.video_link
                 media_present = hero is not None or direct_video is not None
                 telegram_hard_limit = MEDIA_POST_HARD_LIMIT if media_present else TEXT_POST_HARD_LIMIT
-                source_footer = ""
-                if channel.include_source_link and str(row["url"] or "").strip():
-                    source_footer = f"\n\nДжерело: {str(row['url'] or '').strip()}"
+                source_url = str(row["url"] or "").strip()
+                source_footer = "\n\nДжерело" if source_url else ""
                 video_footer = f"\n\n🎬 Відео: {video_link}" if video_link else ""
                 rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer) - len(video_footer))
                 format_marker = f"{POST_FORMAT_PREFIX}{telegram_hard_limit}:{rewrite_hard_limit}:"
@@ -353,10 +339,10 @@ class AutopilotService:
                         channel_id=channel.id, article_id=article_id,
                     )
 
-                # RC13: re-check semantic duplicates immediately before the
+                # Re-check semantic duplicates immediately before the
                 # Telegram write, including cached/retry rewrites. A retry may
                 # have been created before another source for the same event was
-                # successfully published, so the old RC12 path could later send
+                # successfully published, so an older cached path could later send
                 # both posts. Compare the final Ukrainian body against fresh
                 # published bodies, not only source-title similarity.
                 recent_for_event = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=80)
@@ -372,7 +358,7 @@ class AutopilotService:
                         duplicate_of=semantic_duplicate.article_id,
                         reject_reason=reason,
                         ai_provider="local-rule",
-                        ai_model="event-dedupe-v1",
+                        ai_model="event-dedupe-v2",
                     )
                     self._audit("dedupe", "duplicate", reason, channel_id=channel.id, article_id=article_id)
                     continue
@@ -380,8 +366,8 @@ class AutopilotService:
                 publication_body = body + video_footer
                 caption = build_post_text(
                     publication_body,
-                    source_url=str(row["url"] or ""),
-                    include_source_link=bool(channel.include_source_link),
+                    source_url=source_url,
+                    include_source_link=bool(source_url),
                     hard_limit=telegram_hard_limit,
                 )
 
@@ -394,18 +380,18 @@ class AutopilotService:
                 )
                 try:
                     if direct_video is not None:
-                        result = send_video_url(token, channel.telegram_chat_id, caption, direct_video.url)
+                        result = send_video_url(token, channel.telegram_chat_id, caption, direct_video.url, source_url=source_url)
                     elif hero is not None:
                         result = send_prepared_photo(
                             token, channel.telegram_chat_id, caption,
-                            filename=hero.filename, mime_type=hero.mime_type, data=hero.data,
+                            filename=hero.filename, mime_type=hero.mime_type, data=hero.data, source_url=source_url,
                         )
                     else:
-                        result = send_text(token, channel.telegram_chat_id, caption)
+                        result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
                 except TelegramError as exc:
                     if exc.media_rejected:
                         kind_label = "відео" if direct_video is not None else "фото"
-                        self.on_event("warning", f"{channel.name}: Telegram відхилив {kind_label}, публікую цей самий пост без нього")
+                        self._emit("warning", f"{channel.name}: Telegram відхилив {kind_label}, публікую цей самий пост без нього")
                         # If a direct video was rejected but a validated article/YouTube
                         # preview exists, keep the visual fallback. Otherwise the
                         # canonical watch link remains in the text.
@@ -413,14 +399,14 @@ class AutopilotService:
                             try:
                                 result = send_prepared_photo(
                                     token, channel.telegram_chat_id, caption,
-                                    filename=hero.filename, mime_type=hero.mime_type, data=hero.data,
+                                    filename=hero.filename, mime_type=hero.mime_type, data=hero.data, source_url=source_url,
                                 )
                             except TelegramError as photo_exc:
                                 if not photo_exc.media_rejected:
                                     raise
-                                result = send_text(token, channel.telegram_chat_id, caption)
+                                result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
                         else:
-                            result = send_text(token, channel.telegram_chat_id, caption)
+                            result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
                     else:
                         raise
 
@@ -440,26 +426,26 @@ class AutopilotService:
                     "telegram", "published", f"message_id={result.message_id}; media={result.media_count}",
                     channel_id=channel.id, article_id=article_id,
                 )
-                self.on_event(
+                self._emit(
                     "publish",
                     f"{channel.name}: опубліковано #{article_id}, Telegram {result.message_id}, медіа {result.media_count}",
                 )
             except LanguageToolUnavailable as exc:
                 status = self.db.schedule_retry(article_id, str(exc))
                 self._audit("languagetool", status, str(exc), channel_id=channel.id, article_id=article_id)
-                self.on_event("warning", f"{channel.name}: #{article_id} ({status}): {exc}")
+                self._emit("warning", f"{channel.name}: #{article_id} ({status}): {exc}")
                 break
             except PostAIQAExhausted as exc:
                 status = self.db.schedule_retry(article_id, str(exc))
                 self._audit("post_ai_qa", status, str(exc), channel_id=channel.id, article_id=article_id)
-                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
+                self._emit("error", f"{channel.name}: #{article_id} ({status}): {exc}")
                 if exc.provider_outage:
                     self._audit("ai_router", "cycle_pause", "Post-AI QA exhausted because all providers are temporarily unavailable; remaining articles left new", channel_id=channel.id, article_id=article_id)
                     break
             except AIRouterError as exc:
                 status = self.db.schedule_retry(article_id, str(exc))
                 self._audit("ai_router", status, str(exc), channel_id=channel.id, article_id=article_id)
-                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
+                self._emit("error", f"{channel.name}: #{article_id} ({status}): {exc}")
                 # A provider-availability outage is global, not article-specific.
                 # Do not turn the next several fresh stories into identical retry
                 # rows in the same cycle; leave them new and try again next cycle.
@@ -476,9 +462,9 @@ class AutopilotService:
                     status = "error"
                     self.db.update_article(article_id, status=status, next_retry_at=None, last_error=str(exc)[:2000])
                 self._audit("telegram", status, str(exc), channel_id=channel.id, article_id=article_id)
-                self.on_event("error", f"{channel.name}: Telegram ({status}): {exc}")
+                self._emit("error", f"{channel.name}: Telegram ({status}): {exc}")
             except Exception as exc:
                 status = self.db.schedule_retry(article_id, str(exc))
                 self._audit("article", status, str(exc), channel_id=channel.id, article_id=article_id)
                 self.log.exception("Article %s processing failed", article_id)
-                self.on_event("error", f"{channel.name}: #{article_id} ({status}): {exc}")
+                self._emit("error", f"{channel.name}: #{article_id} ({status}): {exc}")
