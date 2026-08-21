@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+import logging
+import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from . import APP_NAME, __version__
 from .ai_router import clear_router_cooldowns, test_all, test_production_route
-from .local_ai_runtime import test_local_runtime
+from .local_ai_runtime import discover_local_models, test_local_runtime
 from .codex_engine import inspect_codex, install_codex, login_chatgpt
 from .collector import detect_source
 from .database import Database
 from .models import Channel, Source
 from .secrets_store import SecretConfig, load_secrets, save_secrets
 from .service import AutopilotService
-from .language_tool_local import ensure_languagetool, languagetool_status
+from .language_tool_local import apply_local_languagetool_detailed, ensure_languagetool, languagetool_status, shutdown_languagetool
 from .telegram import normalize_chat_target, test_bot
-from .telegraph import create_account, test_account
+
+
+_LOG = logging.getLogger("telegram_autopilot.ui")
 
 
 DEFAULT_PROFILE = """Тематика: технології, AI, наука, космос, кібербезпека, чипи, робототехніка, енергетика, транспорт та важливі цифрові зміни у США й Європі.
@@ -30,9 +35,21 @@ class MainWindow:
         self.root.title(f"{APP_NAME} {__version__}")
         self.root.geometry("1180x760"); self.root.minsize(980,650)
         self.channel_map:dict[str,int]={}; self.current_channel_id:int|None=None
+        # Tkinter is main-thread only. Worker/service threads may only enqueue callables;
+        # the main Tk loop drains them below. This prevents "main thread is not in main loop"
+        # from killing the autopilot cycle.
+        self._ui_queue: queue.Queue = queue.Queue()
+        self._closing=False
+        self._refresh_after_id=None
+        self._view_dirty={"sources":False,"history":False,"stats":False}
+        self._event_refresh_delay_ms=1500
+        self._log_event_count=0
+        self._lt_status_busy=False
+        self._next_lt_status_at=0.0
         self.service=AutopilotService(db,self._service_event)
         self._install_editing_support()
         self._build(); self.refresh_all()
+        self._drain_ui_queue()
         if self.db.get_state("auto_start","1") == "1": self.service.start()
         self._tick()
 
@@ -137,6 +154,7 @@ class MainWindow:
         self.tabs=ttk.Notebook(self.root); self.tabs.pack(fill="both",expand=True,padx=10,pady=(0,10))
         self.dashboard=ttk.Frame(self.tabs,padding=12); self.channels_tab=ttk.Frame(self.tabs,padding=12); self.sources_tab=ttk.Frame(self.tabs,padding=12); self.history_tab=ttk.Frame(self.tabs,padding=12); self.ai_tab=ttk.Frame(self.tabs,padding=12); self.log_tab=ttk.Frame(self.tabs,padding=12)
         self.tabs.add(self.dashboard,text="Головна"); self.tabs.add(self.channels_tab,text="Канали"); self.tabs.add(self.sources_tab,text="Джерела"); self.tabs.add(self.history_tab,text="Історія"); self.tabs.add(self.ai_tab,text="AI та токени"); self.tabs.add(self.log_tab,text="Журнал")
+        self.tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
         self._build_dashboard(); self._build_channels(); self._build_sources(); self._build_history(); self._build_ai(); self._build_log()
 
     def _build_dashboard(self):
@@ -183,12 +201,12 @@ class MainWindow:
     def _build_history(self):
         bar=ttk.Frame(self.history_tab); bar.pack(fill="x",pady=(0,8))
         ttk.Label(bar,text="Статус:").pack(side="left")
-        self.history_status=tk.StringVar(value="усі"); combo=ttk.Combobox(bar,textvariable=self.history_status,state="readonly",values=["усі","published","duplicate","rejected","new","retry","error","unknown","baseline","telegraph_writing","telegram_writing"],width=18); combo.pack(side="left",padx=6); combo.bind("<<ComboboxSelected>>",lambda _e:self.refresh_history())
+        self.history_status=tk.StringVar(value="усі"); combo=ttk.Combobox(bar,textvariable=self.history_status,state="readonly",values=["усі","published","duplicate","rejected","new","retry","error","unknown","baseline","telegram_writing"],width=18); combo.pack(side="left",padx=6); combo.bind("<<ComboboxSelected>>",lambda _e:self.refresh_history())
         ttk.Button(bar,text="Оновити",command=self.refresh_history).pack(side="left")
-        cols=("id","channel","source","title","status","reason","published","ai","media","telegraph","msg")
+        cols=("id","channel","source","title","status","reason","published","ai","media","msg")
         self.history_tree=ttk.Treeview(self.history_tab,columns=cols,show="headings")
-        heads=("ID","Канал","Джерело","Заголовок","Статус","Причина / помилка","Опубліковано","AI","Медіа","Telegraph","Telegram ID")
-        widths=(55,120,120,260,95,230,135,90,60,230,90)
+        heads=("ID","Канал","Джерело","Заголовок","Статус","Причина / помилка","Опубліковано","AI","Медіа","Telegram ID")
+        widths=(55,120,120,280,95,330,135,120,60,90)
         for c,h,w in zip(cols,heads,widths): self.history_tree.heading(c,text=h); self.history_tree.column(c,width=w,anchor="w")
         self.history_tree.pack(fill="both",expand=True)
 
@@ -201,8 +219,11 @@ class MainWindow:
             e=ttk.Entry(form,width=70,show="" if key=="cloudflare_account_id" else "•"); e.grid(row=r,column=1,sticky="ew",pady=4); self.secret_entries[key]=e
         form.columnconfigure(1,weight=1)
         self.local_enabled=tk.BooleanVar(); ttk.Checkbutton(form,text="Локальний fallback: Ollama автоматично → llama.cpp",variable=self.local_enabled).grid(row=6,column=0,sticky="w",pady=4)
-        self.local_url=ttk.Entry(form,width=45); self.local_url.grid(row=6,column=1,sticky="w"); self.local_model=ttk.Entry(form,width=30); self.local_model.grid(row=6,column=1,sticky="e")
-        ttk.Label(form,text="Використовує вже встановлену Ollama та наявні моделі; нічого автоматично не завантажує. URL/модель праворуч — лише запасний llama.cpp.",wraplength=850).grid(row=7,column=0,columnspan=2,sticky="w",pady=(0,6))
+        self.local_url=ttk.Entry(form,width=40); self.local_url.grid(row=6,column=1,sticky="w")
+        self.local_model=ttk.Combobox(form,width=28,state="normal"); self.local_model.grid(row=6,column=1,sticky="e")
+        local_tools=ttk.Frame(form); local_tools.grid(row=7,column=0,columnspan=2,sticky="w",pady=(0,6))
+        ttk.Button(local_tools,text="Знайти локальні моделі",command=self.find_local_models_ui).pack(side="left")
+        ttk.Label(local_tools,text="  Ollama: показує реально встановлені моделі; нічого не завантажує. URL праворуч використовується лише як запасний llama.cpp.",wraplength=850).pack(side="left")
         ltbar=ttk.Frame(self.ai_tab); ltbar.pack(fill="x",pady=(4,0))
         ttk.Label(ltbar,text="LanguageTool:").pack(side="left")
         self.lt_status_var=tk.StringVar(value="перевіряється…")
@@ -210,12 +231,10 @@ class MainWindow:
         ttk.Button(ltbar,text="Перевірити / встановити LanguageTool",command=self.test_languagetool_ui).pack(side="left")
         btn=ttk.Frame(self.ai_tab); btn.pack(fill="x",pady=12)
         ttk.Button(btn,text="Зберегти токени",command=self.save_secret_ui).pack(side="left",padx=3)
-        ttk.Button(btn,text="Тест AI Router",command=self.test_ai_ui).pack(side="left",padx=3)
+        ttk.Button(btn,text="Знайти / тестувати AI моделі",command=self.test_ai_ui).pack(side="left",padx=3)
         ttk.Button(btn,text="Перевірити локальний AI",command=self.test_local_ai_ui).pack(side="left",padx=3)
         ttk.Button(btn,text="Встановити / оновити Codex",command=self.install_codex_ui).pack(side="left",padx=3)
         ttk.Button(btn,text="Увійти ChatGPT",command=self.login_codex_ui).pack(side="left",padx=3)
-        ttk.Button(btn,text="Тест Telegraph",command=self.test_telegraph_ui).pack(side="left",padx=3)
-        ttk.Label(self.ai_tab,text="Telegraph access token створюється і зберігається автоматично при першій публікації або тесті.").pack(anchor="w",pady=(0,8))
         self.ai_result=tk.Text(self.ai_tab,height=18,wrap="word"); self.ai_result.pack(fill="both",expand=True)
 
     def _build_log(self):
@@ -252,8 +271,7 @@ class MainWindow:
         for i in self.sources_tree.get_children(): self.sources_tree.delete(i)
         if not self.current_channel_id:return
         kind_names={"telegram":"Telegram","rss":"RSS/Atom","page":"Веб"}
-        for s in self.db.list_sources(self.current_channel_id):
-            health=self.db.source_health(s.id)
+        for s,health in self.db.list_sources_with_health(self.current_channel_id):
             if not s.enabled:
                 state="⚪ вимкнено"
             elif s.last_error:
@@ -290,15 +308,15 @@ class MainWindow:
     def refresh_history(self):
         for i in self.history_tree.get_children(): self.history_tree.delete(i)
         status=self.history_status.get() if hasattr(self,"history_status") else "усі"; status=None if status=="усі" else status
-        for r in self.db.history(self.current_channel_id,status,limit=500):
+        for r in self.db.history(self.current_channel_id,status,limit=200):
             row_status=str(r["status"] or "")
-            if row_status in {"retry","error","unknown","processing","telegram_writing","telegraph_writing"}:
+            if row_status in {"retry","error","unknown","processing","telegram_writing"}:
                 reason=r["last_error"] or r["reject_reason"] or ""
             elif row_status in {"rejected","duplicate"}:
                 reason=r["reject_reason"] or r["last_error"] or ""
             else:
                 reason=r["last_error"] or r["reject_reason"] or ""
-            self.history_tree.insert("","end",iid=f"h{r['id']}",values=(r["id"],r["channel_name"],r["source_name"],r["headline_uk"] or r["title"],r["status"],reason,r["published_at"] or "",r["ai_provider"] or "",r["telegram_media_count"] or 0,r["telegraph_url"] or "",r["telegram_message_id"] or ""))
+            self.history_tree.insert("","end",iid=f"h{r['id']}",values=(r["id"],r["channel_name"],r["source_name"],r["headline_uk"] or r["title"],r["status"],reason,r["published_at"] or "",r["ai_provider"] or "",r["telegram_media_count"] or 0,r["telegram_message_id"] or ""))
 
     def refresh_stats(self):
         stats=self.db.stats(self.current_channel_id)
@@ -393,7 +411,7 @@ class MainWindow:
                 try:
                     detected=detect_source(raw_url)
                 except Exception as exc:
-                    self.root.after(0,lambda exc=exc:self._source_detection_failed(win,save_button,status,exc))
+                    self._post_ui(self._source_detection_failed,win,save_button,status,exc)
                     return
                 def finish():
                     try:
@@ -410,7 +428,7 @@ class MainWindow:
                     except Exception as exc:
                         save_button.configure(state="normal"); status.set("")
                         messagebox.showerror(APP_NAME,str(exc),parent=win)
-                self.root.after(0,finish)
+                self._post_ui(finish)
             threading.Thread(target=work,daemon=True).start()
         save_button.configure(command=save)
         url.focus_set()
@@ -435,7 +453,7 @@ class MainWindow:
 
     def save_secret_ui(self,quiet=False):
         try:
-            old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; sec=SecretConfig(**data,channel_bot_tokens=old.channel_bot_tokens,telegraph_access_token=old.telegraph_access_token,local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); save_secrets(sec)
+            old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; sec=SecretConfig(**data,channel_bot_tokens=old.channel_bot_tokens,local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); save_secrets(sec)
             clear_router_cooldowns()
             if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено. AI cooldown скинуто, провайдери перевірятимуться заново.")
         except Exception as exc: messagebox.showerror(APP_NAME,str(exc))
@@ -454,8 +472,8 @@ class MainWindow:
                 lines.append(str(languagetool_status().get("text") or "LanguageTool: невідомий стан"))
                 text="\n".join(lines)
             except Exception as exc:text=str(exc)
-            self.root.after(0,lambda:self._set_ai_result(text))
-        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Перевірка API + production-route...")
+            self._post_ui(self._set_ai_result,text)
+        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Оновлення каталогів моделей + перевірка API + production-route...")
     def _set_ai_result(self,text): self.ai_result.delete("1.0","end"); self.ai_result.insert("1.0",text)
 
     def test_languagetool_ui(self):
@@ -464,17 +482,42 @@ class MainWindow:
                 ready=ensure_languagetool(self._service_event)
                 status=languagetool_status()
                 text=str(status.get("text") or "LanguageTool: невідомий стан")
-                if not ready and not status.get("ready"):
-                    text += "\nАвтопублікація чекатиме, доки локальний коректор не стане готовим."
+                if ready or status.get("ready"):
+                    sample="Цей система працюють неправильно, а Swift згоріть у атмосфері."
+                    result=apply_local_languagetool_detailed(sample,timeout=2.5,max_changes=12,require_ready=False)
+                    text += f"\n\nКонтрольна перевірка: {result.changes} правок\nБуло: {sample}\nСтало: {result.text}"
+                    if result.details:
+                        text += "\nПравки: " + "; ".join(result.details)
+                else:
+                    text += "\nLanguageTool не готовий; автопілот продовжує роботу через вбудований UA-gate."
             except Exception as exc:
                 text=f"✗ LanguageTool: {exc}"
-            self.root.after(0,lambda:self._set_lt_result(text))
+            self._post_ui(self._set_lt_result,text)
         threading.Thread(target=work,daemon=True).start()
         self.lt_status_var.set("перевірка/встановлення…")
 
     def _set_lt_result(self, text):
         self.lt_status_var.set(str(text).splitlines()[0])
         self._set_ai_result(str(text))
+
+    def find_local_models_ui(self):
+        def work():
+            try:
+                models=discover_local_models(auto_start=True)
+                if models:
+                    text="Знайдено локальні Ollama-моделі:\n" + "\n".join(f"  • {m}" for m in models)
+                else:
+                    text="Ollama відповідає, але локальних моделей немає."
+            except Exception as exc:
+                models=[]; text=f"✗ Пошук локальних моделей: {exc}"
+            def finish():
+                self.local_model.configure(values=models)
+                current=self.local_model.get().strip()
+                if models and (not current or current == "local-model"):
+                    self.local_model.set(models[0])
+                self._set_ai_result(text)
+            self._post_ui(finish)
+        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Пошук локальних Ollama-моделей...")
 
     def test_local_ai_ui(self):
         self.save_secret_ui(quiet=True)
@@ -488,47 +531,165 @@ class MainWindow:
                     text=f"✓ Локальний AI працює: {target.label}"
             except Exception as exc:
                 text=f"✗ Локальний AI: {exc}"
-            self.root.after(0,lambda:self._set_ai_result(text))
+            self._post_ui(self._set_ai_result,text)
         threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Перевірка локального AI...")
 
 
-    def test_telegraph_ui(self):
-        def work():
-            try:
-                sec=load_secrets()
-                if not sec.telegraph_access_token:
-                    sec.telegraph_access_token=create_account("ua_free_autopilot")
-                    save_secrets(sec)
-                label=test_account(sec.telegraph_access_token)
-                text=f"✓ Telegraph працює: {label}"
-            except Exception as exc:
-                text=f"✗ Telegraph: {exc}"
-            self.root.after(0,lambda:self._set_ai_result(text))
-        threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Перевірка Telegraph...")
-
     def install_codex_ui(self):
         def work():
-            try: install_codex(); text="Codex встановлено/оновлено."
+            try: install_codex(); clear_router_cooldowns("codex"); text="Codex встановлено/оновлено."
             except Exception as exc:text=f"Помилка Codex: {exc}"
-            self.root.after(0,lambda:self._set_ai_result(text))
+            self._post_ui(self._set_ai_result,text)
         threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Встановлення Codex...")
     def login_codex_ui(self):
         def work():
-            try: login_chatgpt(); s=inspect_codex(); text=f"Codex: {'✓' if s.authenticated else '⚠'} {s.detail}"
+            try: login_chatgpt(); clear_router_cooldowns("codex"); s=inspect_codex(); text=f"Codex: {'✓' if s.authenticated else '⚠'} {s.detail}"
             except Exception as exc:text=f"Помилка входу: {exc}"
-            self.root.after(0,lambda:self._set_ai_result(text))
+            self._post_ui(self._set_ai_result,text)
         threading.Thread(target=work,daemon=True).start(); self._set_ai_result("Вхід ChatGPT...")
 
     def start_auto(self): self.db.set_state("auto_start","1"); self.service.start(); self.status_var.set("Автопілот: працює")
     def stop_auto(self): self.db.set_state("auto_start","0"); self.service.stop(); self.status_var.set("Автопілот: зупинено")
     def run_once(self):
         threading.Thread(target=self.service.run_once,daemon=True).start(); self.last_event.set("Ручний цикл запущено...")
-    def _service_event(self,kind,text): self.root.after(0,lambda:self._record_event(kind,text))
+
+    def _post_ui(self, callback, *args, **kwargs):
+        """Queue a UI callable without touching Tcl/Tk from a worker thread."""
+        if self._closing:
+            return
+        self._ui_queue.put((callback,args,kwargs))
+
+    def _drain_ui_queue(self):
+        if self._closing:
+            return
+        # Keep every pass short. A burst of service events must never monopolize
+        # Tk's message pump and make the window look hung.
+        started=time.perf_counter(); processed=0
+        while processed < 60 and (time.perf_counter()-started) < 0.010:
+            try:
+                callback,args,kwargs=self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                callback(*args,**kwargs)
+            except tk.TclError:
+                if not self._closing:
+                    pass
+            except Exception:
+                _LOG.debug("UI callback failed", exc_info=True)
+            processed += 1
+        if not self._closing:
+            self.root.after(50 if not self._ui_queue.empty() else 100,self._drain_ui_queue)
+
+    def _service_event(self,kind,text):
+        self._post_ui(self._record_event,kind,text)
+
+    def _active_view(self) -> str:
+        try:
+            selected=self.tabs.select()
+        except tk.TclError:
+            return ""
+        if selected == str(self.dashboard): return "stats"
+        if selected == str(self.sources_tab): return "sources"
+        if selected == str(self.history_tab): return "history"
+        return ""
+
+    def _run_view_refresh(self, view: str) -> None:
+        if self._closing or not view:
+            return
+        refresh={"sources":self.refresh_sources,"history":self.refresh_history,"stats":self.refresh_stats}.get(view)
+        if refresh is None:
+            return
+        started=time.perf_counter()
+        try:
+            refresh()
+            self._view_dirty[view]=False
+        except Exception:
+            _LOG.debug("UI %s refresh failed", view, exc_info=True)
+        finally:
+            elapsed=(time.perf_counter()-started)*1000.0
+            if elapsed >= 500:
+                _LOG.warning("UI slow refresh view=%s elapsed_ms=%.0f", view, elapsed)
+
+    def _tab_changed(self, _event=None):
+        if self._closing:
+            return
+        view=self._active_view()
+        if view and self._view_dirty.get(view):
+            self.root.after_idle(lambda v=view:self._run_view_refresh(v))
+
+    def _refresh_event_views(self):
+        self._refresh_after_id=None
+        if self._closing:
+            return
+        # Service events dirty all live views, but only the visible one is rebuilt.
+        # Hidden 200-row trees are refreshed lazily when the operator opens them.
+        view=self._active_view()
+        if view and self._view_dirty.get(view):
+            self._run_view_refresh(view)
+
     def _record_event(self,kind,text):
+        if self._closing:
+            return
         self.last_event.set(text)
         if hasattr(self,"lt_status_var") and kind in {"languagetool","warning","error"} and "LanguageTool" in str(text):
             self.lt_status_var.set(str(text))
-        self.log_text.configure(state="normal"); self.log_text.insert("end",f"[{kind}] {text}\n"); self.log_text.see("end"); self.log_text.configure(state="disabled"); self.refresh_sources(); self.refresh_history(); self.refresh_stats()
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end",f"[{kind}] {text}\n")
+        self._log_event_count += 1
+        # The visible Text widget is only a live console. Keep it bounded; the
+        # durable audit trail remains in SQLite and is never truncated here.
+        if self._log_event_count % 50 == 0:
+            try:
+                line_count=int(self.log_text.index("end-1c").split(".")[0])
+                if line_count > 800:
+                    self.log_text.delete("1.0",f"{line_count-600}.0")
+            except (tk.TclError,ValueError):
+                pass
+        if self.tabs.select() == str(self.log_tab):
+            self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+        self._view_dirty.update({"sources":True,"history":True,"stats":True})
+        # Coalesce event bursts into a slow, visible-view-only refresh.
+        if self._refresh_after_id is None:
+            self._refresh_after_id=self.root.after(self._event_refresh_delay_ms,self._refresh_event_views)
+
+    def _refresh_lt_status_async(self):
+        if self._closing or self._lt_status_busy:
+            return
+        self._lt_status_busy=True
+        def worker():
+            try:
+                text=str(languagetool_status().get("text") or "LanguageTool: невідомий стан")
+            except Exception as exc:
+                text=f"LanguageTool: стан недоступний ({type(exc).__name__})"
+            self._post_ui(self._apply_lt_status,text)
+        threading.Thread(target=worker,daemon=True,name="ui-languagetool-status").start()
+
+    def _apply_lt_status(self,text):
+        self._lt_status_busy=False
+        if not self._closing and hasattr(self,"lt_status_var"):
+            self.lt_status_var.set(str(text))
+
     def _tick(self):
-        self.status_var.set("Автопілот: працює" if self.service.running else "Автопілот: зупинено"); self.root.after(2000,self._tick)
-    def close(self): self.service.stop(); self.root.destroy()
+        if self._closing:
+            return
+        self.status_var.set("Автопілот: працює" if self.service.running else "Автопілот: зупинено")
+        now=time.monotonic()
+        if hasattr(self,"lt_status_var") and now >= self._next_lt_status_at:
+            self._next_lt_status_at=now+15.0
+            self._refresh_lt_status_async()
+        self.root.after(2000,self._tick)
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing=True
+        self.service.stop()
+        try:
+            shutdown_languagetool()
+        finally:
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
