@@ -241,7 +241,9 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
     """Conservative publication gate for editorial media.
 
     For body media require actual lexical evidence that the caption/alt/context/file
-    belongs to this story.  A metadata-empty featured/OG image is kept as a last-resort source hint,
+    belongs to this story.  A genuinely relevant image with weak metadata may be
+    omitted; that is preferable to publishing a confident but unrelated visual.
+    Featured/OG media with no usable metadata is kept as a last-resort source hint,
     but a featured image whose metadata explicitly points elsewhere is rejected.
     """
     title_overlap, article_overlap, token_count = _semantic_media_evidence(
