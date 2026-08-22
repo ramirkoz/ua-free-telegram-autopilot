@@ -1,1 +1,1 @@
-observe rc32 v2 after obsolete-test cleanup
+observe rc32 v3 final release
