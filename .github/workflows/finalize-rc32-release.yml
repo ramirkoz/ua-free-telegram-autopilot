@@ -31,6 +31,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           @'
+          from pathlib import Path
           import subprocess
           manifest = {
             "PUBLIC_VERSION.txt": "6d33b250dbb52e3f396030898a97a5b361d2e9f5",
@@ -73,12 +74,15 @@ jobs:
           assert len(manifest) == 36
           bad = []
           for path, expected in manifest.items():
-              actual = subprocess.check_output(['git','hash-object',path], text=True).strip()
+              actual = subprocess.check_output(['git','rev-parse',f'HEAD:{path}'], text=True).strip()
               if actual != expected:
                   bad.append(f"{path}: {actual} != {expected}")
           if bad:
               raise SystemExit("RC32 exact source mismatch:\n" + "\n".join(bad))
           print("EXACT RC32 SOURCE PASS: 36/36")
+          for path in manifest:
+              Path(path).write_bytes(subprocess.check_output(['git','show',f'HEAD:{path}']))
+          print("WORKTREE NORMALIZED FROM GIT OBJECTS: 36/36")
           '@ | python -
 
       - name: Prepare canonical portable runtime
