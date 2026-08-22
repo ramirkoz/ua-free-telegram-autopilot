@@ -95,13 +95,38 @@ jobs:
         shell: pwsh
         run: python -m pytest -q
 
-      - name: Live Reuters Technology source gate
+      - name: Live Reuters Technology collection gate
         if: matrix.python-version == '3.12'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -c "from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; install_rc35_source_compat(); from telegram_autopilot.collector import detect_source; d=detect_source('https://www.reuters.com/technology/'); print('REUTERS_LIVE_SOURCE_OK', d.kind, d.url); assert d.kind in {'rss','page'}"
-          if ($LASTEXITCODE -ne 0) { throw "Live Reuters source gate failed" }
+          @'
+          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
+          from telegram_autopilot.models import Source
+
+          install_rc35_source_compat()
+          from telegram_autopilot.collector import detect_source, collect_source
+
+          detected = detect_source("https://www.reuters.com/technology/")
+          source = Source(
+              id=1,
+              channel_id=1,
+              kind=detected.kind,
+              name="Reuters Technology",
+              url=detected.url,
+              enabled=True,
+              initialized=False,
+              last_checked_at=None,
+              last_error=None,
+              priority=100,
+          )
+          items = collect_source(source)
+          assert items, f"Reuters detected as {detected.kind} ({detected.url}) but returned zero articles"
+          assert any((item.title or '').strip() for item in items)
+          print("REUTERS_LIVE_COLLECTION_OK", detected.kind, detected.url, len(items), items[0].title[:120])
+          '@ | Set-Content -Path $env:RUNNER_TEMP\reuters_live_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\reuters_live_gate.py
+          if ($LASTEXITCODE -ne 0) { throw "Live Reuters collection gate failed" }
 
       - name: Import Windows entrypoint and verify isolated database
         shell: pwsh
