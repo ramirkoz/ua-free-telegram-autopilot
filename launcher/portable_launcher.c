@@ -1,7 +1,6 @@
-#define UNICODE
-#define _UNICODE
 #include <windows.h>
 #include <wchar.h>
+#pragma comment(lib, "user32.lib")
 
 static int fail(const wchar_t *message) {
     MessageBoxW(NULL, message, L"UA FREE Telegram Autopilot", MB_OK | MB_ICONERROR);
