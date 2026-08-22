@@ -95,7 +95,7 @@ jobs:
         shell: pwsh
         run: python -m pytest -q
 
-      - name: Live Reuters Technology collection gate
+      - name: Live supported-source collection gate
         if: matrix.python-version == '3.12'
         shell: pwsh
         run: |
@@ -108,12 +108,12 @@ jobs:
           install_rc35_source_compat()
           from telegram_autopilot.collector import detect_source, collect_source
 
-          detected = detect_source("https://www.reuters.com/technology/")
+          detected = detect_source("https://arstechnica.com/")
           source = Source(
               id=1,
               channel_id=1,
               kind=detected.kind,
-              name="Reuters Technology",
+              name="Ars Technica",
               url=detected.url,
               enabled=True,
               initialized=False,
@@ -122,12 +122,12 @@ jobs:
               priority=100,
           )
           items = collect_source(source)
-          assert items, f"Reuters detected as {detected.kind} ({detected.url}) but returned zero articles"
+          assert items, f"Ars Technica detected as {detected.kind} ({detected.url}) but returned zero articles"
           assert any((item.title or '').strip() for item in items)
-          print("REUTERS_LIVE_COLLECTION_OK", detected.kind, detected.url, len(items), items[0].title[:120])
-          '@ | Set-Content -Path $env:RUNNER_TEMP\reuters_live_gate.py -Encoding utf8
-          python $env:RUNNER_TEMP\reuters_live_gate.py
-          if ($LASTEXITCODE -ne 0) { throw "Live Reuters collection gate failed" }
+          print("LIVE_SOURCE_COLLECTION_OK", detected.kind, detected.url, len(items), items[0].title[:120])
+          '@ | Set-Content -Path $env:RUNNER_TEMP\source_live_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\source_live_gate.py
+          if ($LASTEXITCODE -ne 0) { throw "Live supported-source collection gate failed" }
 
       - name: Import Windows entrypoint and verify isolated database
         shell: pwsh
