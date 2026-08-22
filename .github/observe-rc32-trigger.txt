@@ -1,1 +1,1 @@
-observe exact rc32 finalizer
+observe exact rc32 finalizer after YAML fix
