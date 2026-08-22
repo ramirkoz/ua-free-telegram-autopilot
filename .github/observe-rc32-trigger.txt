@@ -1,1 +1,1 @@
-observe exact rc32 finalizer after git-object fix
+observe rc32 v2 final release
