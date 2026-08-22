@@ -12,12 +12,7 @@ def is_access_http_error(error: BaseException | str) -> bool:
 
 
 def source_feed_candidates(url: str) -> list[str]:
-    """Return conservative RSS/Atom candidates for a public editorial page.
-
-    Path-specific candidates come before site-wide feeds. Reuters gets explicit
-    legacy/public feed aliases because its public section pages can answer 401 to
-    non-browser clients even when the feed endpoint remains readable.
-    """
+    """Return a small, bounded set of conventional public feed candidates."""
     try:
         parts = urlsplit(str(url or "").strip())
     except ValueError:
@@ -25,47 +20,19 @@ def source_feed_candidates(url: str) -> list[str]:
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         return []
 
-    host = parts.hostname.casefold().rstrip(".")
-    bare_host = host.removeprefix("www.")
-    path = parts.path or "/"
-    path_low = path.casefold().rstrip("/") or "/"
-    origin = f"{parts.scheme}://{host}"
+    origin = f"{parts.scheme}://{parts.hostname.casefold().rstrip('.')}"
+    path = (parts.path or "/").rstrip("/")
     candidates: list[str] = []
 
     def add(value: str) -> None:
         if value and value not in candidates:
             candidates.append(value)
 
-    if bare_host == "reuters.com":
-        if path_low in {"/technology", "/news/technology"} or path_low.startswith("/technology/"):
-            for value in (
-                "https://feeds.reuters.com/reuters/technologyNews?format=xml",
-                "https://feeds.reuters.com/reuters/technologyNews",
-                "http://feeds.reuters.com/reuters/technologyNews?format=xml",
-                "http://feeds.reuters.com/reuters/technologyNews",
-            ):
-                add(value)
-        elif path_low.startswith("/science"):
-            for value in (
-                "https://feeds.reuters.com/reuters/scienceNews?format=xml",
-                "https://feeds.reuters.com/reuters/scienceNews",
-                "http://feeds.reuters.com/reuters/scienceNews?format=xml",
-            ):
-                add(value)
-        elif path_low.startswith("/business") or path_low.startswith("/markets"):
-            for value in (
-                "https://feeds.reuters.com/reuters/businessNews?format=xml",
-                "https://feeds.reuters.com/reuters/businessNews",
-                "http://feeds.reuters.com/reuters/businessNews?format=xml",
-            ):
-                add(value)
-
-    base_path = path.rstrip("/")
-    if base_path:
-        for suffix in ("/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/index.xml"):
-            add(origin + base_path + suffix)
-    for suffix in ("/feed/", "/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/index.xml"):
-        add(origin + suffix)
+    if path:
+        add(origin + path + "/feed")
+        add(origin + path + "/rss.xml")
+    add(origin + "/feed")
+    add(origin + "/rss.xml")
     return candidates
 
 
@@ -85,16 +52,7 @@ def install_rc35_source_compat() -> None:
     def source_fetch(url: str, **kwargs):
         supplied = dict(kwargs.pop("headers", {}) or {})
         headers = dict(base_headers)
-        headers.update(
-            {
-                "Accept-Encoding": "identity",
-                "Connection": "keep-alive",
-                "DNT": "1",
-                "Sec-CH-UA": '"Chromium";v="142", "Not_A Brand";v="99"',
-                "Sec-CH-UA-Mobile": "?0",
-                "Sec-CH-UA-Platform": '"Windows"',
-            }
-        )
+        headers.update({"Accept-Encoding": "identity", "Connection": "keep-alive", "DNT": "1"})
         headers.update(supplied)
         try:
             return collector_module.fetch_url(url, headers=headers, **kwargs)
@@ -119,13 +77,11 @@ def install_rc35_source_compat() -> None:
     def try_feed(page_url: str):
         for candidate in source_feed_candidates(page_url):
             try:
-                response = source_fetch(candidate, max_bytes=8 * 1024 * 1024, timeout=22)
+                response = source_fetch(candidate, max_bytes=8 * 1024 * 1024, timeout=7)
                 items = collector_module.parse_rss(response.body)
                 if items:
                     return collector_module.SourceDetection(
-                        "rss",
-                        response.final_url,
-                        collector_module._suggested_name(page_url, "rss"),
+                        "rss", response.final_url, collector_module._suggested_name(page_url, "rss")
                     )
             except Exception:
                 continue
@@ -137,13 +93,15 @@ def install_rc35_source_compat() -> None:
         if username:
             return collector_module.SourceDetection("telegram", f"https://t.me/{username}", "@" + username)
 
-        # Known difficult publishers are checked through their public feed aliases
-        # before touching a section page that may answer 401/403 to automation.
         parts = urlsplit(normalized)
-        if (parts.hostname or "").casefold().removeprefix("www.") == "reuters.com":
-            feed = try_feed(normalized)
-            if feed is not None:
-                return feed
+        host = (parts.hostname or "").casefold().removeprefix("www.")
+        if host == "reuters.com":
+            raise collector_module.CollectorError(
+                "Reuters зараз блокує автоматичний збір із reuters.com (HTTP 401) і не надає придатного "
+                "публічного RSS/Atom для цього автопілота. Джерело не буде збережено як нібито робоче. "
+                "Reuters прибрано з рекомендованого набору CTRL+UA."
+            )
+
         try:
             return original_detect_source(normalized)
         except Exception as exc:
@@ -152,12 +110,10 @@ def install_rc35_source_compat() -> None:
             feed = try_feed(normalized)
             if feed is not None:
                 return feed
-            # A public page blocked only during detection may still become readable
-            # later or through a generic feed fallback. Do not make the Add Source
-            # dialog itself unusable just because a CDN dislikes this one probe.
-            return collector_module.SourceDetection(
-                "page", normalized, collector_module._suggested_name(normalized, "page")
-            )
+            raise collector_module.CollectorError(
+                "Сайт блокує автоматичну перевірку (HTTP 401/403/429), а придатний публічний RSS/Atom "
+                "fallback не знайдено. Джерело не збережено, щоб не створювати фальшиво активний запис."
+            ) from exc
 
     def common_feed_candidates(url: str) -> list[str]:
         return source_feed_candidates(url)
@@ -175,14 +131,24 @@ def install_rc35_source_compat() -> None:
                 "Сайт блокує автоматичне читання (HTTP 401/403/429), і придатний RSS/Atom fallback не знайдено."
             ) from exc
 
+    def source_detection_failed(win, button, status, error):
+        if not win.winfo_exists():
+            return
+        button.configure(state="normal")
+        text = str(error)
+        if is_access_http_error(text) or "блокує автоматич" in text or "Reuters зараз" in text:
+            status.set("🔴 Джерело недоступне для автоматичного збору.")
+            ui_module.messagebox.showwarning(ui_module.APP_NAME, text, parent=win)
+        else:
+            status.set("Не вдалося перевірити джерело.")
+            ui_module.messagebox.showerror(ui_module.APP_NAME, text, parent=win)
+
     collector_module._source_fetch = source_fetch
     collector_module._common_feed_candidates = common_feed_candidates
     collector_module.detect_source = detect_source
     collector_module.collect_source = collect_source
-
-    # ui.py and service.py imported these functions by value, so update their
-    # module-level aliases as well. RC33's source dialog calls ui.detect_source.
     ui_module.detect_source = detect_source
     service_module.collect_source = collect_source
+    ui_module.MainWindow._source_detection_failed = staticmethod(source_detection_failed)
 
     _INSTALLED = True
