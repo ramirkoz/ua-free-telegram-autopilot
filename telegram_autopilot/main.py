@@ -10,12 +10,14 @@ from .instance_lock import AlreadyRunning, InstanceLock
 from .logging_setup import configure_logging
 from .startup_recovery import recover_interrupted_work
 from .ui import MainWindow
+from .rc33_policy import install_rc33_policy
 
 
 def main() -> int:
     logger=configure_logging()
     try:
         with InstanceLock():
+            install_rc33_policy()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
