@@ -58,7 +58,7 @@ jobs:
           install_rc33_policy()
           db = Database()
           db.quick_check()
-          assert __version__ == "0.1.0-rc33"
+          assert __version__ == "0.1.0-rc34"
           print("AUTOPILOT_SOURCE_GATE_OK")
           PY
 
