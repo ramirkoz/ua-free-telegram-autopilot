@@ -54,9 +54,11 @@ jobs:
           python - <<'PY'
           from telegram_autopilot import __version__
           from telegram_autopilot.database import Database
+          from telegram_autopilot.rc33_policy import install_rc33_policy
+          install_rc33_policy()
           db = Database()
           db.quick_check()
-          assert __version__ == "0.1.0-rc32"
+          assert __version__ == "0.1.0-rc33"
           print("AUTOPILOT_SOURCE_GATE_OK")
           PY
 
@@ -95,5 +97,5 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
+          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; install_rc33_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
           if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
