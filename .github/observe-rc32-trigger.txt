@@ -1,1 +1,1 @@
-observe verified rc32 tag creation
+observe verified rc32 release publisher
