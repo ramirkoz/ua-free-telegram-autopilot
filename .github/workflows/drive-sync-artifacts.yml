@@ -16,8 +16,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
-      - name: Check out repository
+      - name: Check out exact RC34 tag
         uses: actions/checkout@v4
+        with:
+          ref: v0.1.0-rc34
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -126,5 +128,5 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           $state = if ($env:JOB_STATUS -eq 'success') { 'success' } else { 'failure' }
-          $desc = if ($state -eq 'success') { 'RC34 Drive sync artifacts built and smoke-tested' } else { 'RC34 Drive sync artifact build failed' }
+          $desc = if ($state -eq 'success') { 'RC34 tagged Drive sync artifacts built and smoke-tested' } else { 'RC34 Drive sync artifact build failed' }
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" -f state="$state" -f context='rc34-drive-sync-artifacts' -f description="$desc" -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
