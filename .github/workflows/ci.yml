@@ -100,6 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $env:PYTHONPATH = $PWD.Path
           @'
           from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
           from telegram_autopilot.models import Source
