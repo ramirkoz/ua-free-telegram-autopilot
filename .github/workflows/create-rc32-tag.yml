@@ -1,0 +1,62 @@
+name: Create verified RC32 tag
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/create-rc32-tag.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify target commit and create tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=d14d8921463660542ca3a20903d7be6afede22ec
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, subprocess, zipfile
+          ref='d14d8921463660542ca3a20903d7be6afede22ec'
+          order=[
+            'PUBLIC_VERSION.txt','README.md','RELEASE_NOTES_v0.1.0-rc32.md','VERSION.txt','app.py',
+            'telegram_autopilot/__init__.py','telegram_autopilot/ai_router.py','telegram_autopilot/article_extractor.py',
+            'telegram_autopilot/codex_engine.py','telegram_autopilot/collector.py','telegram_autopilot/database.py',
+            'telegram_autopilot/event_dedupe.py','telegram_autopilot/evidence_pack.py','telegram_autopilot/fact_guard.py',
+            'telegram_autopilot/grammar_guard.py','telegram_autopilot/instance_lock.py','telegram_autopilot/language.py',
+            'telegram_autopilot/language_tool_local.py','telegram_autopilot/local_ai_runtime.py','telegram_autopilot/logging_setup.py',
+            'telegram_autopilot/main.py','telegram_autopilot/media.py','telegram_autopilot/media_pipeline.py',
+            'telegram_autopilot/models.py','telegram_autopilot/network.py','telegram_autopilot/ollama_client.py',
+            'telegram_autopilot/paths.py','telegram_autopilot/production_pipeline.py','telegram_autopilot/rewrite_verifier.py',
+            'telegram_autopilot/secrets_store.py','telegram_autopilot/security.py','telegram_autopilot/service.py',
+            'telegram_autopilot/startup_recovery.py','telegram_autopilot/telegram.py','telegram_autopilot/ui.py',
+            'telegram_autopilot/ukrainian_quality.py']
+          t37=(2026,8,21,10,37,8); t39=(2026,8,21,10,39,22); t40=(2026,8,21,10,40,24); t41=(2026,8,21,10,41,36)
+          ts={p:t37 for p in order}
+          for p in ['PUBLIC_VERSION.txt','README.md','RELEASE_NOTES_v0.1.0-rc32.md','VERSION.txt','telegram_autopilot/__init__.py','telegram_autopilot/media_pipeline.py','telegram_autopilot/service.py','telegram_autopilot/telegram.py']: ts[p]=t39
+          for p in ['telegram_autopilot/language_tool_local.py','telegram_autopilot/network.py','telegram_autopilot/production_pipeline.py']: ts[p]=t40
+          for p in ['telegram_autopilot/rewrite_verifier.py','telegram_autopilot/ukrainian_quality.py']: ts[p]=t41
+          out=Path('rc32-target.zip')
+          with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+              for arc in order:
+                  data=subprocess.check_output(['git','show',f'{ref}:{arc}'])
+                  zi=zipfile.ZipInfo(arc,ts[arc]); zi.compress_type=zipfile.ZIP_DEFLATED; zi.create_system=3; zi.external_attr=0x81A40000; zi.create_version=20; zi.extract_version=20
+                  z.writestr(zi,data,compress_type=zipfile.ZIP_DEFLATED,compresslevel=6)
+          sha=hashlib.sha256(out.read_bytes()).hexdigest()
+          print('TARGET_SOURCE_SHA',sha)
+          if sha!='585dbb015cc45f5e4d7f9ede987f14a3e701049e40de18d171373b88d4490291':
+              raise SystemExit('TARGET_IS_NOT_CANONICAL_RC32')
+          print('TARGET_CANONICAL_RC32_PASS')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag v0.1.0-rc32 "$target"
+          git push origin refs/tags/v0.1.0-rc32
+          echo RC32_TAG_CREATED=$(git rev-parse refs/tags/v0.1.0-rc32)
