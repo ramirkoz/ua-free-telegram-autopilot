@@ -31,6 +31,7 @@ class Source:
     initialized: bool
     last_checked_at: str | None
     last_error: str | None
+    priority: int = 50
 
 
 @dataclass(slots=True)
