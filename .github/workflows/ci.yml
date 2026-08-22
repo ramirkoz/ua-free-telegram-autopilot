@@ -95,6 +95,14 @@ jobs:
         shell: pwsh
         run: python -m pytest -q
 
+      - name: Live Reuters Technology source gate
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -c "from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; install_rc35_source_compat(); from telegram_autopilot.collector import detect_source; d=detect_source('https://www.reuters.com/technology/'); print('REUTERS_LIVE_SOURCE_OK', d.kind, d.url); assert d.kind in {'rss','page'}"
+          if ($LASTEXITCODE -ne 0) { throw "Live Reuters source gate failed" }
+
       - name: Import Windows entrypoint and verify isolated database
         shell: pwsh
         run: |
