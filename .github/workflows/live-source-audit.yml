@@ -15,7 +15,7 @@ permissions:
 jobs:
   audit:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +30,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $env:PYTHONPATH = $PWD.Path
           @'
+          from concurrent.futures import ThreadPoolExecutor, as_completed
           from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
           from telegram_autopilot.models import Source
           install_rc35_source_compat()
@@ -75,8 +76,8 @@ jobs:
               bad = ("subscribe", "newsletter", "cookie", "sign up", "advertisement", "discover all the benefits")
               return len(title) >= 15 and len(body) >= 180 and not any(x in low for x in bad)
 
-          passed = 0
-          for idx, (name, url, priority) in enumerate(SOURCES, 1):
+          def audit_one(row):
+              idx, (name, url, priority) = row
               try:
                   detected = detect_source(url)
                   source = Source(
@@ -86,16 +87,23 @@ jobs:
                   )
                   items = collect_source(source)
                   good = [item for item in items if useful(item)]
-                  status = "WORKS_RSS" if detected.kind == "rss" else "WORKS_PAGE"
-                  if not good:
-                      status = "DROP_NO_USEFUL_ITEMS"
-                  else:
-                      passed += 1
+                  status = ("WORKS_RSS" if detected.kind == "rss" else "WORKS_PAGE") if good else "DROP_NO_USEFUL_ITEMS"
                   sample = (good[0].title if good else (items[0].title if items else ""))[:120].replace("|", "/")
-                  print(f"AUDIT_RESULT|{priority}|{name}|{status}|{detected.kind}|{detected.url}|total={len(items)}|useful={len(good)}|sample={sample}")
+                  return priority, f"AUDIT_RESULT|{priority}|{name}|{status}|{detected.kind}|{detected.url}|total={len(items)}|useful={len(good)}|sample={sample}", bool(good)
               except Exception as exc:
                   msg = str(exc).replace("|", "/").replace("\n", " ")[:500]
-                  print(f"AUDIT_RESULT|{priority}|{name}|DROP|error|||{msg}")
+                  return priority, f"AUDIT_RESULT|{priority}|{name}|DROP|error|||{msg}", False
+
+          results = []
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              futures = [pool.submit(audit_one, row) for row in enumerate(SOURCES, 1)]
+              for future in as_completed(futures):
+                  results.append(future.result())
+
+          results.sort(key=lambda row: row[0], reverse=True)
+          for _, line, _ in results:
+              print(line)
+          passed = sum(1 for _, _, ok in results if ok)
           print(f"AUDIT_SUMMARY|passed={passed}|total={len(SOURCES)}")
           '@ | Set-Content -Path $env:RUNNER_TEMP\live_source_audit.py -Encoding utf8
           python $env:RUNNER_TEMP\live_source_audit.py
