@@ -13,9 +13,9 @@ jobs:
     if: github.event.pull_request.head.ref == 'trigger/observe-rc32-finalizer'
     runs-on: ubuntu-latest
     steps:
-      - name: Show RC32 finalizer runs
+      - name: Show RC32 v2 finalizer runs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/finalize-rc32-release.yml/runs?branch=main&per_page=10" --jq '.workflow_runs[] | [.id,.status,.conclusion,.head_sha,.created_at,.html_url] | @tsv'
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/finalize-rc32-release-v2.yml/runs?branch=main&per_page=10" --jq '.workflow_runs[] | [.id,.status,.conclusion,.head_sha,.created_at,.html_url] | @tsv'
