@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from telegram_autopilot import collector
 from telegram_autopilot import rc35_source_compat as compat
+from telegram_autopilot.network import HttpResponse
 
 
 def _restore_installed(originals):
@@ -46,7 +47,7 @@ def test_source_fetch_retries_http_401_with_browser_navigation_headers(monkeypat
             raise collector.NetworkError(
                 "Remote request failed with HTTP 401: https://www.reuters.com/technology/"
             )
-        return collector.HttpResponse(200, {"content-type": "text/html"}, b"<html></html>", url)
+        return HttpResponse(200, {"content-type": "text/html"}, b"<html></html>", url)
 
     monkeypatch.setattr(collector, "fetch_url", fake_fetch)
     compat._INSTALLED = False
@@ -70,7 +71,7 @@ def test_reuters_detection_uses_feed_alias_before_blocked_page(monkeypatch):
     def fake_fetch(url, *, headers=None, **kwargs):
         calls.append(url)
         if "feeds.reuters.com/reuters/technologyNews" in url:
-            return collector.HttpResponse(200, {"content-type": "application/rss+xml"}, rss, url)
+            return HttpResponse(200, {"content-type": "application/rss+xml"}, rss, url)
         raise collector.NetworkError(f"Remote request failed with HTTP 401: {url}")
 
     monkeypatch.setattr(collector, "fetch_url", fake_fetch)
