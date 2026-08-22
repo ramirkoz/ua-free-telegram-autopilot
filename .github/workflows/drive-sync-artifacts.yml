@@ -1,0 +1,121 @@
+name: RC34 Drive Sync Artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/drive-sync-artifacts.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-drive-artifacts:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate RC34 metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          $public = (Get-Content PUBLIC_VERSION.txt -Raw).Trim()
+          if ($version -ne '0.1.0-rc34') { throw "Unexpected VERSION: $version" }
+          if ($public -ne $version) { throw "PUBLIC_VERSION mismatch: $public" }
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m compileall -q telegram_autopilot app.py
+          python -c "from telegram_autopilot import __version__; assert __version__ == '0.1.0-rc34'; print(__version__)"
+
+      - name: Build portable stage and native launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist-drive-sync'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $stage = Join-Path $dist 'portable'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          $pyHome = (python -c "import sys; print(sys.base_prefix)").Trim()
+          Copy-Item -Path (Join-Path $pyHome '*') -Destination $stage -Recurse -Force
+          Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,RELEASE_NOTES_v0.1.0-rc34.md -Destination $stage -Force
+          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
+          Copy-Item (Join-Path $stage 'python.exe') (Join-Path $stage '_runtime_console.exe') -Force
+          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage '_runtime_console._pth') -Encoding ascii
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if (-not $vsPath) { throw 'MSVC build tools not found' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $launcherOut = Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
+          $buildCmd = Join-Path $env:RUNNER_TEMP 'build-drive-sync-launcher.cmd'
+          @"
+          @echo off
+          call "$vcvars"
+          if errorlevel 1 exit /b 1
+          cl /nologo /O2 /DUNICODE /D_UNICODE /Fe:"$launcherOut" "launcher\portable_launcher.c" /link /SUBSYSTEM:WINDOWS
+          exit /b %errorlevel%
+          "@ | Set-Content -Path $buildCmd -Encoding ascii
+          & cmd.exe /d /c $buildCmd
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $launcherOut)) { throw 'Native launcher compilation failed' }
+
+          Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
+          "PORTABLE_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Smoke test packaged EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smokeData = Join-Path $env:RUNNER_TEMP 'drive-sync-smoke-data'
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = $smokeData
+          $p = Start-Process -FilePath (Join-Path $env:PORTABLE_STAGE 'UA_FREE_Telegram_Autopilot.exe') -WorkingDirectory $env:PORTABLE_STAGE -PassThru
+          Start-Sleep -Seconds 6
+          $p.Refresh()
+          if ($p.HasExited) { throw "Packaged EXE exited with code $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $smokeData 'telegram_autopilot.sqlite3'))) { throw 'SQLite database was not initialized' }
+          & taskkill.exe /PID $p.Id /T /F | Out-Null
+          Remove-Item Env:UA_FREE_TEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
+          Write-Host 'DRIVE_SYNC_PORTABLE_SMOKE_PASS'
+
+      - name: Build source stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $PWD 'dist-drive-sync\source'
+          New-Item -ItemType Directory -Force -Path $source | Out-Null
+          $items = @('.github','docs','launcher','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt','RELEASE_NOTES_v0.1.0-rc34.md')
+          foreach ($item in $items) { if (Test-Path $item) { Copy-Item $item -Destination $source -Recurse -Force } }
+          Get-ChildItem $source -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $source -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          "SOURCE_STAGE=$source" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc34_Windows_Portable
+          path: ${{ env.PORTABLE_STAGE }}/*
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 7
+
+      - name: Upload source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc34_Source
+          path: ${{ env.SOURCE_STAGE }}/*
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 7
