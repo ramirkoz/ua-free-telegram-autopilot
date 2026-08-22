@@ -7,6 +7,7 @@ on:
       - VERSION.txt
       - PUBLIC_VERSION.txt
       - RELEASE_NOTES_v*.md
+      - launcher/**
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -16,7 +17,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -49,7 +50,7 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m pip install --disable-pip-version-check -r requirements-test.txt
 
-      - name: Compile and test
+      - name: Compile and test source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -60,7 +61,7 @@ jobs:
           python -c "from telegram_autopilot import __version__; assert __version__ == '$env:VERSION'; print(__version__)"
           if ($LASTEXITCODE -ne 0) { throw 'version import gate failed' }
 
-      - name: Build Windows portable and source archives
+      - name: Build Windows portable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -76,25 +77,68 @@ jobs:
 
           Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,$env:NOTES -Destination $stage -Force
           Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
-
-          Copy-Item (Join-Path $stage 'pythonw.exe') (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
           Copy-Item (Join-Path $stage 'python.exe') (Join-Path $stage '_runtime_console.exe') -Force
-          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth') -Encoding ascii
           @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage '_runtime_console._pth') -Encoding ascii
           New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
           New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw 'vswhere.exe not found on Windows runner' }
+          $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if (-not $vsPath) { throw 'MSVC build tools not found on Windows runner' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found: $vcvars" }
+          $launcherOut = Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
+          $buildCmd = Join-Path $env:RUNNER_TEMP 'build-autopilot-launcher.cmd'
+          @"
+          @echo off
+          call "$vcvars"
+          if errorlevel 1 exit /b 1
+          cl /nologo /O2 /DUNICODE /D_UNICODE /Fe:"$launcherOut" "launcher\portable_launcher.c" /link /SUBSYSTEM:WINDOWS
+          exit /b %errorlevel%
+          "@ | Set-Content -Path $buildCmd -Encoding ascii
+          & cmd.exe /d /c $buildCmd
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $launcherOut)) { throw 'Native launcher compilation failed' }
 
           Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
           Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
 
-          $portableZip = Join-Path $dist "$portableName.zip"
+          "PORTABLE_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PORTABLE_NAME=$portableName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Smoke test packaged EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = $env:PORTABLE_STAGE
+          $launcher = Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
+          $smokeData = Join-Path $env:RUNNER_TEMP 'portable-smoke-data'
+          Remove-Item $smokeData -Recurse -Force -ErrorAction SilentlyContinue
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = $smokeData
+          $p = Start-Process -FilePath $launcher -WorkingDirectory $stage -PassThru
+          Start-Sleep -Seconds 6
+          $p.Refresh()
+          if ($p.HasExited) { throw "Packaged EXE exited during smoke test with code $($p.ExitCode)" }
+          $db = Join-Path $smokeData 'telegram_autopilot.sqlite3'
+          if (-not (Test-Path $db)) { throw 'Packaged EXE stayed alive but did not initialize its SQLite database' }
+          & taskkill.exe /PID $p.Id /T /F | Out-Null
+          Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
+          Write-Host 'PORTABLE_EXE_SMOKE_PASS'
+
+      - name: Build archives and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $PWD 'dist'
+          $stage = $env:PORTABLE_STAGE
+          $portableZip = Join-Path $dist "$env:PORTABLE_NAME.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portableZip -CompressionLevel Optimal -Force
 
           $sourceName = "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Source"
           $sourceStage = Join-Path $dist $sourceName
           New-Item -ItemType Directory -Force -Path $sourceStage | Out-Null
-          $items = @('.github','docs','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt',$env:NOTES)
+          $items = @('.github','docs','launcher','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt',$env:NOTES)
           foreach ($item in $items) {
             if (Test-Path $item) { Copy-Item $item -Destination $sourceStage -Recurse -Force }
           }
