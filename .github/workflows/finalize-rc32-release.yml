@@ -1,0 +1,230 @@
+name: Finalize exact Autopilot RC32 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-rc32-release.yml'
+
+permissions:
+  contents: write
+  statuses: write
+
+jobs:
+  finalize:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up canonical Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+          cache: pip
+
+      - name: Verify exact RC32 source 36 of 36
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+import subprocess
+manifest = {
+  "PUBLIC_VERSION.txt": "6d33b250dbb52e3f396030898a97a5b361d2e9f5",
+  "README.md": "1ea05fcdfa240d66bad05d358a3591452ca750ad",
+  "RELEASE_NOTES_v0.1.0-rc32.md": "a0a751cecb22e942b286943c3a902e01a2afa5de",
+  "VERSION.txt": "6d33b250dbb52e3f396030898a97a5b361d2e9f5",
+  "app.py": "c799058f4208a0ecdee7d7b3c12815f541486974",
+  "telegram_autopilot/__init__.py": "bbbfd81cb89fa8692c5798ae51ce027d616c117f",
+  "telegram_autopilot/ai_router.py": "e499781da8d7200b191155db8b76cdf56bfd6603",
+  "telegram_autopilot/article_extractor.py": "9c1780e8bf0edc92ebd6d6768b5bebf9a71b6192",
+  "telegram_autopilot/codex_engine.py": "617b55216803ca53436c98ee2bd05b785931d062",
+  "telegram_autopilot/collector.py": "48f4123c69dbb0668fff298eb9ad6afb325fafca",
+  "telegram_autopilot/database.py": "7a775e3ecd2e5db6320336f50108628b517cef0b",
+  "telegram_autopilot/event_dedupe.py": "f96d7d21a7aa3dbead702728c7a2b8bdad9211ad",
+  "telegram_autopilot/evidence_pack.py": "483e69ce0f0114c25bb27a46f49915e9b416fb0a",
+  "telegram_autopilot/fact_guard.py": "b679709d311db49ca89db2057bb7d9c01ba392bb",
+  "telegram_autopilot/grammar_guard.py": "737f4c643afc778e6c7fcfde9f2c71d1028e1d93",
+  "telegram_autopilot/instance_lock.py": "552529e86381afde74e3648e8ffda1852823c333",
+  "telegram_autopilot/language.py": "83faa0ca2923190edf7155a06f33ac30874ab3bc",
+  "telegram_autopilot/language_tool_local.py": "357d6ae769a31337372b69f580e7aab9e0374913",
+  "telegram_autopilot/local_ai_runtime.py": "0c981ed75294349b378090809746acdc2dbca5f4",
+  "telegram_autopilot/logging_setup.py": "7083ff0da242f781ce2cd8dfb2ec190b6e9c12f7",
+  "telegram_autopilot/main.py": "05e70764bae396dc915c5b1210ade8a801785e14",
+  "telegram_autopilot/media.py": "8226cecdcaf49205b1979401fff9d523d0eae676",
+  "telegram_autopilot/media_pipeline.py": "5f67ebce3b36fe88ae69e6a70c4aca4a34798055",
+  "telegram_autopilot/models.py": "8e34f504b9b60be837089ffb03b84f2feff4c35d",
+  "telegram_autopilot/network.py": "bd134f8520cac10800c90f60ea30202997c65239",
+  "telegram_autopilot/ollama_client.py": "63889a42ca6e33553573785235c798b0ea0c1bfc",
+  "telegram_autopilot/paths.py": "45be5b45bbe352a6d16c6f95f265073abbc1149d",
+  "telegram_autopilot/production_pipeline.py": "64d0fac4f67d59f2c0e514723f32fe460cec559e",
+  "telegram_autopilot/rewrite_verifier.py": "0eb634168be8d470f65276949406276b7ca59b28",
+  "telegram_autopilot/secrets_store.py": "395d2bf362ca8e4fe3cb1e6679fccaf32f5872bc",
+  "telegram_autopilot/security.py": "1f5954ff13387e649a80a1f0a3b5772504faa89d",
+  "telegram_autopilot/service.py": "527010098a6232fd8571fe67bd5bb613ad68ec62",
+  "telegram_autopilot/startup_recovery.py": "965e7b4875f51725f232214ae3e57b5f71cd6a2d",
+  "telegram_autopilot/telegram.py": "905603c2019bd4418ca0e54c0a340211e634fdd1",
+  "telegram_autopilot/ui.py": "d52619f7c3e8972cf4ec5327f6136691b95bb29f",
+  "telegram_autopilot/ukrainian_quality.py": "9e4f52206f0cdbcf2f34579e0cc408e2300cec02"
+}
+assert len(manifest) == 36
+bad = []
+for path, expected in manifest.items():
+    actual = subprocess.check_output(['git','hash-object',path], text=True).strip()
+    if actual != expected:
+        bad.append(f"{path}: {actual} != {expected}")
+if bad:
+    raise SystemExit("RC32 exact source mismatch:\n" + "\n".join(bad))
+print("EXACT RC32 SOURCE PASS: 36/36")
+'@ | python -
+
+      - name: Prepare canonical portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check --force-reinstall pip==26.1.2 Pillow==12.3.0 cryptography==46.0.4 cffi==2.1.1 pycparser==3.0
+          if ($LASTEXITCODE -ne 0) { throw 'canonical runtime dependency install failed' }
+          $pyHome = (python -c "import sys; print(sys.base_prefix)").Trim()
+          $stage = Join-Path $PWD 'dist\UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Windows_Portable'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item (Join-Path $pyHome 'DLLs') $stage -Recurse -Force
+          Copy-Item (Join-Path $pyHome 'Lib') $stage -Recurse -Force
+          Copy-Item (Join-Path $pyHome 'tcl') $stage -Recurse -Force
+          foreach ($name in @('python3.dll','python312.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+            Copy-Item (Join-Path $pyHome $name) $stage -Force
+          }
+          Copy-Item (Join-Path $pyHome 'pythonw.exe') (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
+          Copy-Item (Join-Path $pyHome 'python.exe') (Join-Path $stage '_runtime_console.exe') -Force
+          Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,RELEASE_NOTES_v0.1.0-rc32.md -Destination $stage -Force
+          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
+          [IO.File]::WriteAllText((Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth'), ".`nDLLs`nLib`nLib\site-packages`nimport site`n", [Text.Encoding]::ASCII)
+          [IO.File]::WriteAllText((Join-Path $stage '_runtime_console._pth'), ".`r`nDLLs`r`nLib`r`nLib\site-packages`r`nimport site`r`n", [Text.Encoding]::ASCII)
+          [IO.File]::WriteAllText((Join-Path $stage 'python312._pth'), ".`r`nDLLs`r`nLib`r`nLib\site-packages`r`nimport site`r`n", [Text.Encoding]::ASCII)
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
+          Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
+          $exeHash = (Get-FileHash (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $consoleHash = (Get-FileHash (Join-Path $stage '_runtime_console.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($exeHash -ne 'd72294fb338bc2fc8896d25a7395a4db466425427e1559e77185d5135a830681') { throw "launcher SHA mismatch: $exeHash" }
+          if ($consoleHash -ne '4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a') { throw "console SHA mismatch: $consoleHash" }
+
+      - name: Build byte-exact canonical RC32 archives
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+from pathlib import Path
+import hashlib, zipfile
+stage = Path('dist/UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Windows_Portable')
+portable = Path('dist/UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Windows_Portable.zip')
+source = Path('dist/UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Source.zip')
+source_order = [
+  "PUBLIC_VERSION.txt", "README.md", "RELEASE_NOTES_v0.1.0-rc32.md", "VERSION.txt", "app.py",
+  "telegram_autopilot/__init__.py", "telegram_autopilot/ai_router.py", "telegram_autopilot/article_extractor.py",
+  "telegram_autopilot/codex_engine.py", "telegram_autopilot/collector.py", "telegram_autopilot/database.py",
+  "telegram_autopilot/event_dedupe.py", "telegram_autopilot/evidence_pack.py", "telegram_autopilot/fact_guard.py",
+  "telegram_autopilot/grammar_guard.py", "telegram_autopilot/instance_lock.py", "telegram_autopilot/language.py",
+  "telegram_autopilot/language_tool_local.py", "telegram_autopilot/local_ai_runtime.py", "telegram_autopilot/logging_setup.py",
+  "telegram_autopilot/main.py", "telegram_autopilot/media.py", "telegram_autopilot/media_pipeline.py",
+  "telegram_autopilot/models.py", "telegram_autopilot/network.py", "telegram_autopilot/ollama_client.py",
+  "telegram_autopilot/paths.py", "telegram_autopilot/production_pipeline.py", "telegram_autopilot/rewrite_verifier.py",
+  "telegram_autopilot/secrets_store.py", "telegram_autopilot/security.py", "telegram_autopilot/service.py",
+  "telegram_autopilot/startup_recovery.py", "telegram_autopilot/telegram.py", "telegram_autopilot/ui.py",
+  "telegram_autopilot/ukrainian_quality.py"
+]
+t39 = (2026,8,21,10,39,22); t37 = (2026,8,21,10,37,8); t40 = (2026,8,21,10,40,24); t41 = (2026,8,21,10,41,36)
+source_ts = {p:t37 for p in source_order}
+for p in ["PUBLIC_VERSION.txt","README.md","RELEASE_NOTES_v0.1.0-rc32.md","VERSION.txt","telegram_autopilot/__init__.py","telegram_autopilot/media_pipeline.py","telegram_autopilot/service.py","telegram_autopilot/telegram.py"]: source_ts[p]=t39
+for p in ["telegram_autopilot/language_tool_local.py","telegram_autopilot/network.py","telegram_autopilot/production_pipeline.py"]: source_ts[p]=t40
+for p in ["telegram_autopilot/rewrite_verifier.py","telegram_autopilot/ukrainian_quality.py"]: source_ts[p]=t41
+runtime_ts = (2026,8,21,10,40,30)
+def add(z, path, arc, dt):
+    zi = zipfile.ZipInfo(arc, tuple(dt)); zi.compress_type = zipfile.ZIP_DEFLATED; zi.create_system = 3; zi.external_attr = 0x81A40000; zi.create_version = 20; zi.extract_version = 20
+    z.writestr(zi, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=6)
+with zipfile.ZipFile(source, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+    for arc in source_order: add(z, Path(arc), arc, source_ts[arc])
+source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+if source_sha != '585dbb015cc45f5e4d7f9ede987f14a3e701049e40de18d171373b88d4490291': raise SystemExit(f'canonical source ZIP mismatch: {source_sha}')
+print('CANONICAL SOURCE ZIP PASS', source_sha)
+def recurse(z, directory, prefix=''):
+    for p in sorted(directory.iterdir(), key=lambda p: p.name):
+        arc = f'{prefix}{p.name}'
+        if p.is_dir(): recurse(z, p, arc + '/')
+        else: add(z, p, arc, source_ts.get(arc, runtime_ts))
+with zipfile.ZipFile(portable, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z: recurse(z, stage)
+portable_sha = hashlib.sha256(portable.read_bytes()).hexdigest()
+print('PORTABLE SHA', portable_sha)
+Path('dist/UA_FREE_Telegram_Autopilot_v0.1.0-rc32_SHA256SUMS.txt').write_text(portable_sha+'  '+portable.name+'\n'+source_sha+'  '+source.name+'\n', encoding='ascii', newline='\n')
+if portable_sha != '534f253e2d1dfd4d8f27f8c2d10893323585c57f68fc5a8a86bcef78e7aa117b': raise SystemExit(f'canonical portable ZIP mismatch: {portable_sha}')
+print('CANONICAL PORTABLE ZIP PASS', portable_sha)
+'@ | python -
+
+      - name: Run complete tests after canonical build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+          python -m compileall -q telegram_autopilot tests app.py
+          if ($LASTEXITCODE -ne 0) { throw 'compileall failed' }
+          python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { throw 'pytest failed' }
+          python -c "from telegram_autopilot import __version__; assert __version__ == '0.1.0-rc32'; print('RC32_VERSION_PASS', __version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'version import failed' }
+
+      - name: Publish exact GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v0.1.0-rc32'
+          $portable = 'dist\UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Windows_Portable.zip'
+          $source = 'dist\UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Source.zip'
+          $sums = 'dist\UA_FREE_Telegram_Autopilot_v0.1.0-rc32_SHA256SUMS.txt'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $portable $source $sums --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'release upload failed' }
+            gh release edit $tag --target main --title 'UA FREE Telegram Autopilot 0.1.0-rc32' --notes-file RELEASE_NOTES_v0.1.0-rc32.md --prerelease
+          } else {
+            gh release create $tag $portable $source $sums --target $env:GITHUB_SHA --title 'UA FREE Telegram Autopilot 0.1.0-rc32' --notes-file RELEASE_NOTES_v0.1.0-rc32.md --prerelease
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'release publication failed' }
+          $data = (gh release view $tag --json url,isPrerelease,assets) | ConvertFrom-Json
+          if (-not $data.isPrerelease) { throw 'release is not marked prerelease' }
+          $names = @($data.assets | ForEach-Object { $_.name })
+          foreach ($required in @('UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Windows_Portable.zip','UA_FREE_Telegram_Autopilot_v0.1.0-rc32_Source.zip','UA_FREE_Telegram_Autopilot_v0.1.0-rc32_SHA256SUMS.txt')) {
+            if ($names -notcontains $required) { throw "missing release asset: $required" }
+          }
+          Write-Host "RC32_GITHUB_RELEASE_PASS $($data.url)"
+
+      - name: Mark RC32 finalization success
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/$env:GITHUB_SHA" `
+            -f state=success `
+            -f context=rc32-release-final `
+            -f description="exact 36/36 + canonical ZIPs + release PASS" `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw 'status publication failed' }
+
+      - name: Remove one-time finalizer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/finalize-rc32-release.yml
+          git commit -m 'Remove one-time RC32 release finalizer'
+          git push origin HEAD:main
