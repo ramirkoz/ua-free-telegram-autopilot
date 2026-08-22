@@ -1,0 +1,98 @@
+name: RC35 Live Source Audit
+
+on:
+  push:
+    branches:
+      - audit/rc35-live-sources-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Audit live sources through product collector
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PYTHONPATH = $PWD.Path
+          @'
+          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
+          from telegram_autopilot.models import Source
+          install_rc35_source_compat()
+          from telegram_autopilot.collector import detect_source, collect_source
+
+          SOURCES = [
+              ("Ars Technica", "https://arstechnica.com/", 100),
+              ("IEEE Spectrum", "https://spectrum.ieee.org/", 98),
+              ("WIRED", "https://www.wired.com/", 97),
+              ("MIT Technology Review", "https://www.technologyreview.com/", 96),
+              ("BleepingComputer", "https://www.bleepingcomputer.com/", 95),
+              ("SecurityWeek", "https://www.securityweek.com/", 94),
+              ("TechCrunch", "https://techcrunch.com/", 93),
+              ("Nature News", "https://www.nature.com/news", 92),
+              ("The Register", "https://www.theregister.com/", 91),
+              ("404 Media", "https://www.404media.co/", 90),
+              ("InfoQ", "https://www.infoq.com/news/", 89),
+              ("Axios Technology", "https://www.axios.com/technology", 88),
+              ("KrebsOnSecurity", "https://krebsonsecurity.com/", 87),
+              ("Rest of World", "https://restofworld.org/", 86),
+              ("Dark Reading", "https://www.darkreading.com/", 85),
+              ("Tom's Hardware", "https://www.tomshardware.com/", 84),
+              ("EE Times", "https://www.eetimes.com/", 83),
+              ("The Next Platform", "https://www.nextplatform.com/", 82),
+              ("Quanta Magazine", "https://www.quantamagazine.org/", 81),
+              ("ServeTheHome", "https://www.servethehome.com/", 80),
+              ("Semafor Technology", "https://www.semafor.com/technology", 79),
+              ("ZDNET AI", "https://www.zdnet.com/topic/artificial-intelligence/", 78),
+              ("VentureBeat AI", "https://venturebeat.com/ai/", 77),
+              ("NASA Technology", "https://www.nasa.gov/technology/", 76),
+              ("ESA", "https://www.esa.int/", 75),
+              ("Space.com", "https://www.space.com/", 74),
+              ("Engadget", "https://www.engadget.com/", 72),
+              ("CNET Tech", "https://www.cnet.com/tech/", 70),
+              ("Phys.org Technology", "https://phys.org/technology-news/", 69),
+              ("Scientific American", "https://www.scientificamerican.com/", 68),
+          ]
+
+          def useful(item):
+              title = (item.title or "").strip()
+              body = (item.raw_text or "").strip()
+              low = (title + " " + body[:300]).lower()
+              bad = ("subscribe", "newsletter", "cookie", "sign up", "advertisement", "discover all the benefits")
+              return len(title) >= 15 and len(body) >= 180 and not any(x in low for x in bad)
+
+          passed = 0
+          for idx, (name, url, priority) in enumerate(SOURCES, 1):
+              try:
+                  detected = detect_source(url)
+                  source = Source(
+                      id=idx, channel_id=1, kind=detected.kind, name=name,
+                      url=detected.url, enabled=True, initialized=False,
+                      last_checked_at=None, last_error=None, priority=priority,
+                  )
+                  items = collect_source(source)
+                  good = [item for item in items if useful(item)]
+                  status = "WORKS_RSS" if detected.kind == "rss" else "WORKS_PAGE"
+                  if not good:
+                      status = "DROP_NO_USEFUL_ITEMS"
+                  else:
+                      passed += 1
+                  sample = (good[0].title if good else (items[0].title if items else ""))[:120].replace("|", "/")
+                  print(f"AUDIT_RESULT|{priority}|{name}|{status}|{detected.kind}|{detected.url}|total={len(items)}|useful={len(good)}|sample={sample}")
+              except Exception as exc:
+                  msg = str(exc).replace("|", "/").replace("\n", " ")[:500]
+                  print(f"AUDIT_RESULT|{priority}|{name}|DROP|error|||{msg}")
+          print(f"AUDIT_SUMMARY|passed={passed}|total={len(SOURCES)}")
+          '@ | Set-Content -Path $env:RUNNER_TEMP\live_source_audit.py -Encoding utf8
+          python $env:RUNNER_TEMP\live_source_audit.py
