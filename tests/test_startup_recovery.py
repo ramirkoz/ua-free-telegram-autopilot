@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from telegram_autopilot.database import Database
@@ -13,23 +12,29 @@ def _seed(db: Database) -> None:
             con.execute("INSERT INTO articles(id,channel_id,source_id,external_id,title,url,normalized_url,raw_text,content_hash,discovered_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (article_id,1,1,f'x{article_id}',f'Article {article_id}',f'https://example.com/{article_id}',f'https://example.com/{article_id}','text',f'h{article_id}','2026-08-17T10:00:00+00:00',status))
 
 
-def test_startup_recovery_requeues_safe_processing_and_quarantines_external_writes(tmp_path: Path, monkeypatch):
+def test_startup_recovery_matches_rc32_contract(tmp_path: Path, monkeypatch):
     db = Database(tmp_path / 'recovery.sqlite3')
     _seed(db)
-    state_path = tmp_path / 'ai_state.json'
-    state_path.write_text(json.dumps({'cooldowns': {
-        'model:nvidia:nvidia/nemotron-3-ultra-550b-a55b': {'until': 9999999999, 'reason': 'validation'},
-        'provider:gemini': {'until': 9999999999, 'reason': 'quota'},
-    }}), encoding='utf-8')
-    monkeypatch.setattr(startup_recovery, 'ai_state_path', lambda: state_path)
+    monkeypatch.setattr(startup_recovery, 'clear_router_cooldowns', lambda: None)
+
     result = startup_recovery.recover_interrupted_work(db)
-    assert result == {'processing_to_retry': 1, 'external_to_unknown': 2, 'stale_model_cooldowns_removed': 1}
+
+    assert result == {
+        'processing_to_retry': 1,
+        'external_to_unknown': 1,
+        'runtime_health_reset': 1,
+        'recent_technical_requeued': 0,
+    }
     assert db.get_article(1)['status'] == 'retry'
     assert db.get_article(1)['next_retry_at'] is None
-    assert db.get_article(2)['status'] == 'unknown'
+    assert db.get_article(2)['status'] == 'telegraph_writing'
     assert db.get_article(3)['status'] == 'unknown'
     assert [row['id'] for row in db.pending_articles(1, limit=10)] == [1]
-    state = json.loads(state_path.read_text(encoding='utf-8'))
-    assert 'model:nvidia:nvidia/nemotron-3-ultra-550b-a55b' not in state['cooldowns']
-    assert 'provider:gemini' in state['cooldowns']
-    assert startup_recovery.recover_interrupted_work(db)['stale_model_cooldowns_removed'] == 0
+
+    second = startup_recovery.recover_interrupted_work(db)
+    assert second == {
+        'processing_to_retry': 0,
+        'external_to_unknown': 0,
+        'runtime_health_reset': 0,
+        'recent_technical_requeued': 0,
+    }
