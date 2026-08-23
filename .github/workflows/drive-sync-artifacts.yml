@@ -1,4 +1,4 @@
-name: RC35 Drive Sync Artifacts
+name: RC36 Exact Release Assets for Drive Sync
 
 on:
   push:
@@ -12,120 +12,54 @@ permissions:
   statuses: write
 
 jobs:
-  build-drive-artifacts:
-    runs-on: windows-latest
-    timeout-minutes: 35
+  archive-release-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Check out exact RC35 tag
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: v0.1.0-rc35
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Validate tagged source
-        shell: pwsh
+      - name: Download exact GitHub Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $version = (Get-Content VERSION.txt -Raw).Trim()
-          if ($version -ne '0.1.0-rc35') { throw "Unexpected VERSION: $version" }
-          python -m pip install --disable-pip-version-check -r requirements.txt
-          python -m compileall -q telegram_autopilot app.py
-          python -c "from telegram_autopilot import __version__; assert __version__ == '0.1.0-rc35'; print(__version__)"
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download v0.1.0-rc36 \
+            --repo "${{ github.repository }}" \
+            --dir release-assets \
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Windows_Portable.zip' \
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Source.zip' \
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt'
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Windows_Portable.zip
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Source.zip
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt
+          (cd release-assets && sha256sum -c UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt)
 
-      - name: Build tagged Windows portable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = Join-Path $PWD 'dist-drive-sync'
-          $stage = Join-Path $root 'portable'
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          $pyHome = (python -c "import sys; print(sys.base_prefix)").Trim()
-          Copy-Item -Path (Join-Path $pyHome '*') -Destination $stage -Recurse -Force
-          Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,RELEASE_NOTES_v0.1.0-rc35.md -Destination $stage -Force
-          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
-          Copy-Item (Join-Path $stage 'python.exe') (Join-Path $stage '_runtime_console.exe') -Force
-          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage '_runtime_console._pth') -Encoding ascii
-          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
-          New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
-
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
-          if (-not $vsPath) { throw 'MSVC build tools not found' }
-          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $launcherOut = Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
-          $buildCmd = Join-Path $env:RUNNER_TEMP 'build-rc35-drive-launcher.cmd'
-          @"
-          @echo off
-          call "$vcvars"
-          if errorlevel 1 exit /b 1
-          cl /nologo /O2 /DUNICODE /D_UNICODE /Fe:"$launcherOut" "launcher\portable_launcher.c" /link /SUBSYSTEM:WINDOWS
-          exit /b %errorlevel%
-          "@ | Set-Content -Path $buildCmd -Encoding ascii
-          & cmd.exe /d /c $buildCmd
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $launcherOut)) { throw 'Native launcher compilation failed' }
-          Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-          Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
-          "PORTABLE_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Smoke test packaged EXE
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $smokeData = Join-Path $env:RUNNER_TEMP 'rc35-drive-smoke-data'
-          Remove-Item $smokeData -Recurse -Force -ErrorAction SilentlyContinue
-          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = $smokeData
-          $p = Start-Process -FilePath (Join-Path $env:PORTABLE_STAGE 'UA_FREE_Telegram_Autopilot.exe') -WorkingDirectory $env:PORTABLE_STAGE -PassThru
-          Start-Sleep -Seconds 6
-          $p.Refresh()
-          if ($p.HasExited) { throw "Packaged EXE exited with code $($p.ExitCode)" }
-          if (-not (Test-Path (Join-Path $smokeData 'telegram_autopilot.sqlite3'))) { throw 'SQLite database was not initialized' }
-          & taskkill.exe /PID $p.Id /T /F | Out-Null
-          Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
-          Write-Host 'RC35_DRIVE_PORTABLE_SMOKE_PASS'
-
-      - name: Build tagged source stage
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = Join-Path $PWD 'dist-drive-sync\source'
-          New-Item -ItemType Directory -Force -Path $source | Out-Null
-          $items = @('.github','docs','launcher','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt','RELEASE_NOTES_v0.1.0-rc35.md')
-          foreach ($item in $items) { if (Test-Path $item) { Copy-Item $item -Destination $source -Recurse -Force } }
-          Get-ChildItem $source -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Get-ChildItem $source -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-          "SOURCE_STAGE=$source" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Upload portable artifact
+      - name: Upload exact release assets for Drive synchronization
         uses: actions/upload-artifact@v4
         with:
-          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc35_Windows_Portable
-          path: ${{ env.PORTABLE_STAGE }}/*
-          include-hidden-files: true
-          compression-level: 6
+          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc36_EXACT_RELEASE_ASSETS
+          path: release-assets/*
+          compression-level: 0
           retention-days: 7
 
-      - name: Upload source artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc35_Source
-          path: ${{ env.SOURCE_STAGE }}/*
-          include-hidden-files: true
-          compression-level: 6
-          retention-days: 7
-
-      - name: Report Drive sync artifact status
+      - name: Report exact-asset sync status
         if: always()
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
         run: |
-          $state = if ($env:JOB_STATUS -eq 'success') { 'success' } else { 'failure' }
-          $desc = if ($state -eq 'success') { 'RC35 tagged Drive artifacts built and smoke-tested' } else { 'RC35 tagged Drive artifact build failed' }
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" -f state="$state" -f context='rc35-drive-sync-artifacts' -f description="$desc" -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          state=failure
+          desc='RC36 exact release asset archive failed'
+          if [ "$JOB_STATUS" = success ]; then
+            state=success
+            desc='RC36 exact GitHub Release assets ready for Drive sync'
+          fi
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state="$state" \
+            -f context='rc36-drive-sync-assets' \
+            -f description="$desc" \
+            -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
