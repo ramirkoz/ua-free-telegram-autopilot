@@ -1,50 +1,49 @@
-# UA FREE Telegram Autopilot v0.1.0-rc32
+# UA FREE Telegram Autopilot v0.1.0-rc37
 
-Windows portable застосунок для збору технологічних/наукових новин, безпечного AI-рерайту українською та прямої публікації в Telegram.
+Windows portable застосунок для збору технологічних/наукових новин, редакційного відбору, безпечного AI-рерайту українською та прямої публікації в Telegram.
 
-## Production-конвеєр RC30
+## Production-конвеєр RC37
 
-`джерело → очищення → exact/title/event dedupe → Evidence Pack → reviewed AI writer → Fact Guard → trusted editor за потреби → Ukrainian hard gate → optional LanguageTool → Telegram`
+`джерело → source-health/backoff → exact/event dedupe → newsworthiness gate → media relevance gate → Evidence Pack → trusted writer → Fact Guard → mandatory human-interest editor → final UA/editorial gates → Telegram`
+
+### Редакційний відбір
+
+- Автопілот не повинен займати слот гайдами, explainers, shopping/accessory roundups, порадами, колонками, poetry/soft conference recaps та іншими матеріалами без окремої новинної події.
+- Очевидні multi-topic editorial mashups відсіюються до AI-рерайту.
+- Високий priority джерела не дає автоматичного пропуску слабкому конкретному матеріалу.
+
+### Стиль CTRL+UA
+
+- Writer шукає не «весь зміст статті», а найцікавішу історію всередині неї.
+- Перше речення має бути фактичним гачком: наслідок, конфлікт, сильна цифра, несподівана деталь або конкретна зміна.
+- У фінальний пост беруться лише 3–6 деталей, які реально варто запам'ятати.
+- Немає обов'язкової чотириабзацної структури, формального висновку, пояснення очевидного та AI-переходів на кшталт «це важливо, тому що».
+- Додані topic-near synthetic few-shot examples. Вони навчають редакторської механіки, але їхні факти заборонено переносити в поточну новину; Fact Guard це додатково перевіряє.
+- Final human-interest editor є обов'язковим. Якщо Codex/Gemini не можуть дати живий і фактологічно безпечний текст, матеріал іде в bounded retry, а не публікує нудний safe draft.
 
 ### AI Router
 
-- Production використовує лише статичний allowlist перевірених моделей. Автоматичне додавання випадкових моделей із provider `/models` у unattended publication вимкнено.
-- Пріоритет стабільний: Codex/ChatGPT → Gemini → reviewed NVIDIA/Groq/Cloudflare → local Ollama/llama.cpp.
-- Відновлений Codex знову є першим production writer; старий quota cooldown Codex обмежено приблизно 5 хвилинами, щоб відновлений ChatGPT-ліміт не залишався прихованим.
-- Остання випадково успішна fallback-модель більше не стає автоматично першим writer наступної новини.
-- Якщо перший придатний draft створив NVIDIA/Groq/Cloudflare/local, він не може піти в Telegram напряму: фінальний текст повинен підтвердити trusted editor Codex або Gemini.
-- Якщо trusted editor недоступний, матеріал іде в bounded retry, а не в autopublish.
+- Unattended production writer/editor: `Codex / ChatGPT → Gemini`.
+- NVIDIA, Groq, Cloudflare та local Ollama/llama.cpp залишаються доступними в діагностиці/LAB, але production більше не витрачає хвилини на fallback-ланцюжок, який усе одно потребував Codex/Gemini перед публікацією.
+- Provider health/cooldown і article QA залишаються розділеними.
 
-### Editorial safety
+### Медіа
 
-- Fact Guard, number/year checks, attribution/relationship protections залишаються hard gates.
-- Додано загальний structural corruption gate: зациклені фрази, повторені речення/слова, аномально низька лексична різноманітність, домінування однієї словоформи/основи, Russian-only letters, злиті Latin+Cyrillic слова, незакриті лапки.
-- Технічні форми на кшталт `AI-сервіс`, `OAuth-потік`, `Xtra-версія` не блокуються лише через різні абетки по обидва боки дефіса.
-- Фінальний deterministic editorial threshold: 82/100. Старий аварійний fail-open поріг 58 прибрано.
-- LanguageTool лишається локальним додатковим proofreader, але не є єдиною лінією захисту: після нього знову працюють Fact/UA/structural gates.
+- Без релевантного фото/відео новина не публікується (`SKIP_NO_MEDIA`).
+- Featured/OG image не вважається релевантним лише через metadata: потрібен story-specific semantic evidence.
+- Якщо Telegram відхиляє медіа, текстовий fallback заборонений.
 
 ### Source health
 
-- HTTP 429 отримує 20-хвилинний backoff, HTTP 403 — 10 хвилин, тимчасова network/DNS помилка — 3 хвилини.
-- Backoff читається з уже наявного `source_health`, тому перезапуск програми не змушує одразу знову бити rate-limited джерело. Ручний цикл `Перевірити зараз` свідомо обходить цей backoff.
+- Хронічні HTTP 429/403, HTML замість feed, network/DNS/timeout помилки отримують persistent adaptive backoff.
+- Чим довше джерело стабільно помиляється, тим довша пауза; успішна перевірка очищає `last_error` і одразу повертає нормальний цикл.
+- Ручний `Перевірити зараз` свідомо обходить backoff.
 
-### Dedupe
+### Safety
 
-- Збережені exact/title/high-precision event правила.
-- Додано safe cross-length event rule для ситуації, коли перший короткий матеріал і пізніший довший follow-up описують ту саму конкретну подію.
-- Pending/retry rewrite cache marker піднято до `telegram-post-v17`, тому незапубліковані RC29-кандидати не обходять новий RC30 editorial pipeline після перенесення `Data`.
-
-### Діагностика
-
-У `telegram_autopilot.log` тепер видно production route без текстів/секретів:
-
-- provider/model AI attempt;
-- transport/provider failure;
-- успішний generator;
-- потребу trusted-editor pass;
-- trusted editor provider/model;
-- final editorial score, LanguageTool changes та довжину фінального body.
+- Evidence Pack, Fact Guard, number/year checks, attribution/relationship protections, Ukrainian hard gate та structural/editorial gates залишаються hard requirements.
+- Cache marker: `telegram-post-v22`, тому pending/retry RC36 drafts перегенеровуються за новим редакційним контрактом.
 
 ## Дані та portable-режим
 
-Сумісність існуючої папки `Data` і SQLite-схеми збережена. Для оновлення розпакуйте RC30 в нову папку та перенесіть туди всю `Data` з RC29. Не накладайте runtime-файли поверх старої збірки.
+SQLite-схема не змінена. Для оновлення розпакуйте RC37 у нову папку та перенесіть туди **всю папку `Data`** з RC36. Не накладайте runtime-файли поверх старої збірки.
