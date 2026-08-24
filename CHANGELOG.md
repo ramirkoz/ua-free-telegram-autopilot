@@ -50,3 +50,10 @@
 - Local source gate: PASS.
 - Native Windows live acceptance on the user's real `Data`: PENDING.
 - RC9 must not be merged to stable `main` before that live gate passes.
+
+## 0.1.0-rc37
+- Tightened CTRL+UA newsworthiness filtering for explainers/guides/roundups/soft editorial content.
+- Replaced generic humanization with hook-first newsroom writing, topic-near few-shot examples and a mandatory trusted human-interest final edit.
+- Restricted unattended production AI routing to Codex/Gemini; kept other providers for diagnostics/LAB.
+- Added persistent adaptive source backoff for chronic 429/403/feed-content/network failures.
+- Preserved RC36 media-required and semantic media safeguards.
