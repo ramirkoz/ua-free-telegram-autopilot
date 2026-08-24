@@ -1,4 +1,4 @@
-name: RC36 Exact Release Assets for Drive Sync
+name: RC37 Exact Release Assets for Drive Sync
 
 on:
   push:
@@ -26,21 +26,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          gh release download v0.1.0-rc36 \
+          gh release download v0.1.0-rc37 \
             --repo "${{ github.repository }}" \
             --dir release-assets \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Windows_Portable.zip' \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Source.zip' \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt'
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Windows_Portable.zip
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_Source.zip
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt
-          (cd release-assets && sha256sum -c UA_FREE_Telegram_Autopilot_v0.1.0-rc36_SHA256SUMS.txt)
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Windows_Portable.zip' \
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Source.zip' \
+            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt'
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Windows_Portable.zip
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Source.zip
+          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt
+          (cd release-assets && sha256sum -c UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt)
 
       - name: Upload exact release assets for Drive synchronization
         uses: actions/upload-artifact@v4
         with:
-          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc36_EXACT_RELEASE_ASSETS
+          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc37_EXACT_RELEASE_ASSETS
           path: release-assets/*
           compression-level: 0
           retention-days: 7
@@ -53,13 +53,13 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           state=failure
-          desc='RC36 exact release asset archive failed'
+          desc='RC37 exact release asset archive failed'
           if [ "$JOB_STATUS" = success ]; then
             state=success
-            desc='RC36 exact GitHub Release assets ready for Drive sync'
+            desc='RC37 exact GitHub Release assets ready for Drive sync'
           fi
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state="$state" \
-            -f context='rc36-drive-sync-assets' \
+            -f context='rc37-drive-sync-assets' \
             -f description="$desc" \
             -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
