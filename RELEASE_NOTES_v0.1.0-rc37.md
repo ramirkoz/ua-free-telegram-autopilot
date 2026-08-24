@@ -13,6 +13,7 @@ Stabilization/editorial-quality release based on RC36.
 - Production writing no longer burns time across NVIDIA/Groq/Cloudflare/local fallbacks. Those providers remain available for diagnostics/LAB; unattended production writer/editor routing is Codex -> Gemini.
 - Chronic source failures use persistent adaptive backoff: 429/403, wrong content type/feed HTML, network and timeout errors receive progressively longer pauses and recover immediately after a successful check.
 - Cache marker bumped to `telegram-post-v22`, so pending cached RC36 drafts are regenerated with the new editorial contract.
+- Canonical Windows release no longer uses the custom native launcher that triggered Microsoft Defender on the local RC37 candidate. `UA_FREE_Telegram_Autopilot.exe` is an unchanged official `pythonw.exe` signed by Python Software Foundation; GitHub Actions verifies the Authenticode signer, smoke-tests startup, updates Defender signatures, scans the extracted runtime and scans the final ZIP before publication.
 
 ## Compatibility
 - No SQLite schema change.
