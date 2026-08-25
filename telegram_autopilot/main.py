@@ -13,6 +13,7 @@ from .ui import MainWindow
 from .rc33_policy import install_rc33_policy
 from .rc35_source_compat import install_rc35_source_compat
 from .rc37_policy import install_rc37_policy
+from .rc38_policy import install_rc38_policy
 
 
 def main() -> int:
@@ -22,6 +23,7 @@ def main() -> int:
             install_rc33_policy()
             install_rc35_source_compat()
             install_rc37_policy()
+            install_rc38_policy()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
