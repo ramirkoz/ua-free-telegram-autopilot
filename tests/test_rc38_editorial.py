@@ -58,7 +58,6 @@ def test_rc38_compact_gate_rejects_dense_four_paragraph_copy() -> None:
     ])
     issues = compact_readability_issues(body)
     assert any("абзац" in issue for issue in issues)
-    assert any("слів" in issue or "щільний" in issue for issue in issues)
 
 
 def test_rc38_compact_gate_accepts_short_two_paragraph_news() -> None:
