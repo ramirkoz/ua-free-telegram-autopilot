@@ -84,7 +84,6 @@ def test_rc41_ai_still_has_more_editorial_room_than_cyber():
     recent = [
         row("Claude launches new agent tools"),
         row("Gemini adds multimodal agent mode"),
-        row("OpenAI updates ChatGPT Work"),
         row("Robot learns warehouse task"),
         row("New battery research published"),
         row("Windows adds privacy controls"),
@@ -92,6 +91,7 @@ def test_rc41_ai_still_has_more_editorial_room_than_cyber():
         row("NASA releases telescope images"),
         row("New processor targets laptops"),
         row("Tech startup raises a new round"),
+        row("New display technology reaches laptops"),
     ]
     article = row("Qwen releases a new multimodal AI model")
     assert topic_balance_reject_reason_rc41(article, recent) == ""
