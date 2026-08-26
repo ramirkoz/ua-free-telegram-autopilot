@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-rc41 — 2026-08-26
+
+### Changed
+- Replaced the broad RC38 topic buckets with a finer CTRL+UA editorial mix: AI/models/agents, practical open-source tools, robotics/mobility, science/health, space, hardware/compute, consumer tech, tech business/platforms and cyber.
+- Removed the blanket topic-balance bypass for ordinary CVEs/critical vulnerabilities that allowed security feeds to dominate live output.
+- Added category-specific rolling caps; cyber is limited most aggressively while AI keeps more room as a core CTRL+UA topic.
+- RC37 newsworthiness can now rescue genuinely useful non-shopping open-source tools/resources from guide/explainer rejection.
+- Shopping/deal/accessory content stays rejected.
+- Cache marker advanced to `telegram-post-v26`.
+
+### Preserved
+- RC40 factual/language hard gates and soft editorial repair.
+- RC38 event dedupe, RC37 source backoff and media-required semantics.
+- Existing SQLite/Data compatibility.
+
 ## 0.1.0-rc40 — 2026-08-26
 
 ### Fixed
