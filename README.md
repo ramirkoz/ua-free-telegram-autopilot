@@ -1,49 +1,52 @@
-# UA FREE Telegram Autopilot v0.1.0-rc37
+# UA FREE Telegram Autopilot v0.1.0-rc39
 
 Windows portable застосунок для збору технологічних/наукових новин, редакційного відбору, безпечного AI-рерайту українською та прямої публікації в Telegram.
 
-## Production-конвеєр RC37
+## Production-конвеєр RC39
 
-`джерело → source-health/backoff → exact/event dedupe → newsworthiness gate → media relevance gate → Evidence Pack → trusted writer → Fact Guard → mandatory human-interest editor → final UA/editorial gates → Telegram`
+`джерело → source-health/backoff → exact/event dedupe → newsworthiness → topic balance → media relevance → Evidence Pack → RU editorial bridge → fresh UA author → Fact Guard → UA/anti-slop gates → Telegram`
 
-### Редакційний відбір
+### Новий редакторський міст
 
-- Автопілот не повинен займати слот гайдами, explainers, shopping/accessory roundups, порадами, колонками, poetry/soft conference recaps та іншими матеріалами без окремої новинної події.
-- Очевидні multi-topic editorial mashups відсіюються до AI-рерайту.
-- Високий priority джерела не дає автоматичного пропуску слабкому конкретному матеріалу.
+- Перший AI-прохід пише **внутрішню російську редакторську чернетку**. Його завдання не перекладати статтю, а знайти всередині неї історію: сильний факт, конфлікт, наслідок, дивну деталь або людський епізод.
+- Російська чернетка не є джерелом фактів. Числа й роки перевіряються вже на цьому етапі, а фінальний Fact Guard все одно працює проти оригінального SOURCE EVIDENCE PACK.
+- Другий прохід **пише український пост заново**, використовуючи російську чернетку тільки як редакторський кут. Речення за реченням перекладати її заборонено.
+- Якщо bridge і SOURCE суперечать один одному, SOURCE має абсолютний пріоритет.
 
-### Стиль CTRL+UA
+### Стиль RC39
 
-- Writer шукає не «весь зміст статті», а найцікавішу історію всередині неї.
-- Перше речення має бути фактичним гачком: наслідок, конфлікт, сильна цифра, несподівана деталь або конкретна зміна.
-- У фінальний пост беруться лише 3–6 деталей, які реально варто запам'ятати.
-- Немає обов'язкової чотириабзацної структури, формального висновку, пояснення очевидного та AI-переходів на кшталт «це важливо, тому що».
-- Додані topic-near synthetic few-shot examples. Вони навчають редакторської механіки, але їхні факти заборонено переносити в поточну новину; Fact Guard це додатково перевіряє.
-- Final human-interest editor є обов'язковим. Якщо Codex/Gemini не можуть дати живий і фактологічно безпечний текст, матеріал іде в bounded retry, а не публікує нудний safe draft.
+- Прибрано жорсткий контракт RC38 `55–80 слів / 3–5 речень / 2–3 абзаци`.
+- Немає фіксованої кількості слів, речень або абзаців.
+- Для поста з фото лишається технічний hard limit 900 символів; коли матеріалу достатньо, фінальний автор орієнтується приблизно на 650–890 символів.
+- Довжина не добивається водою: бідна фактами історія може бути коротшою.
+- Дозволена нормальна людська інтонація, стриманий гумор, скепсис або здивування, якщо вони не додають нового фактичного твердження.
+- Anti-slop gate ловить накопичення шаблонних AI-переходів і неприродно симетричні абзаци, але не нав'язує новий універсальний шаблон.
 
 ### AI Router
 
-- Unattended production writer/editor: `Codex / ChatGPT → Gemini`.
-- NVIDIA, Groq, Cloudflare та local Ollama/llama.cpp залишаються доступними в діагностиці/LAB, але production більше не витрачає хвилини на fallback-ланцюжок, який усе одно потребував Codex/Gemini перед публікацією.
-- Provider health/cooldown і article QA залишаються розділеними.
+- RU bridge спочатку намагається використати налаштовані Gemini/Groq/NVIDIA/Cloudflare/local моделі без Codex, щоб фінальний український автор не редагував власну чернетку тим самим способом.
+- Якщо безкоштовні/альтернативні провайдери недоступні, bridge має безпечний fallback на Codex/Gemini.
+- Фінальний український автор: `Codex / ChatGPT → Gemini`.
+- Provider health/cooldown та article QA залишаються окремими механізмами.
+
+### Відбір і дедуп
+
+- RC38 event-level dedupe та rolling topic balance збережені.
+- RC37 newsworthiness gate продовжує відсікати гайди, shopping/accessory roundups, слабкі explainers, колонкові та інші матеріали без самостійної новинної події.
+- Важливі security/safety/regulatory історії не блокуються тільки через тематичний баланс.
 
 ### Медіа
 
 - Без релевантного фото/відео новина не публікується (`SKIP_NO_MEDIA`).
-- Featured/OG image не вважається релевантним лише через metadata: потрібен story-specific semantic evidence.
+- Featured/OG image потребує story-specific semantic evidence.
 - Якщо Telegram відхиляє медіа, текстовий fallback заборонений.
-
-### Source health
-
-- Хронічні HTTP 429/403, HTML замість feed, network/DNS/timeout помилки отримують persistent adaptive backoff.
-- Чим довше джерело стабільно помиляється, тим довша пауза; успішна перевірка очищає `last_error` і одразу повертає нормальний цикл.
-- Ручний `Перевірити зараз` свідомо обходить backoff.
 
 ### Safety
 
-- Evidence Pack, Fact Guard, number/year checks, attribution/relationship protections, Ukrainian hard gate та structural/editorial gates залишаються hard requirements.
-- Cache marker: `telegram-post-v22`, тому pending/retry RC36 drafts перегенеровуються за новим редакційним контрактом.
+- Evidence Pack, Fact Guard, number/year checks, attribution/relationship protections, Ukrainian hard gate та structural/editorial blockers залишаються hard requirements.
+- Local LanguageTool використовується тільки як неблокуюча граматична перевірка; він не є редактором.
+- Cache marker: `telegram-post-v24`, тому pending/retry RC38 drafts перегенеровуються через RC39 bridge.
 
 ## Дані та portable-режим
 
-SQLite-схема не змінена. Для оновлення розпакуйте RC37 у нову папку та перенесіть туди **всю папку `Data`** з RC36. Не накладайте runtime-файли поверх старої збірки.
+SQLite-схема не змінена. Для оновлення розпакуйте RC39 у нову папку та перенесіть туди **всю папку `Data`** з RC38. Не накладайте runtime-файли поверх старої збірки.
