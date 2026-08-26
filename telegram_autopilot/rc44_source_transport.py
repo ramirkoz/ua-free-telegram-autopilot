@@ -67,14 +67,7 @@ def curl_public_fetch(
     allowed_content_types=None,
     max_redirects: int = 4,
 ) -> HttpResponse:
-    """Fetch a public editorial URL through the OS curl transport.
-
-    This is only a fallback for public source GETs that returned HTTP 401/403/429
-    through the pinned Python transport. Every redirect target is resolved and
-    checked as public before curl is allowed to connect, and curl itself is pinned
-    to the already validated IP via --resolve. This keeps the existing SSRF guard
-    while avoiding false bot blocks caused by Python's TLS/HTTP fingerprint.
-    """
+    """Fetch a public editorial URL through the OS curl transport."""
     executable = _curl_executable()
     if not executable:
         raise NetworkError("System curl fallback is not available.")
@@ -192,6 +185,95 @@ def curl_public_fetch(
     raise NetworkError("Unreachable redirect state.")
 
 
+def _browser_executable() -> str:
+    candidates = [
+        shutil.which("msedge.exe"),
+        shutil.which("chrome.exe"),
+        shutil.which("chromium.exe"),
+    ]
+    if os.name == "nt":
+        for root in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES"), os.environ.get("LOCALAPPDATA")):
+            if not root:
+                continue
+            candidates.extend([
+                str(Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
+                str(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"),
+            ])
+    for value in candidates:
+        if value and Path(value).exists():
+            return str(value)
+    return ""
+
+
+def browser_public_fetch(
+    url: str,
+    *,
+    timeout: float = 30.0,
+    max_bytes: int = 5 * 1024 * 1024,
+    allowed_content_types=None,
+) -> HttpResponse:
+    """Last-resort browser transport for anti-bot protected public editorial pages/feeds."""
+    executable = _browser_executable()
+    if not executable:
+        raise NetworkError("Browser source fallback is not available.")
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password or parts.fragment:
+        raise NetworkError("Only absolute public HTTP/HTTPS URLs are allowed.")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    if port not in {80, 443}:
+        raise NetworkError("Only ports 80 and 443 are allowed.")
+    host = parts.hostname.casefold().rstrip(".")
+    addresses = resolve_public(host, port)
+    address = next((value for value in addresses if ":" not in value), addresses[0])
+    resolver_rules = f"MAP {host} {address}, MAP * ~NOTFOUND, EXCLUDE localhost"
+    with tempfile.TemporaryDirectory(prefix="ua-free-browser-") as tmp:
+        command = [
+            executable,
+            "--headless=new",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--user-data-dir={Path(tmp) / 'profile'}",
+            f"--host-resolver-rules={resolver_rules}",
+            "--dump-dom",
+            url,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=max(8.0, float(timeout) + 5.0),
+                check=False,
+                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise NetworkError("Browser source fallback failed to run.") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise NetworkError(f"Browser source fallback failed: {detail or 'browser error'}")
+    body = completed.stdout
+    if len(body) > max_bytes:
+        raise NetworkError("Remote response exceeds the configured size limit.")
+    sample = body[:8192].lstrip().casefold()
+    if b"just a moment" in sample or b"cf-chl" in sample or b"challenge-platform" in sample:
+        raise NetworkError(f"Remote request failed with HTTP 403: {url}")
+    if sample.startswith(b"<?xml") or b"<rss" in sample:
+        content_type = "application/rss+xml"
+    elif b"<feed" in sample:
+        content_type = "application/atom+xml"
+    else:
+        content_type = "text/html"
+    headers = {"content-type": content_type}
+    if allowed_content_types:
+        normalized = {str(value).casefold() for value in allowed_content_types}
+        if content_type.casefold() not in normalized:
+            raise NetworkError(f"Unexpected content type: {content_type}.")
+    return HttpResponse(200, headers, body, url)
+
+
 def install_rc44_source_transport() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -208,14 +290,22 @@ def install_rc44_source_transport() -> None:
             if not _is_access_error(exc):
                 raise
             fallback_kwargs = dict(kwargs)
-            return curl_public_fetch(
-                url,
-                headers=fallback_kwargs.pop("headers", None),
-                timeout=float(fallback_kwargs.pop("timeout", 30.0)),
-                max_bytes=int(fallback_kwargs.pop("max_bytes", 5 * 1024 * 1024)),
-                allowed_content_types=fallback_kwargs.pop("allowed_content_types", None),
-                max_redirects=int(fallback_kwargs.pop("max_redirects", 4)),
-            )
+            headers = fallback_kwargs.pop("headers", None)
+            timeout = float(fallback_kwargs.pop("timeout", 30.0))
+            max_bytes = int(fallback_kwargs.pop("max_bytes", 5 * 1024 * 1024))
+            allowed = fallback_kwargs.pop("allowed_content_types", None)
+            max_redirects = int(fallback_kwargs.pop("max_redirects", 4))
+            try:
+                return curl_public_fetch(
+                    url, headers=headers, timeout=timeout, max_bytes=max_bytes,
+                    allowed_content_types=allowed, max_redirects=max_redirects,
+                )
+            except collector_module.NetworkError as curl_exc:
+                if not _is_access_error(curl_exc):
+                    raise
+                return browser_public_fetch(
+                    url, timeout=timeout, max_bytes=max_bytes, allowed_content_types=allowed,
+                )
 
     collector_module._source_fetch = source_fetch
     _INSTALLED = True
