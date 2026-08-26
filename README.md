@@ -1,10 +1,10 @@
-# UA FREE Telegram Autopilot v0.1.0-rc39
+# UA FREE Telegram Autopilot v0.1.0-rc40
 
 Windows portable застосунок для збору технологічних/наукових новин, редакційного відбору, безпечного AI-рерайту українською та прямої публікації в Telegram.
 
-## Production-конвеєр RC39
+## Production-конвеєр RC40
 
-`джерело → source-health/backoff → exact/event dedupe → newsworthiness → topic balance → media relevance → Evidence Pack → RU editorial bridge → fresh UA author → Fact Guard → UA/anti-slop gates → Telegram`
+`джерело → source-health/backoff → exact/event dedupe → newsworthiness → topic balance → media relevance → Evidence Pack → RU editorial bridge (optional fallback) → fresh UA author → hard Fact Guard/UA safety → soft quality repair → Telegram`
 
 ### Новий редакторський міст
 
@@ -13,20 +13,27 @@ Windows portable застосунок для збору технологічни
 - Другий прохід **пише український пост заново**, використовуючи російську чернетку тільки як редакторський кут. Речення за реченням перекладати її заборонено.
 - Якщо bridge і SOURCE суперечать один одному, SOURCE має абсолютний пріоритет.
 
-### Стиль RC39
+### Стиль RC40
 
 - Прибрано жорсткий контракт RC38 `55–80 слів / 3–5 речень / 2–3 абзаци`.
 - Немає фіксованої кількості слів, речень або абзаців.
 - Для поста з фото лишається технічний hard limit 900 символів; коли матеріалу достатньо, фінальний автор орієнтується приблизно на 650–890 символів.
 - Довжина не добивається водою: бідна фактами історія може бути коротшою.
 - Дозволена нормальна людська інтонація, стриманий гумор, скепсис або здивування, якщо вони не додають нового фактичного твердження.
-- Anti-slop gate ловить накопичення шаблонних AI-переходів і неприродно симетричні абзаци, але не нав'язує новий універсальний шаблон.
+- Anti-slop оцінка лишається редакторським сигналом, але не прирівнюється до factual failure.
+
+### RC40: hard safety ≠ soft style
+
+- Факти, нові числа/сутності, обірваний текст, ненормативна українська та структурна корупція залишаються hard blockers.
+- Оцінка читабельності/ритму більше не прирівнюється до factual failure: safe-кандидат 60–81/100 отримує один targeted repair і може бути опублікований, якщо repair не покращив текст.
+- Внутрішній RU bridge більше не може самостійно зупинити публікацію лише через довжину або outage; у крайньому разі фінальний автор працює безпосередньо з SOURCE.
+- Логи RC40 містять `article_id` і `stage`, щоб було видно точну точку відсіву/успіху.
 
 ### AI Router
 
-- RU bridge спочатку намагається використати налаштовані Gemini/Groq/NVIDIA/Cloudflare/local моделі без Codex, щоб фінальний український автор не редагував власну чернетку тим самим способом.
-- Якщо безкоштовні/альтернативні провайдери недоступні, bridge має безпечний fallback на Codex/Gemini.
-- Фінальний український автор: `Codex / ChatGPT → Gemini`.
+- RU bridge спочатку намагається використати налаштовані Gemini/Groq/NVIDIA/Cloudflare/local моделі без Codex.
+- Якщо альтернативні провайдери недоступні, bridge пробує Codex/Gemini; якщо й вони недоступні, bridge обходиться і фінальний автор працює з SOURCE.
+- Фінальний український автор: `Codex / ChatGPT → Gemini`, а при їх недоступності `Groq → NVIDIA` під тим самим hard Fact Guard.
 - Provider health/cooldown та article QA залишаються окремими механізмами.
 
 ### Відбір і дедуп
@@ -43,10 +50,12 @@ Windows portable застосунок для збору технологічни
 
 ### Safety
 
-- Evidence Pack, Fact Guard, number/year checks, attribution/relationship protections, Ukrainian hard gate та structural/editorial blockers залишаються hard requirements.
+- Evidence Pack, Fact Guard, number/year checks, attribution/relationship protections, Ukrainian hard gate та structural blockers залишаються hard requirements.
+- Publication year дозволяється як явний temporal anchor із `SOURCE PUBLICATION DATE`.
+- Числовий guard ігнорує лише явно форматні фрагменти часу/дати; фактичні кількості залишаються строгими.
 - Local LanguageTool використовується тільки як неблокуюча граматична перевірка; він не є редактором.
-- Cache marker: `telegram-post-v24`, тому pending/retry RC38 drafts перегенеровуються через RC39 bridge.
+- Cache marker: `telegram-post-v25`, тому pending/retry старих drafts перегенеровуються через RC40 policy.
 
 ## Дані та portable-режим
 
-SQLite-схема не змінена. Для оновлення розпакуйте RC39 у нову папку та перенесіть туди **всю папку `Data`** з RC38. Не накладайте runtime-файли поверх старої збірки.
+SQLite-схема не змінена. Для оновлення розпакуйте RC40 у нову папку та перенесіть туди **всю папку `Data`** з RC39. Не накладайте runtime-файли поверх старої збірки.

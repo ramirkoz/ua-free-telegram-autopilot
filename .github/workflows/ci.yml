@@ -53,6 +53,7 @@ jobs:
           set -euo pipefail
           export UA_FREE_TELEGRAM_AUTOPILOT_DATA="$RUNNER_TEMP/autopilot-data"
           python - <<'PY'
+          from pathlib import Path
           from telegram_autopilot import __version__
           from telegram_autopilot.database import Database
           from telegram_autopilot.rc33_policy import install_rc33_policy
@@ -60,15 +61,18 @@ jobs:
           from telegram_autopilot.rc37_policy import install_rc37_policy
           from telegram_autopilot.rc38_policy import install_rc38_policy
           from telegram_autopilot.rc39_policy import install_rc39_policy
+          from telegram_autopilot.rc40_policy import install_rc40_policy
           install_rc33_policy()
           install_rc35_source_compat()
           install_rc37_policy()
           install_rc38_policy()
           install_rc39_policy()
+          install_rc40_policy()
           db = Database()
           db.quick_check()
-          assert __version__ == "0.1.0-rc39"
-          print("AUTOPILOT_SOURCE_GATE_OK")
+          expected = Path("VERSION.txt").read_text(encoding="utf-8").strip()
+          assert __version__ == expected, (__version__, expected)
+          print("AUTOPILOT_SOURCE_GATE_OK", __version__)
           PY
 
   windows-gate:
@@ -127,5 +131,5 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
+          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; from telegram_autopilot.rc40_policy import install_rc40_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); install_rc40_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); from telegram_autopilot import __version__; import pathlib; expected=pathlib.Path('VERSION.txt').read_text(encoding='utf-8').strip(); assert __version__ == expected; print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK', __version__)"
           if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
