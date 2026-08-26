@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-rc40 — 2026-08-26
+
+### Fixed
+- Split hard factual/language safety from soft editorial-quality scoring after RC39 live operation produced zero publish-ready posts.
+- Added one targeted repair for safe-but-imperfect UA copy; failed repair keeps the safe original.
+- RU bridge length is no longer a publication blocker and bridge provider outage can fall back to SOURCE-only final writing.
+- Codex/Gemini remain preferred final writers; Groq/NVIDIA are hard-validated fallbacks.
+- Publication-year, formatting-number and generic Latin-token false positives were corrected.
+- Added RC40 article/stage telemetry and advanced the cache marker to `telegram-post-v25`.
+
 ## 0.1.0-rc39 — 2026-08-26
 
 ### Changed
@@ -78,6 +88,3 @@
 ## 0.1.0-rc37
 - Tightened CTRL+UA newsworthiness filtering for explainers/guides/roundups/soft editorial content.
 - Replaced generic humanization with hook-first newsroom writing, topic-near few-shot examples and a mandatory trusted human-interest final edit.
-- Restricted unattended production AI routing to Codex/Gemini; kept other providers for diagnostics/LAB.
-- Added persistent adaptive source backoff for chronic 429/403/feed-content/network failures.
-- Preserved RC36 media-required and semantic media safeguards.
