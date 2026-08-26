@@ -10,6 +10,11 @@ RC44 fixes public RSS/Atom sources that are readable in a normal browser but ret
 - Existing homepage RSS discovery benefits from the same source fetch transport.
 - Added regression coverage and Windows live checks for Ars Technica, Rest of World and Knowable Magazine.
 
+## Live validation
+- Ars Technica: PASS.
+- Rest of World direct feed: PASS, 12 live items collected on the Windows CI gate.
+- Knowable Magazine direct RSS: PASS, 20 live items collected on the Windows CI gate.
+
 ## Preserved
 - RC43 channel-editor layout fix.
 - RC42 per-channel editorial profiles and operator-defined category weights.
