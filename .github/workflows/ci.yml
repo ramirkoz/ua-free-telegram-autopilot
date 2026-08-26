@@ -58,6 +58,7 @@ jobs:
           from telegram_autopilot.database import Database
           from telegram_autopilot.rc33_policy import install_rc33_policy
           from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
+          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
           from telegram_autopilot.rc37_policy import install_rc37_policy
           from telegram_autopilot.rc38_policy import install_rc38_policy
           from telegram_autopilot.rc39_policy import install_rc39_policy
@@ -66,6 +67,7 @@ jobs:
           from telegram_autopilot.rc42_policy import install_rc42_policy
           install_rc33_policy()
           install_rc35_source_compat()
+          install_rc44_source_transport()
           install_rc37_policy()
           install_rc38_policy()
           install_rc39_policy()
@@ -122,15 +124,24 @@ jobs:
           $env:PYTHONPATH = $PWD.Path
           @'
           from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
+          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
           from telegram_autopilot.models import Source
           install_rc35_source_compat()
+          install_rc44_source_transport()
           from telegram_autopilot.collector import detect_source, collect_source
-          detected = detect_source("https://arstechnica.com/")
-          source = Source(id=1, channel_id=1, kind=detected.kind, name="Ars Technica", url=detected.url, enabled=True, initialized=False, last_checked_at=None, last_error=None, priority=100)
-          items = collect_source(source)
-          assert items, f"Ars Technica detected as {detected.kind} ({detected.url}) but returned zero articles"
-          assert any((item.title or '').strip() for item in items)
-          print("LIVE_SOURCE_COLLECTION_OK", detected.kind, detected.url, len(items), items[0].title[:120])
+
+          checks = [
+              ("Ars Technica", "https://arstechnica.com/", 100),
+              ("Rest of World", "https://restofworld.org/feed/latest/", 87),
+              ("Knowable Magazine", "https://knowablemagazine.org/rss", 90),
+          ]
+          for index, (name, url, priority) in enumerate(checks, start=1):
+              detected = detect_source(url)
+              source = Source(id=index, channel_id=1, kind=detected.kind, name=name, url=detected.url, enabled=True, initialized=False, last_checked_at=None, last_error=None, priority=priority)
+              items = collect_source(source)
+              assert items, f"{name} detected as {detected.kind} ({detected.url}) but returned zero articles"
+              assert any((item.title or '').strip() for item in items)
+              print("LIVE_SOURCE_COLLECTION_OK", name, detected.kind, detected.url, len(items), items[0].title[:120])
           '@ | Set-Content -Path $env:RUNNER_TEMP\source_live_gate.py -Encoding utf8
           python $env:RUNNER_TEMP\source_live_gate.py
           if ($LASTEXITCODE -ne 0) { throw "Live supported-source collection gate failed" }
@@ -140,5 +151,5 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; from telegram_autopilot.rc40_policy import install_rc40_policy; from telegram_autopilot.rc41_policy import install_rc41_policy; from telegram_autopilot.rc42_policy import install_rc42_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); install_rc40_policy(); install_rc41_policy(); install_rc42_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); from telegram_autopilot import __version__; import pathlib; expected=pathlib.Path('VERSION.txt').read_text(encoding='utf-8').strip(); assert __version__ == expected; print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK', __version__)"
+          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc44_source_transport import install_rc44_source_transport; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; from telegram_autopilot.rc40_policy import install_rc40_policy; from telegram_autopilot.rc41_policy import install_rc41_policy; from telegram_autopilot.rc42_policy import install_rc42_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc44_source_transport(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); install_rc40_policy(); install_rc41_policy(); install_rc42_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); from telegram_autopilot import __version__; import pathlib; expected=pathlib.Path('VERSION.txt').read_text(encoding='utf-8').strip(); assert __version__ == expected; print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK', __version__)"
           if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
