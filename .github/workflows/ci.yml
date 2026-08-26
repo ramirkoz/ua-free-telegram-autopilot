@@ -59,13 +59,15 @@ jobs:
           from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
           from telegram_autopilot.rc37_policy import install_rc37_policy
           from telegram_autopilot.rc38_policy import install_rc38_policy
+          from telegram_autopilot.rc39_policy import install_rc39_policy
           install_rc33_policy()
           install_rc35_source_compat()
           install_rc37_policy()
           install_rc38_policy()
+          install_rc39_policy()
           db = Database()
           db.quick_check()
-          assert __version__ == "0.1.0-rc38"
+          assert __version__ == "0.1.0-rc39"
           print("AUTOPILOT_SOURCE_GATE_OK")
           PY
 
@@ -125,5 +127,5 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc37_policy(); install_rc38_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
+          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; install_rc33_policy(); install_rc35_source_compat(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK')"
           if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }

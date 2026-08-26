@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.0-rc39 — 2026-08-26
+
+### Changed
+- Replaced RC38 direct Ukrainian generation + mandatory same-style edit with a two-language newsroom bridge: SOURCE → Russian editorial draft → fresh Ukrainian author → SOURCE Fact Guard.
+- Removed the 55–80 word / 3–5 sentence / 2–3 paragraph template that made live RC38 output mechanically uniform.
+- Restored fuller media-caption copy: normally about 650–890 characters when the story supports it, while keeping the existing 900-character safety budget.
+- The internal Russian draft is not evidence and cannot override SOURCE; numbers and years are checked before it reaches the Ukrainian author.
+- Added an anti-slop gate for stacked canned transitions and suspicious paragraph symmetry without imposing a fixed replacement structure.
+- RU bridge prefers configured non-Codex/free providers or local AI first; final Ukrainian publication remains Codex/Gemini with full factual validation.
+- Cache marker advanced to `telegram-post-v24`.
+
+### Preserved
+- RC38 event-level dedupe and topic balance.
+- RC37 newsworthiness, media-required behavior, semantic media validation and adaptive source backoff.
+- Existing SQLite/Data compatibility.
+
+## 0.1.0-rc38 — 2026-08-25
+
+### Changed
+- Added stronger cross-source event dedupe for differently worded reports about the same event.
+- Added rolling topic balance with a stricter cap for space stories.
+- Added a compact 55–80 word editorial contract. This experiment reduced length but was retired in RC39 after live output remained mechanically structured.
+- Cache marker advanced to `telegram-post-v23`.
+
 ## 0.1.0-rc10 — 2026-08-18
 
 ### Added
