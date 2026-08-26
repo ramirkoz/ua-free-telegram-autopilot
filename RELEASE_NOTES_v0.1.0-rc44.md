@@ -4,8 +4,8 @@ RC44 fixes public RSS/Atom sources that are readable in a normal browser but ret
 
 ## Fixed
 - Direct RSS/Atom URLs now get a second public-source transport when the normal pinned Python request is access-blocked.
-- The fallback uses the operating system `curl` transport to avoid false bot blocks caused by Python TLS/HTTP fingerprinting.
-- SSRF protections are preserved: every request and redirect host is resolved and verified as public, then curl is pinned to that validated address.
+- The fallback tries the operating system `curl` transport first and, when anti-bot protection still blocks it, a guarded headless Edge/Chrome transport.
+- SSRF protections are preserved: curl requests and redirects are resolved and verified as public; browser fallback is pinned to the validated source host and all other DNS is blocked.
 - Content-type and maximum-size checks remain enforced.
 - Existing homepage RSS discovery benefits from the same source fetch transport.
 - Added regression coverage and Windows live checks for Ars Technica, Rest of World and Knowable Magazine.
