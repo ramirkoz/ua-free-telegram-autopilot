@@ -14,6 +14,7 @@ RC44 fixes public RSS/Atom sources that are readable in a normal browser but ret
 - Ars Technica: PASS.
 - Rest of World direct feed: PASS, 12 live items collected on the Windows CI gate.
 - Knowable Magazine direct RSS: PASS, 20 live items collected on the Windows CI gate.
+- RC44 release candidate is finalized only after this three-source live gate passes on Windows.
 
 ## Preserved
 - RC43 channel-editor layout fix.
