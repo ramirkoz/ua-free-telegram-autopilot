@@ -257,7 +257,7 @@ def browser_public_fetch(
     body = completed.stdout
     if len(body) > max_bytes:
         raise NetworkError("Remote response exceeds the configured size limit.")
-    sample = body[:8192].lstrip().casefold()
+    sample = body[:8192].lstrip().lower()
     if b"just a moment" in sample or b"cf-chl" in sample or b"challenge-platform" in sample:
         raise NetworkError(f"Remote request failed with HTTP 403: {url}")
     if sample.startswith(b"<?xml") or b"<rss" in sample:
