@@ -20,6 +20,7 @@ from .rc41_policy import install_rc41_policy
 from .rc42_policy import install_rc42_policy
 from .rc42_ui import install_rc42_ui
 from .rc43_ui import install_rc43_ui
+from .rc44_source_transport import install_rc44_source_transport
 
 
 def main() -> int:
@@ -28,6 +29,7 @@ def main() -> int:
         with InstanceLock():
             install_rc33_policy()
             install_rc35_source_compat()
+            install_rc44_source_transport()
             install_rc37_policy()
             install_rc38_policy()
             install_rc39_policy()
