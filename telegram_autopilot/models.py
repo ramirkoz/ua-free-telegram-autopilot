@@ -18,6 +18,7 @@ class Channel:
     max_posts_per_cycle: int
     created_at: str
     updated_at: str
+    editorial_weights_json: str = "[]"
 
 
 @dataclass(slots=True)
