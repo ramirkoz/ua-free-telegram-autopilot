@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-rc42 — 2026-08-26
+
+### Changed
+- Replaced RC41's global CTRL+UA topic caps with operator-defined **per-channel editorial weights**.
+- Added a per-channel editable editorial profile and manual category-name/weight editor.
+- Empty weight list means no topic-balance gate; weight 0 disables that category for that channel.
+- Added local-first, AI-fallback semantic classification into operator-defined category names and persisted each article category in SQLite.
+- Rolling balance now uses only categories published by the same channel.
+- Removed tech-only global topic percentages and reduced the old domain-specific newsworthiness filters to a small channel-agnostic junk filter.
+- Added additive SQLite columns `channels.editorial_weights_json` and `articles.editorial_category`; existing Data remains compatible.
+- Cache marker advanced to `telegram-post-v27`.
+
+### Multi-channel
+- CTRL+UA and a future Marketing channel can have completely different category names and weights.
+- No channel inherits `cyber`, `AI`, `space`, or any other topic percentage unless the operator creates that category for that channel.
+
 ## 0.1.0-rc41 — 2026-08-26
 
 ### Changed
