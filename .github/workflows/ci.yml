@@ -158,5 +158,46 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          python -c "import tkinter; import telegram_autopilot.main; from telegram_autopilot.rc33_policy import install_rc33_policy; from telegram_autopilot.rc35_source_compat import install_rc35_source_compat; from telegram_autopilot.rc44_source_transport import install_rc44_source_transport; from telegram_autopilot.rc37_policy import install_rc37_policy; from telegram_autopilot.rc38_policy import install_rc38_policy; from telegram_autopilot.rc39_policy import install_rc39_policy; from telegram_autopilot.rc40_policy import install_rc40_policy; from telegram_autopilot.rc41_policy import install_rc41_policy; from telegram_autopilot.rc42_policy import install_rc42_policy; from telegram_autopilot.rc45_policy import install_rc45_policy; from telegram_autopilot.rc45_style import install_rc45_style; from telegram_autopilot.rc45_fact_guard import install_rc45_fact_guard; install_rc33_policy(); install_rc35_source_compat(); install_rc44_source_transport(); install_rc37_policy(); install_rc38_policy(); install_rc39_policy(); install_rc40_policy(); install_rc41_policy(); install_rc42_policy(); install_rc45_policy(); install_rc45_style(); install_rc45_fact_guard(); from telegram_autopilot.database import Database; db=Database(); db.quick_check(); assert 'content_direction' in {r[1] for r in db.connect().__enter__().execute('PRAGMA table_info(channels)')}; from telegram_autopilot import __version__; import pathlib; expected=pathlib.Path('VERSION.txt').read_text(encoding='utf-8').strip(); assert __version__ == expected; print('AUTOPILOT_WINDOWS_SOURCE_GATE_OK', __version__)"
+          @'
+          from pathlib import Path
+          import tkinter
+          import telegram_autopilot.main
+          from telegram_autopilot import __version__
+          from telegram_autopilot.database import Database
+          from telegram_autopilot.rc33_policy import install_rc33_policy
+          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
+          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
+          from telegram_autopilot.rc37_policy import install_rc37_policy
+          from telegram_autopilot.rc38_policy import install_rc38_policy
+          from telegram_autopilot.rc39_policy import install_rc39_policy
+          from telegram_autopilot.rc40_policy import install_rc40_policy
+          from telegram_autopilot.rc41_policy import install_rc41_policy
+          from telegram_autopilot.rc42_policy import install_rc42_policy
+          from telegram_autopilot.rc45_policy import install_rc45_policy
+          from telegram_autopilot.rc45_style import install_rc45_style
+          from telegram_autopilot.rc45_fact_guard import install_rc45_fact_guard
+
+          install_rc33_policy()
+          install_rc35_source_compat()
+          install_rc44_source_transport()
+          install_rc37_policy()
+          install_rc38_policy()
+          install_rc39_policy()
+          install_rc40_policy()
+          install_rc41_policy()
+          install_rc42_policy()
+          install_rc45_policy()
+          install_rc45_style()
+          install_rc45_fact_guard()
+
+          db = Database()
+          db.quick_check()
+          with db.connect() as con:
+              channel_cols = {row[1] for row in con.execute("PRAGMA table_info(channels)")}
+          assert "content_direction" in channel_cols
+          expected = Path("VERSION.txt").read_text(encoding="utf-8").strip()
+          assert __version__ == expected, (__version__, expected)
+          print("AUTOPILOT_WINDOWS_SOURCE_GATE_OK", __version__)
+          '@ | Set-Content -Path $env:RUNNER_TEMP\windows_import_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\windows_import_gate.py
           if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
