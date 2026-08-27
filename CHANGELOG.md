@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0-rc45 — 2026-08-27
+
+### Added
+- Per-channel **content direction**: `English → Ukrainian` or `Ukrainian / Russian → English`.
+- Dedicated native-English newsroom rewrite pipeline for Ukrainian/Russian sources with trusted final editing, number/year checks and cross-language Fact Guard.
+- Additive `channels.content_direction` SQLite column; existing channels default safely to `en_to_uk`.
+- Pre-rewrite source-event dedupe using title terms, named/product anchors, numbers and source facts before stylistically different rewrites can hide the duplicate.
+- Regression case for the cross-outlet Gemini 3.5 Transcribe duplicate observed in the live CTRL+UA feed.
+- Multilingual Evidence Pack attribution/high-risk scoring for English, Ukrainian and Russian sources.
+- Semantic-profile review for guide/explainer/review/conference-looking titles instead of trusting a cheap literal category match.
+
+### Changed
+- Category classifier accepts common JSON/label wrappers and may explicitly return `__OTHER__` when a source is outside the channel profile/categories.
+- With configured weights, `__OTHER__` is rejected and a classifier provider outage is retried; editorial balance is no longer silently disabled through `balance skipped`.
+- Ukrainian writing instructions now prioritize one dominant idea, usually 2–3 short paragraphs and fewer secondary details.
+- Repetitive AI-newsroom scaffolding such as «найцікавіше тут», «але є нюанс», «іронія в тому» and forced closing kickers is explicitly discouraged as a feed-wide template.
+- Direction is part of cache marker `telegram-post-v28:{direction}` so changing channel output language invalidates old cached rewrites.
+- English output uses `Source` and `Video` UI/footer wording while preserving the existing Telegram/media path.
+
+### Preserved
+- RC44 guarded direct-feed source transport.
+- RC43 screen-aware channel editor and `Ctrl+S` save fallback.
+- RC42 manual per-channel editorial profiles and weights.
+- Existing Data, sources, publication history, weights and Telegram credentials.
+
 ## 0.1.0-rc42 — 2026-08-26
 
 ### Changed
