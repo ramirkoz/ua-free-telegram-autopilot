@@ -22,6 +22,7 @@ from .rc42_ui import install_rc42_ui
 from .rc43_ui import install_rc43_ui
 from .rc44_source_transport import install_rc44_source_transport
 from .rc45_policy import install_rc45_policy
+from .rc45_editorial_fit import install_rc45_editorial_fit
 from .rc45_style import install_rc45_style
 from .rc45_fact_guard import install_rc45_fact_guard
 from .rc45_ui import install_rc45_ui
@@ -41,6 +42,7 @@ def main() -> int:
             install_rc41_policy()
             install_rc42_policy()
             install_rc45_policy()
+            install_rc45_editorial_fit()
             install_rc45_style()
             install_rc45_fact_guard()
             install_rc42_ui()
