@@ -25,8 +25,16 @@ class SecretConfig:
     local_enabled: bool = False
     local_base_url: str = "http://127.0.0.1:8080/v1"
     local_model: str = "local-model"
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+    telegram_phone: str = ""
+    telegram_user_session: str = ""
 
     def normalized(self) -> "SecretConfig":
+        try:
+            telegram_api_id = max(0, int(self.telegram_api_id or 0))
+        except (TypeError, ValueError):
+            telegram_api_id = 0
         return SecretConfig(
             default_telegram_bot_token=self.default_telegram_bot_token.strip(),
             channel_bot_tokens={str(k): str(v).strip() for k, v in self.channel_bot_tokens.items() if str(v).strip()},
@@ -38,6 +46,10 @@ class SecretConfig:
             local_enabled=bool(self.local_enabled),
             local_base_url=self.local_base_url.strip() or "http://127.0.0.1:8080/v1",
             local_model=self.local_model.strip() or "local-model",
+            telegram_api_id=telegram_api_id,
+            telegram_api_hash=str(self.telegram_api_hash or "").strip(),
+            telegram_phone=str(self.telegram_phone or "").strip(),
+            telegram_user_session=str(self.telegram_user_session or "").strip(),
         )
 
 
