@@ -28,6 +28,7 @@ from .rc45_fact_guard import install_rc45_fact_guard
 from .rc45_ui import install_rc45_ui
 from .rc46_policy import install_rc46_policy
 from .rc46_transport import install_rc46_transport
+from .rc47_policy import install_rc47_policy
 
 
 def main() -> int:
@@ -49,6 +50,7 @@ def main() -> int:
             install_rc45_style()
             install_rc45_fact_guard()
             install_rc46_policy()
+            install_rc47_policy()
             install_rc42_ui()
             install_rc45_ui()
             install_rc43_ui()
