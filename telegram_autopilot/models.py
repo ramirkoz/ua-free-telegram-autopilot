@@ -19,6 +19,7 @@ class Channel:
     created_at: str
     updated_at: str
     editorial_weights_json: str = "[]"
+    content_direction: str = "en_to_uk"
 
 
 @dataclass(slots=True)
