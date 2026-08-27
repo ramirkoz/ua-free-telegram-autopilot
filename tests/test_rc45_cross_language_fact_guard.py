@@ -31,7 +31,7 @@ def test_rc45_cross_language_guard_blocks_unsupported_first_ever_claim():
     article = _source(
         (
             "Українська лабораторія тестує систему для навчання роботів на записах рухів людей. "
-            "Команда не заявляє про світовий пріоритет і описує роботу як експеримент. "
+            "Команда описує роботу як експеримент і не робить заяв про світовий пріоритет. "
         ) * 4
     )
     output = (
@@ -47,7 +47,7 @@ def test_rc45_cross_language_guard_blocks_plan_becoming_purchase():
     article = _source(
         (
             "Компанія підписала угоду про майбутнє розгортання системи та планує спільну розробку. "
-            "У повідомленні немає даних про купівлю обладнання або придбання компанії. "
+            "Партнери описують наступний етап як технічну інтеграцію і випробування. "
         ) * 4
     )
     output = "The company acquired the system under an agreement and plans to deploy it later."
