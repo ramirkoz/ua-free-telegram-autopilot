@@ -21,6 +21,11 @@ from .rc42_policy import install_rc42_policy
 from .rc42_ui import install_rc42_ui
 from .rc43_ui import install_rc43_ui
 from .rc44_source_transport import install_rc44_source_transport
+from .rc45_policy import install_rc45_policy
+from .rc45_editorial_fit import install_rc45_editorial_fit
+from .rc45_style import install_rc45_style
+from .rc45_fact_guard import install_rc45_fact_guard
+from .rc45_ui import install_rc45_ui
 
 
 def main() -> int:
@@ -36,7 +41,12 @@ def main() -> int:
             install_rc40_policy()
             install_rc41_policy()
             install_rc42_policy()
+            install_rc45_policy()
+            install_rc45_editorial_fit()
+            install_rc45_style()
+            install_rc45_fact_guard()
             install_rc42_ui()
+            install_rc45_ui()
             install_rc43_ui()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:

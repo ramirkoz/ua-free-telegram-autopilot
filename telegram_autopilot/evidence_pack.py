@@ -12,9 +12,23 @@ _UNIT_RE = re.compile(
     re.IGNORECASE,
 )
 _ATTRIBUTION = (
+    # English
     "said", "says", "according to", "announced", "reported", "told", "claims", "claimed",
     "expects", "plans", "planned", "will", "may", "might", "could", "study", "researchers",
     "company", "agency", "university", "paper", "report",
+    # Ukrainian
+    "сказав", "сказала", "заявив", "заявила", "повідомив", "повідомила", "за словами", "за даними",
+    "стверджує", "вважає", "очікує", "планує", "може", "дослідження", "дослідники", "компанія",
+    "агентство", "університет", "стаття", "звіт",
+    # Russian
+    "сказал", "сказала", "заявил", "заявила", "сообщил", "сообщила", "по словам", "по данным",
+    "утверждает", "считает", "ожидает", "планирует", "может", "исследование", "исследователи", "компания",
+    "агентство", "университет", "статья", "отчет", "отчёт",
+)
+_HIGH_RISK = (
+    "first", "largest", "biggest", "fastest", "record", "most powerful", "world's first",
+    "вперше", "перший у світі", "найбільший", "найшвидший", "найпотужніший", "рекорд",
+    "впервые", "первый в мире", "крупнейший", "самый быстрый", "самый мощный", "рекорд",
 )
 
 
@@ -50,20 +64,20 @@ def _score(sentence: str, index: int) -> int:
         score += 5
     if any(term in low for term in _ATTRIBUTION):
         score += 4
-    if '"' in sentence or "“" in sentence or "”" in sentence:
+    if '"' in sentence or "“" in sentence or "”" in sentence or "«" in sentence:
         score += 2
-    if any(term in low for term in ("first", "largest", "biggest", "fastest", "record", "most powerful", "world's first")):
+    if any(term in low for term in _HIGH_RISK):
         score += 5
     return score
 
 
 def build_evidence_pack(article: Row, *, char_budget: int) -> EvidencePack:
-    """Build a bounded, deterministic evidence pack without an extra AI call.
+    """Build a bounded, deterministic multilingual evidence pack without an extra AI call.
 
-    The old compactor mostly kept the beginning of a long article. This pack
-    keeps the lead but also reserves room for fact-bearing sentences containing
-    numbers, entities, units, attribution and high-risk claims from later in the
-    source. Original sentence order is preserved in the final pack.
+    RC45 keeps the established English-source behavior and extends the same scoring
+    to Ukrainian/Russian attribution and high-risk claims so reverse-direction
+    channels do not accidentally lose the sentence that carries uncertainty or
+    attribution later in a long source.
     """
     budget = max(600, int(char_budget))
     title = " ".join(_row_text(article, "title").split())
@@ -83,9 +97,6 @@ def build_evidence_pack(article: Row, *, char_budget: int) -> EvidencePack:
     def current_len(indices: set[int]) -> int:
         return len(" ".join(sentences[i] for i in sorted(indices)))
 
-    # The lead is important context, but a pathological giant lead must not crowd
-    # every later fact out of the bounded pack. Keep complete lead sentences only
-    # when they fit.
     for idx in range(min(2, len(sentences))):
         candidate = set(chosen)
         candidate.add(idx)
