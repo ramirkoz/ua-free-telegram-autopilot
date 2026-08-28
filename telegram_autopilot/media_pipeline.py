@@ -23,6 +23,7 @@ _HARD_REJECT = (
     "avatar", "headshot", "profile-photo", "social-share", "share-icon", "analytics",
     "click to follow", "follow us", "follow on google", "google news", "follow tom's hardware",
 )
+_MARKETING_CONTEXT_RELAX = {"advertisement", "advertising", "promo", "promotion", "commercial"}
 _LOGO_WORDS = ("logo", "wordmark", "brandmark", "app-icon", "site-icon", "badge")
 _STOP = {
     "this", "that", "with", "from", "have", "will", "into", "about", "after", "before", "their", "there",
@@ -258,9 +259,12 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
     return title_overlap >= 1 or article_overlap >= 2
 
 
-def _hard_reject(item: PreparedMedia) -> bool:
+def _hard_reject(item: PreparedMedia, *, marketing_context: bool = False) -> bool:
     low = (item.url + " " + _candidate_text(item)).casefold().replace("_", "-")
-    if any(term in low for term in _HARD_REJECT):
+    blocked = _HARD_REJECT
+    if marketing_context:
+        blocked = tuple(term for term in _HARD_REJECT if term not in _MARKETING_CONTEXT_RELAX)
+    if any(term in low for term in blocked):
         return True
     if any(term in low for term in _LOGO_WORDS):
         return True
@@ -280,8 +284,8 @@ def _classify(item: PreparedMedia) -> str:
     return "photo" if item.kind == "image" else item.kind
 
 
-def _score(item: PreparedMedia, *, title: str, article_text: str) -> float:
-    if _hard_reject(item):
+def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_context: bool = False) -> float:
+    if _hard_reject(item, marketing_context=marketing_context):
         return -100.0
     # A large image is not automatically relevant. The old score started every
     # body image at the acceptance threshold, so unrelated recommendation cards
@@ -329,8 +333,8 @@ def _score(item: PreparedMedia, *, title: str, article_text: str) -> float:
     return score
 
 
-def _probe_image(item: PreparedMedia) -> PreparedMedia | None:
-    if _hard_reject(item):
+def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> PreparedMedia | None:
+    if _hard_reject(item, marketing_context=marketing_context):
         return None
     try:
         response = fetch_url(item.url, headers=_MEDIA_HEADERS, max_bytes=12 * 1024 * 1024, timeout=20, max_redirects=5, allow_http_errors=True)
@@ -408,15 +412,37 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
     return featured, body
 
 
-def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: str = "", article_text: str = "") -> PreparedArticleMedia:
-    """Validate and rank source media. No image is better than an irrelevant banner/logo."""
+def prepare_article_media(
+    layout_json: str,
+    fallback_urls: list[str],
+    *,
+    title: str = "",
+    article_text: str = "",
+    marketing_context: bool = False,
+) -> PreparedArticleMedia:
+    """Validate and rank source media. Media is mandatory at publication time.
+
+    ``marketing_context`` relaxes only ambiguous topical words such as
+    ``advertisement``/``promo``. It never relaxes sponsor/affiliate/banner/tracker
+    or logo/avatar safety rules.
+    """
     featured, body = _layout_items(layout_json, fallback_urls)
     if featured and featured.kind == "image":
         featured.classification = _classify(featured)
-        featured = _probe_image(featured)
+        featured = _probe_image(featured, marketing_context=marketing_context)
         if featured:
-            featured.relevance_score = _score(featured, title=title, article_text=article_text)
-            if featured.relevance_score < 35 or not _semantic_media_match(featured, title=title, article_text=article_text):
+            featured.relevance_score = _score(
+                featured, title=title, article_text=article_text, marketing_context=marketing_context
+            )
+            semantic_ok = _semantic_media_match(featured, title=title, article_text=article_text)
+            # A validated OG/featured image comes from the article itself. For a
+            # marketing newsroom, generic metadata like "campaign creative" may
+            # contain no title tokens even though the image is the subject of the
+            # story. Keep it, but only after hard-noise and binary image checks.
+            if marketing_context and not semantic_ok:
+                featured.relevance_score = max(40.0, featured.relevance_score)
+                semantic_ok = True
+            if featured.relevance_score < 35 or not semantic_ok:
                 featured = None
 
     prepared: list[PreparedMedia] = []
@@ -425,22 +451,28 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
     seen_identities: set[str] = set()
     for item in body:
         identity = _media_identity(item.url)
-        if identity in seen_identities or _hard_reject(item):
+        if identity in seen_identities or _hard_reject(item, marketing_context=marketing_context):
             continue
         item.classification = _classify(item)
         if item.kind == "image":
-            resolved = _probe_image(item)
+            resolved = _probe_image(item, marketing_context=marketing_context)
             if not resolved:
                 continue
             if resolved.digest and resolved.digest in seen_hashes:
                 continue
             if resolved.url in seen_urls:
                 continue
-            resolved.relevance_score = _score(resolved, title=title, article_text=article_text)
-            # Position and resolution can rank a relevant image, but can never
-            # make an unrelated one relevant. This deliberately prefers no photo
-            # over a visually plausible recommendation-card/stock image.
-            if not _semantic_media_match(resolved, title=title, article_text=article_text):
+            resolved.relevance_score = _score(
+                resolved, title=title, article_text=article_text, marketing_context=marketing_context
+            )
+            semantic_ok = _semantic_media_match(resolved, title=title, article_text=article_text)
+            # For marketing stories an early in-article creative is legitimate even
+            # if its alt text says only "promo"/"campaign". Do not extend this to
+            # late recommendation cards.
+            if marketing_context and not semantic_ok and resolved.position <= 0.20:
+                resolved.relevance_score = max(40.0, resolved.relevance_score)
+                semantic_ok = True
+            if not semantic_ok:
                 continue
             if resolved.relevance_score < 38:
                 continue
@@ -449,11 +481,17 @@ def prepare_article_media(layout_json: str, fallback_urls: list[str], *, title: 
             seen_urls.add(resolved.url)
             prepared.append(resolved)
         else:
-            item.relevance_score = _score(item, title=title, article_text=article_text)
+            item.relevance_score = _score(
+                item, title=title, article_text=article_text, marketing_context=marketing_context
+            )
             video_story = item.kind in {"video", "iframe"} and any(
                 word in (title or "").casefold() for word in _VIDEO_TITLE_WORDS
             )
-            if not video_story and not _semantic_media_match(item, title=title, article_text=article_text):
+            semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
+            if marketing_context and item.position <= 0.20:
+                semantic_ok = True
+                item.relevance_score = max(40.0, item.relevance_score)
+            if not video_story and not semantic_ok:
                 continue
             if item.relevance_score < 38:
                 continue

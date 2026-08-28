@@ -15,9 +15,16 @@ from .production_pipeline import MEDIA_POST_HARD_LIMIT, POST_FORMAT_PREFIX, TEXT
 from .language import looks_english, normalize_ukrainian_terminology
 from .models import Channel
 from .secrets_store import load_secrets
-from .telegram import TelegramError, build_post_text, send_prepared_photo, send_text, send_video_url
+from .telegram import TelegramError, build_post_text, send_prepared_photo, send_video_url
 from .media_pipeline import prepare_article_media
 from .language_tool_local import LanguageToolUnavailable, ensure_languagetool_async, languagetool_status
+
+
+def _marketing_media_context(channel: Channel) -> bool:
+    haystack = f"{channel.name} {channel.editorial_profile}".casefold()
+    return any(token in haystack for token in (
+        "продано", "marketing", "advertis", "реклам", "brand", "бренд", "campaign",
+    ))
 
 
 class AutopilotService:
@@ -250,15 +257,27 @@ class AutopilotService:
                     continue
 
                 media_urls = self.db.media_urls(row)
+                marketing_media = _marketing_media_context(channel)
                 prepared_media = prepare_article_media(
                     self.db.article_layout_json(row), media_urls,
                     title=str(row["title"] or ""), article_text=str(row["raw_text"] or ""),
+                    marketing_context=marketing_media,
                 )
                 hero = prepared_media.telegram_hero
                 direct_video = prepared_media.telegram_direct_video
                 video_link = prepared_media.video_link
                 media_present = hero is not None or direct_video is not None
-                telegram_hard_limit = MEDIA_POST_HARD_LIMIT if media_present else TEXT_POST_HARD_LIMIT
+                self._audit(
+                    "media", "ready" if media_present else "rejected",
+                    f"raw={len(media_urls)}; body={len(prepared_media.body)}; featured={bool(prepared_media.featured)}; marketing_context={marketing_media}",
+                    channel_id=channel.id, article_id=article_id,
+                )
+                if not media_present:
+                    reason = "Немає придатного фото/відео: публікація без медіа заборонена для всіх каналів."
+                    self.db.update_article(article_id, status="rejected", reject_reason=reason)
+                    self._audit("media", "required_missing", reason, channel_id=channel.id, article_id=article_id)
+                    continue
+                telegram_hard_limit = MEDIA_POST_HARD_LIMIT
                 source_url = str(row["url"] or "").strip()
                 source_footer = "\n\nДжерело" if source_url else ""
                 video_footer = f"\n\n🎬 Відео: {video_link}" if video_link else ""
@@ -275,31 +294,9 @@ class AutopilotService:
 
                 if not (body and event_summary):
                     recent = self.db.recent_published(channel.id, channel.dedupe_window_hours, limit=30)
-                    try:
-                        decision = decide(
-                            channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
-                        )
-                    except PostAIQAExhausted as exc:
-                        # Media is optional. If the 900-character caption contract
-                        # is what made otherwise healthy AI candidates fail QA,
-                        # retry the story once as a normal text Telegram post.
-                        # This preserves factual validation while preventing an
-                        # optional image from becoming a publication blocker.
-                        if not media_present or not exc.media_fallback_recommended:
-                            raise
-                        hero = None
-                        direct_video = None
-                        media_present = False
-                        telegram_hard_limit = TEXT_POST_HARD_LIMIT
-                        rewrite_hard_limit = max(300, telegram_hard_limit - len(source_footer) - len(video_footer))
-                        format_marker = f"{POST_FORMAT_PREFIX}{telegram_hard_limit}:{rewrite_hard_limit}:"
-                        self._audit(
-                            "rewrite", "media_to_text_fallback", str(exc)[:1200],
-                            channel_id=channel.id, article_id=article_id,
-                        )
-                        decision = decide(
-                            channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
-                        )
+                    decision = decide(
+                        channel, row, recent, hard_limit=rewrite_hard_limit, format_marker=format_marker
+                    )
                     if decision.decision == "duplicate":
                         self.db.update_article(
                             article_id, status="duplicate", duplicate_of=decision.duplicate_of,
@@ -387,26 +384,14 @@ class AutopilotService:
                             filename=hero.filename, mime_type=hero.mime_type, data=hero.data, source_url=source_url,
                         )
                     else:
-                        result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
+                        raise RuntimeError("Mandatory media disappeared after the media gate")
                 except TelegramError as exc:
-                    if exc.media_rejected:
-                        kind_label = "відео" if direct_video is not None else "фото"
-                        self._emit("warning", f"{channel.name}: Telegram відхилив {kind_label}, публікую цей самий пост без нього")
-                        # If a direct video was rejected but a validated article/YouTube
-                        # preview exists, keep the visual fallback. Otherwise the
-                        # canonical watch link remains in the text.
-                        if direct_video is not None and hero is not None:
-                            try:
-                                result = send_prepared_photo(
-                                    token, channel.telegram_chat_id, caption,
-                                    filename=hero.filename, mime_type=hero.mime_type, data=hero.data, source_url=source_url,
-                                )
-                            except TelegramError as photo_exc:
-                                if not photo_exc.media_rejected:
-                                    raise
-                                result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
-                        else:
-                            result = send_text(token, channel.telegram_chat_id, caption, source_url=source_url)
+                    if exc.media_rejected and direct_video is not None and hero is not None:
+                        self._emit("warning", f"{channel.name}: Telegram відхилив відео, пробую перевірене фото")
+                        result = send_prepared_photo(
+                            token, channel.telegram_chat_id, caption,
+                            filename=hero.filename, mime_type=hero.mime_type, data=hero.data, source_url=source_url,
+                        )
                     else:
                         raise
 
