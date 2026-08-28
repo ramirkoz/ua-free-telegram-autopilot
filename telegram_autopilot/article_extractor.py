@@ -24,7 +24,7 @@ _ALWAYS_SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "footer", "for
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "li", "blockquote", "pre"}
 
 _NOISE_PHRASES = (
-    "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertisement", "advertorial",
+    "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertorial",
     "sponsored", "sponsor", "affiliate", "newsletter", "related-content",
     "related_content", "recommended-content", "recommended_content", "recommendation-widget", "outbrain",
     "taboola", "revcontent", "ad-slot", "ad_slot", "ad-unit", "ad_unit", "ad-container", "ad_container",
