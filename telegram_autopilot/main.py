@@ -31,6 +31,7 @@ from .rc46_transport import install_rc46_transport
 from .rc47_policy import install_rc47_policy
 from .rc48_learning import install_rc48_learning
 from .rc48_ui import install_rc48_ui
+from .rc49_policy import install_rc49_policy
 
 
 def main() -> int:
@@ -54,6 +55,7 @@ def main() -> int:
             install_rc46_policy()
             install_rc47_policy()
             install_rc48_learning()
+            install_rc49_policy()
             install_rc42_ui()
             install_rc45_ui()
             install_rc43_ui()
