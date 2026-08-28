@@ -37,6 +37,8 @@ _SERVER_PROCESS: subprocess.Popen | None = None
 _SERVER_LOCK = threading.RLock()
 _NEXT_INSTALL_AT = 0.0
 _SHUTDOWN_EVENT = threading.Event()
+_LT_HEALTH_TIMEOUT = 3.0
+_LT_STARTUP_TIMEOUT = 3.0
 
 
 class LanguageToolUnavailable(RuntimeError):
@@ -52,7 +54,7 @@ class LanguageToolEditResult:
 
 def languagetool_status() -> dict[str, object]:
     """Operator-facing status plus persistent proof of actual LanguageTool work."""
-    ready = _probe_server(timeout=0.25)
+    ready = _probe_server(timeout=_LT_HEALTH_TIMEOUT)
     with _INSTALL_LOCK:
         installing = bool(_INSTALL_THREAD and _INSTALL_THREAD.is_alive())
     retry_seconds = max(0, int(_NEXT_INSTALL_AT - time.monotonic())) if _NEXT_INSTALL_AT else 0
@@ -177,7 +179,7 @@ def _probe_server(*, timeout: float = 0.45) -> bool:
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc50"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.1, float(timeout))) as response:
@@ -273,7 +275,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
     part = target.with_suffix(target.suffix + ".part")
     digest = hashlib.sha256()
     total = 0
-    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32", "Accept": "*/*"})
+    req = urllib.request.Request(url, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc50", "Accept": "*/*"})
     try:
         with urllib.request.urlopen(req, timeout=45) as response, open(part, "wb") as out:
             while True:
@@ -298,7 +300,7 @@ def _download(url: str, target: Path, *, max_bytes: int, expected_sha256: str | 
 
 
 def _adoptium_package() -> tuple[str, str]:
-    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32", "Accept": "application/json"})
+    req = urllib.request.Request(_ADOPTIUM_ASSETS_URL, headers={"User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc50", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as response:
         raw = response.read(2 * 1024 * 1024)
     data = json.loads(raw.decode("utf-8", errors="replace"))
@@ -476,7 +478,7 @@ def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | 
     global _SERVER_PROCESS
     if _SHUTDOWN_EVENT.is_set():
         return False
-    if _probe_server(timeout=0.35):
+    if _probe_server(timeout=_LT_HEALTH_TIMEOUT):
         return True
     root = jar.parent
     config = root / "server.properties"
@@ -521,7 +523,7 @@ def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | 
             if proc.poll() is not None:
                 _emit(callback, "error", f"LanguageTool server завершився з кодом {proc.returncode}; див. Data/Tools/languagetool_server.log")
                 break
-            if _probe_server(timeout=0.35):
+            if _probe_server(timeout=_LT_STARTUP_TIMEOUT):
                 _emit(callback, "languagetool", "LanguageTool локальний сервер готовий (127.0.0.1:8081).")
                 return True
             time.sleep(0.5)
@@ -547,13 +549,13 @@ def ensure_languagetool(callback: Callable[[str, str], None] | None = None) -> b
     if os.environ.get("UA_FREE_DISABLE_LANGUAGETOOL") == "1":
         return False
     if os.environ.get("UA_FREE_LANGUAGETOOL_URL"):
-        return _probe_server(timeout=0.7)
-    if _probe_server(timeout=0.35):
+        return _probe_server(timeout=_LT_HEALTH_TIMEOUT)
+    if _probe_server(timeout=_LT_HEALTH_TIMEOUT):
         return True
     if os.environ.get("UA_FREE_DISABLE_LANGUAGETOOL_INSTALL") == "1":
         return False
     with _INSTALL_LOCK:
-        if _probe_server(timeout=0.35):
+        if _probe_server(timeout=_LT_HEALTH_TIMEOUT):
             return True
         try:
             java = _bundled_java() or _system_java()
@@ -589,7 +591,7 @@ def ensure_languagetool_async(callback: Callable[[str, str], None] | None = None
         return False
     if os.environ.get("UA_FREE_DISABLE_LANGUAGETOOL") == "1":
         return False
-    if _probe_server(timeout=0.2):
+    if _probe_server(timeout=_LT_HEALTH_TIMEOUT):
         _NEXT_INSTALL_AT = 0.0
         return True
     if _NEXT_INSTALL_AT and time.monotonic() < _NEXT_INSTALL_AT:
@@ -612,7 +614,7 @@ def ensure_languagetool_async(callback: Callable[[str, str], None] | None = None
 
 
 def apply_local_languagetool_detailed(
-    value: str, *, timeout: float = 0.75, max_changes: int = 12, require_ready: bool = False
+    value: str, *, timeout: float = 3.0, max_changes: int = 12, require_ready: bool = False
 ) -> LanguageToolEditResult:
     """Apply conservative local LanguageTool suggestions and report the edits.
 
@@ -631,7 +633,7 @@ def apply_local_languagetool_detailed(
         if require_ready:
             raise LanguageToolUnavailable("LanguageTool має працювати локально або через явно заданий UA_FREE_LANGUAGETOOL_URL.")
         return LanguageToolEditResult(text, 0, ())
-    if not _probe_server(timeout=min(0.35, max(0.1, float(timeout)))):
+    if not _probe_server(timeout=max(_LT_HEALTH_TIMEOUT, float(timeout))):
         ensure_languagetool_async()
         if require_ready and os.environ.get("UA_FREE_ALLOW_WITHOUT_LANGUAGETOOL") != "1":
             raise LanguageToolUnavailable(
@@ -643,7 +645,7 @@ def apply_local_languagetool_detailed(
         url,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc32"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "UAFreeTelegramAutopilot/0.1.0-rc50"},
     )
     try:
         with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as response:
@@ -702,7 +704,7 @@ def apply_local_languagetool_detailed(
 
 
 def apply_local_languagetool(
-    value: str, *, timeout: float = 0.75, max_changes: int = 12, require_ready: bool = False
+    value: str, *, timeout: float = 3.0, max_changes: int = 12, require_ready: bool = False
 ) -> tuple[str, int]:
     result = apply_local_languagetool_detailed(
         value, timeout=timeout, max_changes=max_changes, require_ready=require_ready

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-rc50 — 2026-08-28
+
+### Fixed
+- LanguageTool Windows health checks now allow real JVM response time instead of falsely declaring a healthy local server dead after 0.2-0.35 seconds.
+- Marketing-channel media extraction no longer discards legitimate campaign creatives merely because metadata contains advertising/marketing/promo vocabulary.
+- Channel-aware media filtering keeps sponsor/affiliate/banner/tracker/logo/avatar rejection strict while allowing topical advertising creatives for marketing channels.
+- Media is mandatory for every Telegram channel. Missing or Telegram-rejected media never falls back to a text-only publication.
+- Added media-stage audit counters so a no-media rejection records raw candidate count and prepared result count.
+
+### Preserved
+- RC49 simplified human-readable editorial pipeline and Editorial Learning Loop.
+- Existing Data, channels, sources, Telegram credentials, publication history and editorial memory remain compatible.
+
 ## 0.1.0-rc45 — 2026-08-27
 
 ### Added

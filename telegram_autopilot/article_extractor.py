@@ -24,15 +24,15 @@ _ALWAYS_SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "footer", "for
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "li", "blockquote", "pre"}
 
 _NOISE_PHRASES = (
-    "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertisement", "advertorial",
-    "sponsored", "sponsor", "promo", "promotion", "affiliate", "newsletter", "related-content",
+    "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertorial",
+    "sponsored", "sponsor", "affiliate", "newsletter", "related-content",
     "related_content", "recommended-content", "recommended_content", "recommendation-widget", "outbrain",
     "taboola", "revcontent", "ad-slot", "ad_slot", "ad-unit", "ad_unit", "ad-container", "ad_container",
     "google-ad", "google_ad", "doubleclick", "native-ad", "native_ad", "commercial-widget",
 )
 _NOISE_EXACT_TOKENS = {
-    "ad", "ads", "advert", "advertising", "banner", "banners", "sponsor", "sponsored", "promo", "promoted",
-    "affiliate", "commercial", "marketing", "recommendations",
+    "ad", "ads", "advert", "banner", "banners", "sponsor", "sponsored",
+    "affiliate", "recommendations",
 }
 _MEDIA_CONTEXT_NOISE = {
     "author", "authors", "byline", "avatar", "profile", "headshot", "share", "sharing", "social", "toolbar",
@@ -40,8 +40,8 @@ _MEDIA_CONTEXT_NOISE = {
 }
 _BAD_MEDIA_URL_PHRASES = (
     "doubleclick.net", "googlesyndication.com", "googleadservices.com", "amazon-adsystem.com", "adservice.google",
-    "outbrain.com", "taboola.com", "/advertisement/", "/advertising/", "/sponsored/", "/sponsor/",
-    "/affiliate/", "/promo/", "/promos/", "/banner/", "/banners/", "adserver", "ad-server", "adunit",
+    "outbrain.com", "taboola.com", "/sponsored/", "/sponsor/",
+    "/affiliate/", "/banner/", "/banners/", "adserver", "ad-server", "adunit",
     "ad-unit", "tracking", "pixel.gif", "1x1.gif",
 )
 _BAD_GENERIC_MEDIA_PHRASES = (
