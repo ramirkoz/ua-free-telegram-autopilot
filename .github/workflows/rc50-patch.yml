@@ -1,0 +1,30 @@
+name: RC50 One-shot Patch
+
+on:
+  push:
+    branches: [hotfix/rc50-media-languagetool]
+    paths:
+      - tools/rc50_patch.py
+      - .github/workflows/rc50-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hotfix/rc50-media-languagetool
+          fetch-depth: 0
+      - run: python tools/rc50_patch.py
+      - shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: keep default anti-ad media filter strict"
+          git push origin HEAD:hotfix/rc50-media-languagetool
