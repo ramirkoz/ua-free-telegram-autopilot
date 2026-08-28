@@ -29,6 +29,12 @@ def test_marketing_context_still_rejects_sponsored_banner_noise():
     assert _hard_reject(item, marketing_context=True)
 
 
+def test_default_context_still_rejects_advertising_commercial_metadata():
+    item = PreparedMedia(1, "image", "https://example.com/campaign.jpg", context="advertising commercial creative")
+    assert _hard_reject(item)
+    assert not _hard_reject(item, marketing_context=True)
+
+
 def test_extractor_defers_topical_promo_words_to_channel_policy():
     url = editorial_media_candidate(
         "https://example.com/story", "/advertising/promo-campaign.jpg",

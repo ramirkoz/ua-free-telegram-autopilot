@@ -16,7 +16,7 @@ _MEDIA_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 _HARD_REJECT = (
-    "advertisement", "advertorial", "sponsored", "sponsor", "affiliate", "promo", "promotion",
+    "advertisement", "advertising", "advertorial", "sponsored", "sponsor", "affiliate", "promo", "promotion", "commercial",
     "cocoon ai", "ai summary", "ai-summary", "newsletter", "subscribe", "outbrain", "taboola",
     "doubleclick", "googlesyndication", "googleadservices", "amazon-adsystem", "adserver", "ad-unit",
     "ad_slot", "ad-slot", "banner", "tracking", "pixel.gif", "1x1.gif", "favicon", "sprite",
