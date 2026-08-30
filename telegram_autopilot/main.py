@@ -39,6 +39,7 @@ from .rc52_feedback import install_rc52_feedback
 from .rc52_ui import install_rc52_ui
 from .rc53_hardening import install_rc53_hardening
 from .rc53_ui import install_rc53_ui
+from .rc54_mtproto import install_rc54_mtproto
 
 
 def main() -> int:
@@ -74,6 +75,7 @@ def main() -> int:
             install_rc51_ui()
             install_rc52_ui()
             install_rc53_ui()
+            install_rc54_mtproto()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
