@@ -41,6 +41,7 @@ from .rc53_hardening import install_rc53_hardening
 from .rc53_ui import install_rc53_ui
 from .rc54_mtproto import install_rc54_mtproto
 from .rc55_refresh import install_rc55_refresh
+from .rc56_reaction_runtime import install_rc56_reaction_runtime
 
 
 def main() -> int:
@@ -78,6 +79,7 @@ def main() -> int:
             install_rc53_ui()
             install_rc54_mtproto()
             install_rc55_refresh()
+            install_rc56_reaction_runtime()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
