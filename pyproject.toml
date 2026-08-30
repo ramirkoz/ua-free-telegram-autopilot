@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ua-free-telegram-autopilot"
-version = "0.1.0rc40"
+version = "0.1.0rc53"
 description = "Standalone Windows Telegram news autopilot for UA FREE"
 requires-python = ">=3.11"
 dependencies = [
   "cryptography>=42,<47",
+  "Telethon>=1.36,<2",
 ]
 
 [tool.setuptools.packages.find]
