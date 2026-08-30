@@ -224,10 +224,15 @@ def reaction_health() -> ReactionHealth:
     api_hash = str(getattr(secret, "telegram_api_hash", "") or "").strip()
     phone = str(getattr(secret, "telegram_phone", "") or "").strip()
     session = str(getattr(secret, "telegram_user_session", "") or "").strip()
-    if not api_id or not api_hash or not phone:
+    if not api_id or not api_hash:
         return ReactionHealth(
             "credentials_missing", False,
-            "Потрібні Telegram API ID, API Hash і телефон. Без MTProto реакції не читаються.",
+            "Потрібні Telegram API ID та API Hash. Без MTProto реакції не читаються.",
+        )
+    if not session and not phone:
+        return ReactionHealth(
+            "credentials_missing", False,
+            "Для першої MTProto-авторизації потрібен номер телефону Telegram.",
         )
     if not session:
         return ReactionHealth(
@@ -284,6 +289,14 @@ def _is_quality_prompt(prompt: str) -> bool:
         or text.startswith("Ти пишеш ФІНАЛЬНИЙ пост для Telegram")
         or text.startswith("Ты выпускающий редактор Telegram-канала.")
         or text.startswith("Ти автор українського Telegram-каналу.")
+    )
+
+
+def _is_ru_editor_prompt(prompt: str) -> bool:
+    text = str(prompt or "").lstrip()
+    return (
+        text.startswith("Ты выпускающий редактор Telegram.")
+        or text.startswith("Ты выпускающий редактор Telegram-канала.")
     )
 
 
@@ -468,6 +481,10 @@ def _install_pipeline_hardening() -> None:
         text = str(prompt or "")
         original_allowed = set(kwargs.get("allowed_providers") or set())
         if _is_quality_prompt(text):
+            if _is_ru_editor_prompt(text) and original_allowed == {"codex", "gemini"}:
+                raise production.AIRouterError(
+                    "RC53: trusted RU editor set already exhausted; continue with SOURCE-only UA path."
+                )
             if original_allowed and original_allowed <= {"groq", "nvidia", "cloudflare", "local"}:
                 raise production.AIRouterError(
                     "RC53: low-yield fallback disabled for final newsroom writing."
