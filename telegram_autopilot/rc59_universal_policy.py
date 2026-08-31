@@ -59,6 +59,8 @@ class ChannelPolicy:
         media = str(value("media_policy", MEDIA_REQUIRED) or MEDIA_REQUIRED).strip().casefold()
         if media not in MEDIA_VALUES:
             media = MEDIA_REQUIRED
+        minimum = max(120, int(value("target_min_chars", 300) or 300))
+        maximum = max(minimum, int(value("target_max_chars", 750) or 750))
         return cls(
             channel_id=int(value("channel_id", 0) or 0),
             enabled=bool(int(value("enabled", 1) or 0)),
@@ -74,20 +76,28 @@ class ChannelPolicy:
             selector_extra_prompt=str(value("selector_extra_prompt", "") or ""),
             writer_extra_prompt=str(value("writer_extra_prompt", "") or ""),
             media_policy=media,
-            target_min_chars=max(120, int(value("target_min_chars", 300) or 300)),
-            target_max_chars=max(180, int(value("target_max_chars", 750) or 750)),
+            target_min_chars=minimum,
+            target_max_chars=maximum,
             updated_at=str(value("updated_at", "") or ""),
         )
 
 
 def default_policy(channel: Any | None = None) -> ChannelPolicy:
+    base = ChannelPolicy()
     legacy = " ".join(str(getattr(channel, "editorial_profile", "") or "").split())
     purpose = legacy or "Новинний Telegram-канал із власною редакційною політикою."
-    selection = legacy or ChannelPolicy.selection_rules
+    selection = legacy or base.selection_rules
     return ChannelPolicy(
         channel_id=int(getattr(channel, "id", 0) or 0),
         purpose=purpose,
+        audience=base.audience,
         selection_rules=selection,
+        rejection_rules=base.rejection_rules,
+        writing_rules=base.writing_rules,
+        style_rules=base.style_rules,
+        media_policy=base.media_policy,
+        target_min_chars=base.target_min_chars,
+        target_max_chars=base.target_max_chars,
     )
 
 
@@ -180,7 +190,6 @@ def topic_memory_block(channel_id: int) -> str:
     positive: list[tuple[float, str, int, int]] = []
     negative: list[tuple[float, str, int, int]] = []
     audience_rates: list[float] = []
-
     try:
         from .rc57_feedback_model import audience_raw_rate, audience_performance_score
     except Exception:
@@ -325,7 +334,7 @@ def _parse_selector(raw: str) -> dict[str, Any]:
     tags_raw = obj.get("topic_tags") or []
     if not isinstance(tags_raw, list):
         tags_raw = []
-    tags = []
+    tags: list[str] = []
     for item in tags_raw:
         value = " ".join(str(item or "").split())[:80]
         if value and value not in tags:
@@ -347,16 +356,10 @@ def _run_selector(policy: ChannelPolicy, article: Any, *, channel_id: int = 0) -
         _parse_selector(raw)
 
     result = run_ai(
-        prompt,
-        validator=validator,
-        max_output_tokens=320,
-        local_prompt=prompt,
-        local_max_output_tokens=340,
-        cloud_timeout_seconds=24,
-        local_timeout_seconds=45,
-        task_timeout_seconds=70,
-        local_repair=False,
-        suppress_provider_on_quota=False,
+        prompt, validator=validator,
+        max_output_tokens=320, local_prompt=prompt, local_max_output_tokens=340,
+        cloud_timeout_seconds=24, local_timeout_seconds=45, task_timeout_seconds=70,
+        local_repair=False, suppress_provider_on_quota=False,
         allowed_providers={"codex", "gemini", "groq", "nvidia", "cloudflare", "local"},
     )
     return result, _parse_selector(result.text)
@@ -484,14 +487,9 @@ def score_against_feedback_rc59(article: Any, feedback_rows: list[Any]):
             negative += -source_bonus
 
     return rc51.FeedbackScore(
-        score=positive - negative,
-        positive=positive,
-        negative=negative,
-        hard_suppress=hard,
-        matched_article_id=matched_id,
-        matched_similarity=matched_sim,
-        matched_age_hours=matched_age,
-        rated_posts=rated,
+        score=positive - negative, positive=positive, negative=negative,
+        hard_suppress=hard, matched_article_id=matched_id,
+        matched_similarity=matched_sim, matched_age_hours=matched_age, rated_posts=rated,
     )
 
 
@@ -535,8 +533,7 @@ def _install_database_patch() -> None:
                    WHERE p.channel_id IS NULL"""
             ).fetchall()
             for row in rows:
-                legacy = " ".join(str(row["editorial_profile"] or "").split())
-                fallback = default_policy(SimpleNamespace(id=int(row["id"]), editorial_profile=legacy))
+                fallback = default_policy(SimpleNamespace(id=int(row["id"]), editorial_profile=str(row["editorial_profile"] or "")))
                 con.execute(
                     """INSERT INTO channel_policies(
                            channel_id,policy_version,enabled,purpose,audience,selection_rules,rejection_rules,
@@ -561,8 +558,7 @@ def _install_database_patch() -> None:
             row = con.execute("SELECT * FROM channel_policies WHERE channel_id=?", (int(channel_id),)).fetchone()
         if row:
             return ChannelPolicy.from_row(row)
-        channel = self.get_channel(int(channel_id))
-        return default_policy(channel)
+        return default_policy(self.get_channel(int(channel_id)))
 
     def save_policy(self, policy: ChannelPolicy) -> None:
         media = policy.media_policy if policy.media_policy in MEDIA_VALUES else MEDIA_REQUIRED
@@ -766,7 +762,6 @@ def decide_rc59(channel: Any, article: Any, recent: list[Any], *, hard_limit: in
         f"writer={final_result.provider}/{final_result.model}; reaction_score={verdict.score:.3f}; tags={tags or 'none'}; "
         "global Fact/Language/Refusal QA PASS."
     )
-    LOG.info("RC59 publish-ready article_id=%s fit=%s writer=%s/%s", article_id, selector["fit_score"], final_result.provider, final_result.model)
     return Decision(
         decision="publish", duplicate_of=None, reason=reason,
         event_key=(marker + title_key)[:500], event_summary=body[:1000],
@@ -804,16 +799,12 @@ def _install_ui() -> None:
         tabs.add(writing, text="Написання")
         tabs.add(examples, text="Приклади")
         tabs.add(advanced, text="Розширене")
-
         fields: dict[str, Any] = {}
 
         def entry(parent, label, value="", show=""):
-            frame = ttk.Frame(parent)
-            frame.pack(fill="x", pady=5)
+            frame = ttk.Frame(parent); frame.pack(fill="x", pady=5)
             ttk.Label(frame, text=label, width=34).pack(side="left")
-            widget = ttk.Entry(frame, show=show)
-            widget.pack(side="left", fill="x", expand=True)
-            widget.insert(0, str(value))
+            widget = ttk.Entry(frame, show=show); widget.pack(side="left", fill="x", expand=True); widget.insert(0, str(value))
             return widget
 
         def text_box(parent, label, value="", height=7, hint=""):
@@ -821,17 +812,13 @@ def _install_ui() -> None:
             if hint:
                 ttk.Label(parent, text=hint, foreground="#666", wraplength=980).pack(anchor="w", pady=(0, 3))
             widget = ScrolledText(parent, height=height, wrap="word", undo=True)
-            widget.pack(fill="both", expand=True, pady=(0, 8))
-            widget.insert("1.0", str(value or ""))
-            return widget
+            widget.pack(fill="both", expand=True, pady=(0, 8)); widget.insert("1.0", str(value or "")); return widget
 
         fields["name"] = entry(basic, "Назва каналу", ch.name if ch else "")
         fields["chat"] = entry(basic, "Telegram: посилання / @username / Chat ID", ch.telegram_chat_id if ch else "")
-        secret = load_secrets()
-        existing = secret.channel_bot_tokens.get(str(ch.id), "") if ch else ""
+        secret = load_secrets(); existing = secret.channel_bot_tokens.get(str(ch.id), "") if ch else ""
         fields["token"] = entry(basic, "Bot Token (необов'язково)", existing, show="•")
-        nums = ttk.LabelFrame(basic, text="Автоматизація", padding=10)
-        nums.pack(fill="x", pady=10)
+        nums = ttk.LabelFrame(basic, text="Автоматизація", padding=10); nums.pack(fill="x", pady=10)
         values = [
             ("poll", "Перевірка джерел, хв", ch.poll_interval_minutes if ch else 5),
             ("gap", "Мін. пауза між постами, хв", ch.min_publish_interval_minutes if ch else 10),
@@ -841,80 +828,55 @@ def _install_ui() -> None:
         ]
         for row, (key, label, value) in enumerate(values):
             ttk.Label(nums, text=label).grid(row=row, column=0, sticky="w", pady=4)
-            widget = ttk.Entry(nums, width=12)
-            widget.insert(0, str(value))
-            widget.grid(row=row, column=1, sticky="w", padx=8)
-            fields[key] = widget
+            widget = ttk.Entry(nums, width=12); widget.insert(0, str(value)); widget.grid(row=row, column=1, sticky="w", padx=8); fields[key] = widget
         enabled = tk.BooleanVar(value=ch.enabled if ch else True)
         ttk.Checkbutton(nums, text="Канал активний", variable=enabled).grid(row=0, column=2, sticky="w", padx=22)
 
         fields["purpose"] = text_box(mission, "Про що канал / його місія", policy.purpose, 9, "Саме це, а не назва каналу, визначає редакційний напрям.")
         fields["audience"] = text_box(mission, "Для кого пишемо", policy.audience, 8, "Опиши читача: рівень підготовки, інтереси, очікувану складність.")
-
-        fields["selection_rules"] = text_box(selection, "Що шукати і пропускати", policy.selection_rules, 10, "Критерії хорошого кандидата. Можна писати природною мовою, списком або прикладами.")
-        fields["rejection_rules"] = text_box(selection, "Що відхиляти", policy.rejection_rules, 9, "Hard exclusions і небажані типи матеріалів.")
-        media_frame = ttk.Frame(selection)
-        media_frame.pack(fill="x", pady=6)
+        fields["selection_rules"] = text_box(selection, "Що шукати і пропускати", policy.selection_rules, 10)
+        fields["rejection_rules"] = text_box(selection, "Що відхиляти", policy.rejection_rules, 9)
+        media_frame = ttk.Frame(selection); media_frame.pack(fill="x", pady=6)
         ttk.Label(media_frame, text="Медіа-політика", width=24).pack(side="left")
         media_var = tk.StringVar(value=policy.media_policy)
-        media_combo = ttk.Combobox(media_frame, textvariable=media_var, state="readonly", values=MEDIA_VALUES, width=18)
-        media_combo.pack(side="left")
+        ttk.Combobox(media_frame, textvariable=media_var, state="readonly", values=MEDIA_VALUES, width=18).pack(side="left")
         ttk.Label(media_frame, text="required = без медіа не публікувати · preferred = бажано · optional = не вимагати", foreground="#666").pack(side="left", padx=12)
 
         fields["writing_rules"] = text_box(writing, "Структура і спосіб написання", policy.writing_rules, 9)
         fields["style_rules"] = text_box(writing, "Тон і стиль", policy.style_rules, 9)
-        length_frame = ttk.Frame(writing)
-        length_frame.pack(fill="x", pady=6)
+        length_frame = ttk.Frame(writing); length_frame.pack(fill="x", pady=6)
         ttk.Label(length_frame, text="Бажана довжина, символів").pack(side="left")
-        fields["target_min"] = ttk.Entry(length_frame, width=8)
-        fields["target_min"].insert(0, str(policy.target_min_chars))
-        fields["target_min"].pack(side="left", padx=(10, 4))
+        fields["target_min"] = ttk.Entry(length_frame, width=8); fields["target_min"].insert(0, str(policy.target_min_chars)); fields["target_min"].pack(side="left", padx=(10, 4))
         ttk.Label(length_frame, text="–").pack(side="left")
-        fields["target_max"] = ttk.Entry(length_frame, width=8)
-        fields["target_max"].insert(0, str(policy.target_max_chars))
-        fields["target_max"].pack(side="left", padx=4)
+        fields["target_max"] = ttk.Entry(length_frame, width=8); fields["target_max"].insert(0, str(policy.target_max_chars)); fields["target_max"].pack(side="left", padx=4)
 
         fields["positive_examples"] = text_box(examples, "Хороші теми / кейси", policy.positive_examples, 10, "Ручні приклади редактора. Реакції 👍 доповнюють їх автоматично.")
         fields["negative_examples"] = text_box(examples, "Небажані теми / кейси", policy.negative_examples, 10, "Ручні негативні приклади. Реакції 👎 доповнюють їх автоматично.")
-
         fields["extra_instructions"] = text_box(advanced, "Додаткові редакційні правила", policy.extra_instructions, 6)
-        fields["selector_extra_prompt"] = text_box(advanced, "Додатковий prompt selector-а", policy.selector_extra_prompt, 6, "Використовуй лише для специфічних правил відбору, які не помістилися вище.")
-        fields["writer_extra_prompt"] = text_box(advanced, "Додатковий prompt writer-а", policy.writer_extra_prompt, 6, "Використовуй лише для специфічних правил написання.")
+        fields["selector_extra_prompt"] = text_box(advanced, "Додатковий prompt selector-а", policy.selector_extra_prompt, 6)
+        fields["writer_extra_prompt"] = text_box(advanced, "Додатковий prompt writer-а", policy.writer_extra_prompt, 6)
         policy_enabled = tk.BooleanVar(value=policy.enabled)
         ttk.Checkbutton(advanced, text="Редакційна політика активна", variable=policy_enabled).pack(anchor="w", pady=6)
 
         def text_value(key: str) -> str:
-            widget = fields[key]
-            return widget.get("1.0", "end-1c").strip()
+            return fields[key].get("1.0", "end-1c").strip()
 
         def current_policy(channel_id: int = 0) -> ChannelPolicy:
             return ChannelPolicy(
-                channel_id=channel_id,
-                enabled=policy_enabled.get(),
-                purpose=text_value("purpose"),
-                audience=text_value("audience"),
-                selection_rules=text_value("selection_rules"),
-                rejection_rules=text_value("rejection_rules"),
-                writing_rules=text_value("writing_rules"),
-                style_rules=text_value("style_rules"),
-                positive_examples=text_value("positive_examples"),
-                negative_examples=text_value("negative_examples"),
-                extra_instructions=text_value("extra_instructions"),
-                selector_extra_prompt=text_value("selector_extra_prompt"),
-                writer_extra_prompt=text_value("writer_extra_prompt"),
-                media_policy=media_var.get(),
-                target_min_chars=int(fields["target_min"].get()),
-                target_max_chars=int(fields["target_max"].get()),
+                channel_id=channel_id, enabled=policy_enabled.get(), purpose=text_value("purpose"), audience=text_value("audience"),
+                selection_rules=text_value("selection_rules"), rejection_rules=text_value("rejection_rules"),
+                writing_rules=text_value("writing_rules"), style_rules=text_value("style_rules"),
+                positive_examples=text_value("positive_examples"), negative_examples=text_value("negative_examples"),
+                extra_instructions=text_value("extra_instructions"), selector_extra_prompt=text_value("selector_extra_prompt"),
+                writer_extra_prompt=text_value("writer_extra_prompt"), media_policy=media_var.get(),
+                target_min_chars=int(fields["target_min"].get()), target_max_chars=int(fields["target_max"].get()),
             )
 
         def show_prompt():
             try:
                 p = current_policy(int(ch.id) if ch else 0)
-                preview = tk.Toplevel(win)
-                preview.title("Фактична редакційна інструкція AI")
-                preview.geometry("980x760")
-                text = ScrolledText(preview, wrap="word")
-                text.pack(fill="both", expand=True, padx=10, pady=10)
+                preview = tk.Toplevel(win); preview.title("Фактична редакційна інструкція AI"); preview.geometry("980x760")
+                text = ScrolledText(preview, wrap="word"); text.pack(fill="both", expand=True, padx=10, pady=10)
                 text.insert("1.0", policy_text(p) + "\n\n--- SELECTOR TEMPLATE ---\n\n" + _selector_prompt(p, {"title": "<TITLE>", "raw_text": "<SOURCE>"}, channel_id=int(ch.id) if ch else 0) + "\n\n--- WRITER TEMPLATE ---\n\n" + _writer_prompt(p, SimpleNamespace(id=int(ch.id) if ch else 0), {"title": "<TITLE>", "raw_text": "<SOURCE>"}, {"angle": "<ANGLE>", "topic_tags": ["<TAG>"], "fit_score": 80}, hard_limit=900))
                 text.configure(state="disabled")
             except Exception as exc:
@@ -924,16 +886,11 @@ def _install_ui() -> None:
             try:
                 p = current_policy(int(ch.id) if ch else 0)
             except Exception as exc:
-                messagebox.showerror("UA FREE Telegram Autopilot", str(exc), parent=win)
-                return
+                messagebox.showerror("UA FREE Telegram Autopilot", str(exc), parent=win); return
             title = simpledialog.askstring("Тест політики", "Заголовок тестового матеріалу:", parent=win)
-            if title is None:
-                return
+            if title is None: return
             source = simpledialog.askstring("Тест політики", "Короткий текст / опис джерела:", parent=win)
-            if source is None:
-                return
-            status = messagebox.showinfo("Тест політики", "Запускаю selector. Результат з'явиться окремим повідомленням.", parent=win)
-
+            if source is None: return
             def work():
                 try:
                     result, verdict = _run_selector(p, {"title": title, "raw_text": source}, channel_id=int(ch.id) if ch else 0)
@@ -946,41 +903,26 @@ def _install_ui() -> None:
         def save():
             try:
                 name = fields["name"].get().strip()
-                if not name:
-                    raise ValueError("Вкажіть назву каналу.")
+                if not name: raise ValueError("Вкажіть назву каналу.")
                 chat = normalize_chat_target(fields["chat"].get())
                 p = current_policy(int(ch.id) if ch else 0)
-                if p.target_max_chars < p.target_min_chars:
-                    raise ValueError("Максимальна бажана довжина не може бути меншою за мінімальну.")
+                if p.target_max_chars < p.target_min_chars: raise ValueError("Максимальна бажана довжина не може бути меншою за мінімальну.")
                 cid = self.db.save_channel(
-                    channel_id=ch.id if ch else None,
-                    name=name,
-                    telegram_chat_id=chat,
-                    editorial_profile=p.purpose,
-                    enabled=enabled.get(), include_source_link=False,
-                    poll_interval_minutes=int(fields["poll"].get()),
-                    min_publish_interval_minutes=int(fields["gap"].get()),
-                    dedupe_window_hours=int(fields["dedupe"].get()),
-                    max_age_hours=int(fields["age"].get()),
+                    channel_id=ch.id if ch else None, name=name, telegram_chat_id=chat,
+                    editorial_profile=p.purpose, enabled=enabled.get(), include_source_link=False,
+                    poll_interval_minutes=int(fields["poll"].get()), min_publish_interval_minutes=int(fields["gap"].get()),
+                    dedupe_window_hours=int(fields["dedupe"].get()), max_age_hours=int(fields["age"].get()),
                     max_posts_per_cycle=int(fields["maxcycle"].get()),
                 )
-                p.channel_id = int(cid)
-                self.db.rc59_save_channel_policy(p)
-                sec = load_secrets()
-                tok = fields["token"].get().strip()
-                if tok:
-                    sec.channel_bot_tokens[str(cid)] = tok
-                else:
-                    sec.channel_bot_tokens.pop(str(cid), None)
-                save_secrets(sec)
-                self.current_channel_id = cid
-                win.destroy()
-                self.refresh_all()
+                p.channel_id = int(cid); self.db.rc59_save_channel_policy(p)
+                sec = load_secrets(); tok = fields["token"].get().strip()
+                if tok: sec.channel_bot_tokens[str(cid)] = tok
+                else: sec.channel_bot_tokens.pop(str(cid), None)
+                save_secrets(sec); self.current_channel_id = cid; win.destroy(); self.refresh_all()
             except Exception as exc:
                 messagebox.showerror("UA FREE Telegram Autopilot", str(exc), parent=win)
 
-        bottom = ttk.Frame(win)
-        bottom.pack(fill="x", padx=12, pady=(0, 10))
+        bottom = ttk.Frame(win); bottom.pack(fill="x", padx=12, pady=(0, 10))
         ttk.Button(bottom, text="Зберегти", command=save).pack(side="right")
         ttk.Button(bottom, text="Показати фактичний prompt", command=show_prompt).pack(side="left", padx=4)
         ttk.Button(bottom, text="Тест редакційної політики", command=test_policy).pack(side="left", padx=4)
@@ -988,14 +930,12 @@ def _install_ui() -> None:
             def test_telegram():
                 try:
                     tok = fields["token"].get().strip() or load_secrets().default_telegram_bot_token
-                    name = test_bot(tok, fields["chat"].get())
-                    messagebox.showinfo("UA FREE Telegram Autopilot", f"Telegram канал доступний: {name}", parent=win)
+                    name = test_bot(tok, fields["chat"].get()); messagebox.showinfo("UA FREE Telegram Autopilot", f"Telegram канал доступний: {name}", parent=win)
                 except Exception as exc:
                     messagebox.showerror("UA FREE Telegram Autopilot", str(exc), parent=win)
             ttk.Button(bottom, text="Перевірити Telegram", command=test_telegram).pack(side="right", padx=8)
 
     MainWindow._channel_dialog = channel_dialog_rc59
-
     old_refresh_memory = getattr(MainWindow, "_rc48_refresh_memory", None)
     if old_refresh_memory:
         def refresh_memory_rc59(self):
@@ -1003,10 +943,8 @@ def _install_ui() -> None:
             var = getattr(self, "rc58_learning_summary", None)
             channel_id = int(getattr(self, "current_channel_id", 0) or 0)
             if var is not None:
-                try:
-                    var.set(generic_learning_summary(channel_id) if channel_id else "Оберіть канал.")
-                except Exception as exc:
-                    var.set(f"Редакторська пам'ять недоступна: {exc}")
+                try: var.set(generic_learning_summary(channel_id) if channel_id else "Оберіть канал.")
+                except Exception as exc: var.set(f"Редакторська пам'ять недоступна: {exc}")
         MainWindow._rc48_refresh_memory = refresh_memory_rc59
 
 
@@ -1015,16 +953,12 @@ def install_rc59_universal_policy() -> None:
     if _INSTALLED:
         return
     _install_database_patch()
-
     from . import production_pipeline as production
     from . import rc51_feedback as rc51
     from . import service as service_module
-
     rc51.score_against_feedback = score_against_feedback_rc59
-
     def decide(channel, article, recent, *, hard_limit=production.MEDIA_POST_HARD_LIMIT, format_marker=None):
         return decide_rc59(channel, article, recent, hard_limit=hard_limit, format_marker=format_marker)
-
     production.decide = decide
     service_module.decide = decide
     production.POST_FORMAT_PREFIX = "telegram-post-v36:"
