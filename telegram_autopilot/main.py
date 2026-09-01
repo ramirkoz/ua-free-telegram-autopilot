@@ -45,6 +45,7 @@ from .rc56_reaction_runtime import install_rc56_reaction_runtime
 from .rc57_admin_audience_feedback import install_rc57_admin_audience_feedback
 from .rc58_editorial_rebuild import install_rc58_editorial_rebuild
 from .rc59_universal_policy import install_rc59_universal_policy
+from .rc60_editorial_quality import install_rc60_editorial_quality
 
 
 def main() -> int:
@@ -86,6 +87,7 @@ def main() -> int:
             install_rc57_admin_audience_feedback()
             install_rc58_editorial_rebuild()
             install_rc59_universal_policy()
+            install_rc60_editorial_quality()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
