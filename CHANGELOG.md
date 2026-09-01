@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.0-rc61 — 2026-09-01
+
+- Fix production starvation seen in ПРОДАНО!: stale dated backlog is rejected before consuming per-cycle AI/media attempts.
+- Add bounded recovery of recent RC53 freshness rejects and article-aware page-link ranking; profile/directory noise is excluded.
+- Extend defensible publication-date extraction for creative-industry pages while preserving fail-closed freshness.
+- Normalize non-JPEG/PNG CDN images to bounded JPEG before Telegram `sendPhoto`.
+- Re-fetch and persist a missing article publication date once before strict freshness rejection.
+- Add RC61 regression tests and keep RC60 Data/schema compatibility.
+
 ## 0.1.0-rc50 — 2026-08-28
 
 ### Fixed
