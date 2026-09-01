@@ -105,7 +105,6 @@ def extract_page_published_at_rc61(html: str, url: str = "", *, previous=None) -
             return existing
 
     raw = str(html or "")
-    # Common JSON-LD variants beyond the exact double-quoted form handled by RC53.
     for pattern in (
         r"(?is)['\"]datePublished['\"]\s*:\s*['\"]([^'\"]+)['\"]",
         r"(?is)['\"]dateCreated['\"]\s*:\s*['\"]([^'\"]+)['\"]",
@@ -117,8 +116,6 @@ def extract_page_published_at_rc61(html: str, url: str = "", *, previous=None) -
             if dt is not None and dt <= datetime.now(timezone.utc) + timedelta(days=1):
                 return dt.isoformat()
 
-    # shots.net and several creative-industry sites render the date as a human byline
-    # rather than useful metadata, e.g. "by … on 1st September 2026".
     visible = re.sub(r"(?is)<script\b.*?</script>|<style\b.*?</style>", " ", raw)
     visible = html_module.unescape(re.sub(r"(?s)<[^>]+>", " ", visible))
     textual = _parse_textual_date(visible[:12000])
@@ -130,12 +127,7 @@ def extract_page_published_at_rc61(html: str, url: str = "", *, previous=None) -
 
 
 def _safe_photo_bytes(item):
-    """Return JPEG/PNG-safe PreparedMedia for Telegram sendPhoto.
-
-    Imgix and similar CDNs can honor auto=format and return AVIF/WebP. Telegram's
-    photo upload path is much less forgiving, so normalize unsupported image bytes
-    locally instead of letting a perfectly good post die at the final API call.
-    """
+    """Return JPEG/PNG-safe PreparedMedia for Telegram sendPhoto."""
     mime = str(getattr(item, "mime_type", "") or "").casefold()
     if mime in {"image/jpeg", "image/png"}:
         return item
@@ -266,7 +258,6 @@ def install_rc61_runtime_fix() -> None:
             try:
                 return _collect_page_rc61(source)
             except Exception:
-                # Preserve RC60 fallback/error semantics for sites where ranking cannot run.
                 return previous_collect(source)
         return previous_collect(source)
 
@@ -290,7 +281,7 @@ def install_rc61_runtime_fix() -> None:
         scan_limit = max(240, min(800, int(limit) * 16))
         with self.connect() as con:
             rows = con.execute(
-                """SELECT a.*,s.name AS source_name,s.priority AS source_priority,c.max_age_hours AS channel_max_age
+                """SELECT a.*,s.name AS source_name,s.priority AS source_priority,s.kind AS source_kind,s.url AS source_url,c.max_age_hours AS channel_max_age
                    FROM articles a
                    JOIN sources s ON s.id=a.source_id
                    JOIN channels c ON c.id=a.channel_id
@@ -313,19 +304,46 @@ def install_rc61_runtime_fix() -> None:
 
         ready = []
         now = datetime.now(timezone.utc)
+        date_refresh_budget = 6
         for row in rows:
             parsed = rc53._parse_source_date(str(row["source_published_at"] or ""))
-            if parsed is not None:
-                max_age = max(1, int(row["channel_max_age"] or 24))
-                if parsed < now - timedelta(hours=max_age):
+            if parsed is None and str(row["status"] or "") == "retry":
+                ready.append(row)
+                if len(ready) >= max(1, int(limit)):
+                    break
+                continue
+            if parsed is None:
+                inferred = rc53.infer_date_from_url(str(row["url"] or ""))
+                parsed = rc53._parse_source_date(inferred)
+                if parsed is None and date_refresh_budget > 0 and str(row["source_kind"] or "") == "page":
+                    date_refresh_budget -= 1
+                    try:
+                        response = collector._source_fetch(
+                            str(row["url"] or ""),
+                            max_bytes=3 * 1024 * 1024,
+                            allowed_content_types={"text/html", "application/xhtml+xml"},
+                            timeout=20,
+                        )
+                        html = response.body.decode("utf-8", errors="replace")
+                        inferred = rc53.extract_page_published_at(html, str(row["url"] or ""))
+                        parsed = rc53._parse_source_date(inferred)
+                    except Exception as exc:
+                        LOG.debug("RC61 date refresh failed article_id=%s: %s", row["id"], exc)
+                if parsed is None:
                     self.update_article(
                         int(row["id"]), status="rejected",
-                        reject_reason=f"RC61 FRESHNESS PREFILTER: матеріал старіший за {max_age} год.; AI/медіа не запускаються.",
+                        reject_reason="RC61 FRESHNESS: дату публікації не підтверджено після повторного читання сторінки; fail-closed.",
                     )
                     continue
-            # Missing dates are allowed through once so service can re-fetch the actual
-            # article page with the stronger RC61 date extractor. If still unknown,
-            # strict fail-closed remains in service.
+                with self.connect() as con:
+                    con.execute("UPDATE articles SET source_published_at=? WHERE id=?", (parsed.isoformat(), int(row["id"])))
+            max_age = max(1, int(row["channel_max_age"] or 24))
+            if parsed < now - timedelta(hours=max_age):
+                self.update_article(
+                    int(row["id"]), status="rejected",
+                    reject_reason=f"RC61 FRESHNESS PREFILTER: матеріал старіший за {max_age} год.; AI/медіа не запускаються.",
+                )
+                continue
             ready.append(row)
             if len(ready) >= max(1, int(limit)):
                 break
