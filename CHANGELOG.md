@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.0-rc62 — 2026-09-02
+
+- Restore semantic 👍/👎 learning after RC59 while keeping 🔥 style-only.
+- Add an enforced broad-reader human-interest gate for ПРОДАНО!, so trade-pretty campaigns alone do not qualify.
+- Add quiet hours, effective per-channel publication spacing, daily caps and burst guards.
+- Defer overrepresented sources/topics instead of flooding the feed or rejecting good candidates permanently.
+- Strengthen same-news-cycle dedupe for versioned products such as DLSS 5.
+- Add a final Ukrainian proofreader and deterministic blockers for production-observed language corruption.
+- Keep `Джерело` clickable when a video footer follows.
+- Preserve RC61/RC60 Data with no destructive migration.
+
 ## v0.1.0-rc61 — 2026-09-01
 
 - Fix production starvation seen in ПРОДАНО!: stale dated backlog is rejected before consuming per-cycle AI/media attempts.
