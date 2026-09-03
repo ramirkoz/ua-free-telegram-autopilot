@@ -91,9 +91,20 @@ def _run_selector_rc65(policy: Any, article: Any, *, channel_id: int = 0):
             raw = rc62._parse_marketing(result.text)
         except Exception:
             raw = dict(data)
-        route = _marketing_route(raw)
-        if raw.get("decision") == "publish" and data.get("decision") != "publish" and route:
-            data = dict(raw)
+        route = _marketing_route(raw) or _marketing_route(data)
+        local_gate_reason = " ".join(str(data.get("reason") or "").split())
+        local_interest_gate = (
+            local_gate_reason.startswith("RC62 HUMAN_INTEREST_REJECT")
+            or local_gate_reason.startswith("RC64 HUMAN_INTEREST_REJECT")
+        )
+        # RC62/RC64 may turn an AI 'publish' into a local human-interest reject.
+        # When the new independent RC65 route is strong enough, rescue that local
+        # gate even if the legacy parser already normalized the raw decision.
+        if data.get("decision") != "publish" and route and (raw.get("decision") == "publish" or local_interest_gate):
+            rescued = dict(raw) if raw else dict(data)
+            for key_name, value in data.items():
+                rescued.setdefault(key_name, value)
+            data = rescued
             data["decision"] = "publish"
             data["reason"] = (
                 f"RC65 MARKETING_ROUTE_PASS route={route}: матеріал проходить окремим редакційним маршрутом "
@@ -192,7 +203,7 @@ def _universal_final_edit(channel: Any, article: Any, decision: Any, *, hard_lim
             allowed_numbers=allowed_numbers, hard_limit=hard_limit,
         )
         quality = production.assess_rewrite(candidate, hard_limit=hard_limit)
-        floor = max(68, int(original_quality.score) - 4)
+        floor = max(68, min(82, int(original_quality.score) - 2))
         if quality.score < floor:
             raise production.ProductionPipelineError(
                 f"RC65 final editor quality regression {quality.score}/100 < {floor}/100"
