@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.0-rc64 — 2026-09-03
+
+- Replace the RC63 60/90-minute editorial pacing gates with a 5-minute technical anti-double-send delay while keeping quiet hours 00:00–07:00.
+- Remove hard source/topic saturation from training mode. Diversity is now a soft ranking preference, so repeated sources/topics remain eligible when they are still the best material.
+- Broaden ПРОДАНО! beyond campaign case studies to consumer behavior, pricing, retail/e-commerce, dark patterns, loyalty, packaging, platform monetization, creator economy, influencer mechanics, viral products, PR fails and behavioral experiments.
+- Keep the strict broad-reader human-interest gate, with a separate behavioral/commercial route for strong non-campaign stories.
+- Log selector PASS/REJECT decisions with fit and human/share/creative/mechanic scores plus the concrete reason.
+- Instruct the writer to use natural Ukrainian forms for personal names and established common names while preserving brands/products/models/formulas; add a targeted fallback localization pass only when Latin person-like names remain.
+- Strengthen cross-source same-event dedupe with a 36-hour strong-headline fingerprint, covering differently written reports such as the duplicate Saturn decagon story.
+- Preserve RC63 semantic reaction learning, final Ukrainian QA, source links, media rules and all existing Data without destructive migration.
+
+## v0.1.0-rc63 — 2026-09-02
+
+- Disable daily publication-count caps and rolling burst-count caps during training.
+- Preserve quiet hours, minimum spacing, semantic feedback learning, source/topic diversity, dedupe and final QA.
+- Add explicit RC63 installation and publication-HOLD diagnostics.
+
 ## v0.1.0-rc62 — 2026-09-02
 
 - Restore semantic 👍/👎 learning after RC59 while keeping 🔥 style-only.
