@@ -49,6 +49,7 @@ from .rc60_editorial_quality import install_rc60_editorial_quality
 from .rc61_runtime_fix import install_rc61_runtime_fix
 from .rc62_editorial_control import install_rc62_editorial_control
 from .rc63_training_mode import install_rc63_training_mode
+from .rc64_live_tuning import install_rc64_live_tuning
 
 
 def main() -> int:
@@ -94,6 +95,7 @@ def main() -> int:
             install_rc61_runtime_fix()
             install_rc62_editorial_control()
             install_rc63_training_mode()
+            install_rc64_live_tuning()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
