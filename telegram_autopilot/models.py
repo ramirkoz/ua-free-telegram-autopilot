@@ -20,6 +20,15 @@ class Channel:
     updated_at: str
     editorial_weights_json: str = "[]"
     content_direction: str = "en_to_uk"
+    poll_immediate: bool = False
+    publish_24h: bool = False
+    publish_start: str = "07:00"
+    publish_end: str = "00:00"
+    publish_immediately: bool = False
+    topic_balance_enabled: bool = True
+    topic_daily_limit: int = 2
+    related_spacing_posts: int = 5
+    channel_mode: str = "editorial"
 
 
 @dataclass(slots=True)
