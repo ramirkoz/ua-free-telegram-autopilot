@@ -54,6 +54,7 @@ from .rc65_universal_final_editor import install_rc65_universal_final_editor
 from .rc66_editorial_queue import install_rc66_editorial_queue
 from .rc66_ui import install_rc66_ui
 from .rc67_nonblocking_runtime import install_rc67_nonblocking_runtime
+from .rc68_editorial_value import install_rc68_editorial_value
 
 
 def main() -> int:
@@ -104,6 +105,7 @@ def main() -> int:
             install_rc66_editorial_queue()
             install_rc66_ui()
             install_rc67_nonblocking_runtime()
+            install_rc68_editorial_value()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
