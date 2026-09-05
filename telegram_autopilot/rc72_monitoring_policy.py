@@ -20,6 +20,21 @@ def _clean(value: Any, limit: int = 12000) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _normalize_saved_rule(value: str, *, kind: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        from . import rc59_universal_policy as rc59
+        generic = rc59.ChannelPolicy()
+        default_text = generic.selection_rules if kind == "selection" else generic.rejection_rules
+        if _clean(text).casefold() == _clean(default_text).casefold():
+            return ""
+    except Exception:
+        pass
+    return text
+
+
 def _saved_rules(channel_id: int) -> tuple[str, str] | None:
     try:
         from . import rc51_feedback as rc51
@@ -33,7 +48,9 @@ def _saved_rules(channel_id: int) -> tuple[str, str] | None:
             ).fetchone()
         if row is None:
             return None
-        return str(row[0] or "").strip(), str(row[1] or "").strip()
+        inclusion = _normalize_saved_rule(str(row[0] or ""), kind="selection")
+        exclusion = _normalize_saved_rule(str(row[1] or ""), kind="rejection")
+        return inclusion, exclusion
     except Exception as exc:
         LOG.debug("RC72 saved monitoring policy lookup failed channel_id=%s: %s", channel_id, exc)
         return None
