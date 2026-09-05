@@ -5,12 +5,7 @@ from tkinter import ttk
 from typing import Any
 
 from . import rc45_policy as rc45
-from .rc69_media_language import (
-    DIRECTION_RU_TO_UK,
-    DIRECTION_UK_TO_UK,
-    MEDIA_ENRICH_AUTO,
-    MEDIA_ENRICH_OFF,
-)
+from .rc69_media_language import MEDIA_ENRICH_AUTO, MEDIA_ENRICH_OFF
 
 _INSTALLED = False
 _PREV_DIALOG = None
@@ -52,42 +47,30 @@ def _channel_dialog_rc69(self: Any, ch: Any | None) -> None:
 
     form = None
     for widget in _walk(win):
-        if not isinstance(widget, ttk.LabelFrame):
-            continue
-        try:
-            if str(widget.cget("text")) == "Канал":
-                form = widget.master
-                break
-        except tk.TclError:
-            continue
+        if isinstance(widget, ttk.LabelFrame):
+            try:
+                if str(widget.cget("text")) == "Канал":
+                    form = widget.master
+                    break
+            except tk.TclError:
+                pass
     if form is None:
         return
-
     children = list(form.winfo_children())
     buttons = children[-1] if children and isinstance(children[-1], ttk.Frame) else None
 
     language_box = ttk.LabelFrame(form, text="Мова джерел → мова публікації", padding=10)
     label_to_value = {label: value for value, label in rc45.DIRECTION_LABELS.items()}
-    direction_var = tk.StringVar(value=rc45.DIRECTION_LABELS.get(initial_direction, rc45.DIRECTION_LABELS[rc45.DIRECTION_EN_TO_UK]))
+    direction_var = tk.StringVar(value=rc45.DIRECTION_LABELS[initial_direction])
     row = ttk.Frame(language_box); row.pack(fill="x")
     ttk.Label(row, text="Напрям", width=32).pack(side="left")
-    direction_combo = ttk.Combobox(
-        row,
-        textvariable=direction_var,
-        state="readonly",
-        values=list(label_to_value.keys()),
-        width=42,
-    )
+    direction_combo = ttk.Combobox(row, textvariable=direction_var, state="readonly", values=list(label_to_value), width=42)
     direction_combo.pack(side="left", fill="x", expand=True)
     ttk.Label(
         language_box,
-        text=(
-            "Це властивість каналу, а не його режиму. EN→UA і UA/RU→EN лишаються; додано UA→UA та RU→UA. "
-            "Для моніторингового каналу оберіть фактичну мову його джерел: українські джерела → UA→UA, російські → RU→UA."
-        ),
-        foreground="#555",
-        wraplength=760,
-        justify="left",
+        text=("Це властивість каналу, а не його режиму. Доступні EN→UA, UA/RU→EN, UA→UA та RU→UA. "
+              "Для моніторингу оберіть фактичну мову його джерел."),
+        foreground="#555", wraplength=760, justify="left",
     ).pack(anchor="w", pady=(6, 0))
 
     media_box = ttk.LabelFrame(form, text="Media-first / короткі джерела", padding=10)
@@ -100,7 +83,8 @@ def _channel_dialog_rc69(self: Any, ch: Any | None) -> None:
     mode_var = tk.StringVar(value=current_mode_label)
     mode_row = ttk.Frame(media_box); mode_row.pack(fill="x", pady=2)
     ttk.Label(mode_row, text="Збагачення", width=32).pack(side="left")
-    ttk.Combobox(mode_row, textvariable=mode_var, state="readonly", values=list(media_mode_labels), width=42).pack(side="left", fill="x", expand=True)
+    mode_combo = ttk.Combobox(mode_row, textvariable=mode_var, state="readonly", values=list(media_mode_labels), width=42)
+    mode_combo.pack(side="left", fill="x", expand=True)
 
     media_first_var = tk.BooleanVar(value=bool(getattr(ch, "media_first_allowed", True) if ch else True))
     ttk.Checkbutton(
@@ -117,22 +101,16 @@ def _channel_dialog_rc69(self: Any, ch: Any | None) -> None:
     _bind_editing(self, threshold)
     ttk.Label(
         media_box,
-        text=(
-            "Якщо тексту замало, програма спочатку бере наявні caption/alt/context і метадані YouTube/Vimeo, а вже потім запускає selector. "
-            "Відсутність великої статті більше не дорівнює «поганий матеріал». Програма не домислює зміст кадрів, якого не бачить у метаданих."
-        ),
-        foreground="#555",
-        wraplength=760,
-        justify="left",
+        text=("При короткому джерелі програма спочатку бере caption/alt/context і метадані YouTube/Vimeo, а вже потім запускає selector. "
+              "Вона не домислює зміст кадрів, якого немає в перевірених метаданих."),
+        foreground="#555", wraplength=760, justify="left",
     ).pack(anchor="w", pady=(6, 0))
 
-    pack_kwargs = {"fill": "x", "pady": 8}
+    kwargs = {"fill": "x", "pady": 8}
     if buttons is not None:
-        language_box.pack(before=buttons, **pack_kwargs)
-        media_box.pack(before=buttons, **pack_kwargs)
+        language_box.pack(before=buttons, **kwargs); media_box.pack(before=buttons, **kwargs)
     else:
-        language_box.pack(**pack_kwargs)
-        media_box.pack(**pack_kwargs)
+        language_box.pack(**kwargs); media_box.pack(**kwargs)
 
     def remember(_event=None) -> None:
         self.db._rc45_pending_direction = label_to_value.get(direction_var.get(), rc45.DIRECTION_EN_TO_UK)
@@ -147,9 +125,7 @@ def _channel_dialog_rc69(self: Any, ch: Any | None) -> None:
         }
 
     direction_combo.bind("<<ComboboxSelected>>", remember, add="+")
-    for widget in media_box.winfo_children():
-        if isinstance(widget, ttk.Combobox):
-            widget.bind("<<ComboboxSelected>>", remember, add="+")
+    mode_combo.bind("<<ComboboxSelected>>", remember, add="+")
     media_first_var.trace_add("write", lambda *_args: remember())
     threshold.bind("<FocusOut>", remember, add="+")
     remember()
@@ -171,7 +147,6 @@ def install_rc69_ui() -> None:
     if _INSTALLED:
         return
     from .ui import MainWindow
-
     _PREV_DIALOG = MainWindow._channel_dialog
     MainWindow._channel_dialog = _channel_dialog_rc69
     _INSTALLED = True
