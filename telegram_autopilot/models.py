@@ -29,6 +29,9 @@ class Channel:
     topic_daily_limit: int = 2
     related_spacing_posts: int = 5
     channel_mode: str = "editorial"
+    media_enrichment_mode: str = "auto"
+    media_first_allowed: bool = True
+    media_min_text_chars: int = 500
 
 
 @dataclass(slots=True)
