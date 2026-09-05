@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -43,10 +43,20 @@ class Source:
     url: str
     enabled: bool
     initialized: bool
-    created_at: str
-    last_checked_at: str | None = None
-    last_error: str | None = None
-    priority: int = 100
+    last_checked_at: str | None
+    last_error: str | None
+    priority: int = 50
+
+
+@dataclass(slots=True)
+class CollectedArticle:
+    external_id: str
+    title: str
+    url: str
+    raw_text: str
+    published_at: str | None = None
+    media_urls: list[str] = field(default_factory=list)
+    article_layout_json: str = ""
 
 
 @dataclass(slots=True)
@@ -59,7 +69,7 @@ class Decision:
     headline_uk: str
     telegram_teaser: str
     full_article_uk: str
-    media_captions_uk: dict[str, str]
-    confidence: float
-    provider: str
-    model: str
+    media_captions_uk: dict[int, str] = field(default_factory=dict)
+    confidence: float = 0.0
+    provider: str = ""
+    model: str = ""
