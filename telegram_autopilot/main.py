@@ -61,6 +61,8 @@ from .rc69_ui import install_rc69_ui
 from .rc70_mixed_language import install_rc70_mixed_language
 from .rc70_ui import install_rc70_ui
 from .rc71_editorial_pipeline import install_rc71_editorial_pipeline
+from .rc72_monitoring_policy import install_rc72_monitoring_policy
+from .rc72_channel_policy_ui import install_rc72_channel_policy_ui
 
 
 def main() -> int:
@@ -118,6 +120,8 @@ def main() -> int:
             install_rc70_mixed_language()
             install_rc70_ui()
             install_rc71_editorial_pipeline()
+            install_rc72_monitoring_policy()
+            install_rc72_channel_policy_ui()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
