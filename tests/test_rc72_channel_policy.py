@@ -70,3 +70,29 @@ def test_monitoring_rules_are_used_only_after_explicit_policy_save(monkeypatch):
     finally:
         rc51._ACTIVE_DB = old
         con.close()
+
+
+def test_generic_policy_defaults_do_not_turn_into_monitoring_filters():
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE channel_policies(channel_id INTEGER PRIMARY KEY, selection_rules TEXT, rejection_rules TEXT)")
+    generic = rc59.ChannelPolicy()
+    con.execute(
+        "INSERT INTO channel_policies(channel_id,selection_rules,rejection_rules) VALUES(?,?,?)",
+        (8, generic.selection_rules, generic.rejection_rules),
+    )
+    con.commit()
+
+    class FakeDB:
+        @contextmanager
+        def connect(self):
+            yield con
+
+    from telegram_autopilot import rc51_feedback as rc51
+
+    old = rc51._ACTIVE_DB
+    rc51._ACTIVE_DB = FakeDB()
+    try:
+        assert mon72._saved_rules(8) == ("", "")
+    finally:
+        rc51._ACTIVE_DB = old
+        con.close()
