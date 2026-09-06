@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -176,6 +175,59 @@ def _fast_cluster_one_rc74(service: Any, channel: Any, row: Any) -> str:
     return "single"
 
 
+def _decide_rc74(channel: Any, article: Any, recent: list[Any], *, hard_limit: int, format_marker: str | None = None):
+    """Honor explicit output language without bypassing the channel policy gate."""
+    from . import production_pipeline as prod
+    from . import rc45_policy as rc45
+    from . import rc51_feedback as rc51
+    from . import rc59_universal_policy as rc59
+
+    if rc45.content_direction(channel) != rc45.DIRECTION_UKRU_TO_EN:
+        return _PREV["decide"](channel, article, recent, hard_limit=hard_limit, format_marker=format_marker)
+
+    db = rc51._ACTIVE_DB
+    policy = db.rc59_get_channel_policy(int(channel.id)) if db is not None else rc59.default_policy(channel)
+    if not policy.enabled:
+        return rc59._reject(article, "CHANNEL_POLICY_DISABLED: channel policy is disabled.", event_key="rc74-policy-disabled", model="rc74-policy")
+    if not str(policy.purpose or "").strip() or not str(policy.selection_rules or "").strip():
+        return rc59._reject(article, "CHANNEL_POLICY_INCOMPLETE: configure channel purpose and selection rules.", event_key="rc74-policy-incomplete", model="rc74-policy")
+
+    duplicate_id = prod._title_duplicate(article, recent)
+    if duplicate_id is not None:
+        from .models import Decision
+        return Decision(
+            decision="duplicate", duplicate_of=duplicate_id, reason=f"Title duplicate of published material #{duplicate_id}.",
+            event_key="title-duplicate", event_summary=str(_v(article, "title", ""))[:1000],
+            headline_uk="", telegram_teaser="", full_article_uk="", media_captions_uk={},
+            confidence=0.99, provider="local-rule", model="title-dedupe",
+        )
+
+    verdict = rc59.score_against_feedback_rc59(article, rc59._feedback_rows(int(channel.id)))
+    if verdict.hard_suppress:
+        return rc59._reject(
+            article,
+            f"REACTION_FEEDBACK_SKIP: closely related topic suppressed after editor feedback; similarity={verdict.matched_similarity:.3f}.",
+            event_key="rc74-reaction-suppress", model="rc74-reaction-feedback", confidence=0.98,
+        )
+
+    try:
+        selector_result, selector = rc59._run_selector(policy, article, channel_id=int(channel.id))
+    except Exception as exc:
+        return rc59._reject(
+            article, "SELECTOR_UNAVAILABLE: " + str(exc)[:350],
+            event_key="rc74-selector-unavailable", model="rc74-selector-safe-fail", confidence=1.0,
+        )
+    if str(selector.get("decision") or "") != "publish":
+        return rc59._reject(
+            article, f"CHANNEL_POLICY_REJECT fit={int(selector.get('fit_score', 0) or 0)}%: {selector.get('reason', '')}",
+            event_key="rc74-channel-policy-reject", model=f"rc74-selector/{selector_result.provider}", confidence=0.96,
+        )
+
+    # RC45 already contains the fact-safe English writer/QA route. It is called
+    # only after the same channel-policy selector used by every editorial channel.
+    return rc45._decide_english(channel, article, hard_limit=hard_limit, format_marker=format_marker)
+
+
 def _invalidate_channel_drafts(db: Any, channel_id: int, reason: str) -> None:
     """Make saved per-channel settings effective immediately for queued work."""
     try:
@@ -239,6 +291,7 @@ def install_rc74_universal_runtime() -> None:
         run_channel=svc.AutopilotService._run_channel,
         prepare_one=rc67._prepare_one,
         publish_one=rc66._publish_one,
+        decide=prod.decide,
         set_direction=getattr(Database, "set_channel_content_direction", None),
         save_policy=getattr(Database, "rc59_save_channel_policy", None),
     )
@@ -269,9 +322,14 @@ def install_rc74_universal_runtime() -> None:
         with channel_context(channel):
             return bool(_PREV["publish_one"](service, channel, row))
 
+    def decide(channel, article, recent, *, hard_limit=prod.MEDIA_POST_HARD_LIMIT, format_marker=None):
+        return _decide_rc74(channel, article, recent, hard_limit=hard_limit, format_marker=format_marker)
+
     svc.AutopilotService._run_channel = run_channel
     rc67._prepare_one = prepare_one
     rc66._publish_one = publish_one
+    prod.decide = decide
+    svc.decide = decide
 
     # One static cache-format generation avoids cross-channel global races.
     svc.POST_FORMAT_PREFIX = "telegram-post-v74:"
