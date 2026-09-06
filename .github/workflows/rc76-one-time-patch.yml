@@ -18,8 +18,8 @@ jobs:
           ref: fix/rc76-editorial-weights-persistence
           fetch-depth: 0
       - name: Remove obsolete RC51 editorial-weight sabotage
-        shell: python
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path('telegram_autopilot/rc51_feedback.py')
@@ -80,6 +80,7 @@ jobs:
           text = text.replace(old, new, 1)
 
           path.write_text(text, encoding='utf-8')
+          PY
       - name: Commit source cleanup
         run: |
           git config user.name "github-actions[bot]"
