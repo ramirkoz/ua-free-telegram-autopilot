@@ -4,17 +4,21 @@ import asyncio
 import queue
 import sys
 import types
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 
 def _row(**kwargs):
+    # Feedback tests must stay inside the live seven-day feedback window. A fixed
+    # calendar date made this suite start failing simply because time passed.
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     base = {
         "title": "AI chip launch",
         "raw_text": "A new AI chip launches for datacenters",
         "event_summary": "AI chip launch",
         "teaser_text": "Новий AI-чип для датацентрів.",
-        "published_at": "2026-08-30T12:00:00+00:00",
-        "checked_at": "2026-08-30T12:00:00+00:00",
+        "published_at": stamp,
+        "checked_at": stamp,
         "likes": 0,
         "dislikes": 0,
         "fires": 0,
