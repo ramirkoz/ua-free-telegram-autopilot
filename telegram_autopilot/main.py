@@ -62,6 +62,7 @@ from .rc72_monitoring_policy import install_rc72_monitoring_policy
 from .rc72_channel_policy_ui import install_rc72_channel_policy_ui
 from .rc73_channel_weights_ui import install_rc73_channel_weights_ui
 from .rc74_universal_runtime import install_rc74_universal_runtime
+from .rc75_channel_settings_ui import install_rc75_channel_settings_ui
 
 
 def main() -> int:
@@ -125,6 +126,7 @@ def main() -> int:
             install_rc72_channel_policy_ui()
             install_rc73_channel_weights_ui()
             install_rc74_universal_runtime()
+            install_rc75_channel_settings_ui()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
