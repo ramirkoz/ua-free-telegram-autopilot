@@ -249,12 +249,9 @@ def _install_database_patch() -> None:
                     ON telegram_feedback(channel_id, checked_at DESC);
                 """
             )
-            # RC51 removes manual topic quotas. Keep the legacy column for Data
-            # compatibility, but clear its values so old percentages cannot return
-            # through a stale UI save or future wrapper.
-            columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
-            if "editorial_weights_json" in columns:
-                con.execute("UPDATE channels SET editorial_weights_json='[]' WHERE editorial_weights_json<>'[]'")
+            # RC76 compatibility rule: reaction learning must never mutate operator-owned
+            # per-channel editorial categories/weights. Those settings are independent
+            # of reaction feedback and remain persisted in channels.editorial_weights_json.
             # New writer/selection semantics must regenerate any unfinished cached
             # text copied from RC50 instead of silently publishing the old style.
             con.execute(
@@ -377,13 +374,6 @@ def _install_database_patch() -> None:
         ranked.sort(key=lambda item: (item[0], item[1], item[2]))
         return [item[3] for item in ranked[: max(1, int(limit))]]
 
-    def set_channel_editorial_weights_rc51(self, channel_id: int, items) -> None:
-        with self.connect() as con:
-            con.execute(
-                "UPDATE channels SET editorial_weights_json='[]',updated_at=datetime('now') WHERE id=?",
-                (int(channel_id),),
-            )
-
     Database._init = init_rc51
     Database.rc51_feedback_candidates = feedback_candidates
     Database.rc51_save_feedback = save_feedback
@@ -391,7 +381,6 @@ def _install_database_patch() -> None:
     Database.rc51_feedback_stats = feedback_stats
     Database.history = history_rc51
     Database.pending_articles = pending_rc51
-    Database.set_channel_editorial_weights = set_channel_editorial_weights_rc51
     _DB_PATCHED = True
 
 
@@ -671,12 +660,9 @@ def install_rc51_feedback() -> None:
     from . import service as service_module
     from .service import AutopilotService
 
-    # Manual topic buckets are retired. Keep old schema only for backward Data
-    # compatibility; no classifier/percentage call participates in publication.
-    no_weights = lambda channel: []
-    rc42.parse_editorial_weights = no_weights
-    rc45.parse_editorial_weights = no_weights
-    rc46.parse_editorial_weights = no_weights
+    # Reaction learning is independent of the operator-defined editorial balance.
+    # Do not replace rc42/rc45/rc46 category parsing here: later per-channel UI
+    # intentionally exposes those categories and weights as channel-owned settings.
 
     # RC48's service wrapper resolves this module global at runtime. Replacing it
     # upgrades the existing 15-minute scheduler from aggregate metrics to explicit
@@ -716,7 +702,7 @@ def install_rc51_feedback() -> None:
             result.event_key = ("reaction-v1:" + str(result.event_key or ""))[:500]
             result.reason = (
                 str(result.reason or "")
-                + f" RC51 reaction-memory score={verdict.score:.3f}; manual topic quotas disabled."
+                + f" RC51 reaction-memory score={verdict.score:.3f}; channel balance handled independently."
             ).strip()
         return result
 
@@ -735,4 +721,4 @@ def install_rc51_feedback() -> None:
     AutopilotService.__init__ = service_init_rc51
 
     _INSTALLED = True
-    LOG.info("RC51 installed: 👍/👎/🔥 feedback ranking, 7-day memory/history, no manual topic quotas")
+    LOG.info("RC51 installed: 👍/👎/🔥 feedback ranking and 7-day memory/history; channel editorial weights preserved")
