@@ -21,9 +21,11 @@ def test_channel_context_uses_explicit_direction_and_restores():
 
 
 def test_channel_context_does_not_use_channel_name():
-    channel = SimpleNamespace(name="anything", editorial_profile="anything", content_direction="ukru_to_uk")
+    # EN->UK is part of the base direction registry even before the later UI
+    # extensions are installed, so this unit test remains isolated.
+    channel = SimpleNamespace(name="anything", editorial_profile="anything", content_direction="en_to_uk")
     with rc74.channel_context(channel):
-        assert rc45._CURRENT_DIRECTION.get() == "ukru_to_uk"
+        assert rc45._CURRENT_DIRECTION.get() == "en_to_uk"
         assert rc74.source_labels() == ("Джерело", "Джерела")
 
 
