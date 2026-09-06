@@ -1,0 +1,90 @@
+name: RC76 one-time source cleanup
+
+on:
+  push:
+    branches:
+      - fix/rc76-editorial-weights-persistence
+
+permissions:
+  contents: write
+
+jobs:
+  patch-legacy-rc51:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/rc76-editorial-weights-persistence
+          fetch-depth: 0
+      - name: Remove obsolete RC51 editorial-weight sabotage
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('telegram_autopilot/rc51_feedback.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''            # RC51 removes manual topic quotas. Keep the legacy column for Data
+            # compatibility, but clear its values so old percentages cannot return
+            # through a stale UI save or future wrapper.
+            columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
+            if "editorial_weights_json" in columns:
+                con.execute("UPDATE channels SET editorial_weights_json='[]' WHERE editorial_weights_json<>'[]'")
+'''
+          new = '''            # RC76 compatibility rule: reaction learning must never mutate operator-owned
+            # per-channel editorial categories/weights. Those settings are independent
+            # of reaction feedback and remain persisted in channels.editorial_weights_json.
+'''
+          assert old in text, 'RC51 startup weight reset block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''    def set_channel_editorial_weights_rc51(self, channel_id: int, items) -> None:
+        with self.connect() as con:
+            con.execute(
+                "UPDATE channels SET editorial_weights_json='[]',updated_at=datetime('now') WHERE id=?",
+                (int(channel_id),),
+            )
+
+'''
+          assert old in text, 'RC51 destructive weight setter not found'
+          text = text.replace(old, '', 1)
+
+          old = '''    Database.set_channel_editorial_weights = set_channel_editorial_weights_rc51
+'''
+          assert old in text, 'RC51 setter assignment not found'
+          text = text.replace(old, '', 1)
+
+          old = '''    # Manual topic buckets are retired. Keep old schema only for backward Data
+    # compatibility; no classifier/percentage call participates in publication.
+    no_weights = lambda channel: []
+    rc42.parse_editorial_weights = no_weights
+    rc45.parse_editorial_weights = no_weights
+    rc46.parse_editorial_weights = no_weights
+'''
+          new = '''    # Reaction learning is independent of the operator-defined editorial balance.
+    # Do not replace rc42/rc45/rc46 category parsing here: later per-channel UI
+    # intentionally exposes those categories and weights as channel-owned settings.
+'''
+          assert old in text, 'RC51 parser-disable block not found'
+          text = text.replace(old, new, 1)
+
+          old = 'RC51 reaction-memory score={verdict.score:.3f}; manual topic quotas disabled.'
+          new = 'RC51 reaction-memory score={verdict.score:.3f}; channel balance handled independently.'
+          assert old in text, 'RC51 result label not found'
+          text = text.replace(old, new, 1)
+
+          old = 'RC51 installed: 👍/👎/🔥 feedback ranking, 7-day memory/history, no manual topic quotas'
+          new = 'RC51 installed: 👍/👎/🔥 feedback ranking and 7-day memory/history; channel editorial weights preserved'
+          assert old in text, 'RC51 install log not found'
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+      - name: Commit source cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add telegram_autopilot/rc51_feedback.py
+          git diff --cached --check
+          git commit -m "RC76: remove obsolete RC51 editorial-weight overrides"
+          git push origin HEAD:fix/rc76-editorial-weights-persistence
