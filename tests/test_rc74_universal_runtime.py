@@ -17,6 +17,8 @@ def test_channel_context_uses_explicit_direction_and_restores():
         assert direction == "ukru_to_en"
         assert rc45._CURRENT_DIRECTION.get() == "ukru_to_en"
         assert rc74.source_labels() == ("Source", "Sources")
+        assert rc74._source_accept_language().startswith("uk-UA")
+        assert "ru;q=0.8" in rc74._source_accept_language()
     assert rc45._CURRENT_DIRECTION.get() == before
 
 
@@ -27,6 +29,7 @@ def test_channel_context_does_not_use_channel_name():
     with rc74.channel_context(channel):
         assert rc45._CURRENT_DIRECTION.get() == "en_to_uk"
         assert rc74.source_labels() == ("Джерело", "Джерела")
+        assert rc74._source_accept_language().startswith("en-US")
 
 
 def test_media_hard_gate_is_channel_neutral():
@@ -37,6 +40,13 @@ def test_media_hard_gate_is_channel_neutral():
     tracker = _media("https://doubleclick.net/tracking/pixel.gif", "article body")
     assert rc74.universal_media_hard_reject(tracker, marketing_context=False) is True
     assert rc74.universal_media_hard_reject(tracker, marketing_context=True) is True
+
+
+def test_extractor_does_not_treat_editorial_commercial_labels_as_noise():
+    assert rc74.universal_extractor_noisy_context("article sponsored advertorial affiliate feature") is False
+    assert rc74.universal_extractor_media_url_allowed("https://example.com/sponsored/campaign-photo.jpg") is True
+    assert rc74.universal_extractor_media_url_allowed("https://doubleclick.net/pixel.gif") is False
+    assert rc74.universal_extractor_noisy_context("recommendation-widget related-content") is True
 
 
 def test_source_link_entity_supports_both_output_languages():
