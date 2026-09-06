@@ -14,13 +14,17 @@ The RC67 pre-queue dedupe is now deterministic and non-blocking. It no longer wa
 
 ## Language isolation
 
-Per-channel language direction is now re-established inside background preparation workers and publication calls. This fixes the context loss introduced by parallel RC67 workers and prevents one channel's language mode from leaking into another.
+Per-channel language direction is now re-established inside background collection, preparation and publication calls. This fixes the context loss introduced by parallel RC67 workers and prevents one channel's language mode from leaking into another.
+
+Source HTTP `Accept-Language` now follows the explicit input-language direction configured for that channel instead of a global English preference.
 
 Changing a channel language direction or channel policy invalidates queued READY/new/retry drafts for that channel so the new settings are applied immediately instead of reusing stale generated text.
 
-## Media cleanup
+## Media and extraction cleanup
 
-Media filtering is channel-neutral. The engine hard-rejects only technical/non-editorial noise such as trackers, ad-network assets, favicons, sprites and avatars. Editorial concepts such as advertising, promotion or commercial activity are no longer hidden engine-level rejection terms; relevance is decided by the channel policy.
+Media filtering is channel-neutral. The engine hard-rejects only technical/non-editorial noise such as trackers, ad-network assets, favicons, sprites and avatars. Editorial concepts such as advertising, promotion, sponsored material or commercial activity are no longer hidden engine-level rejection terms; relevance is decided by the channel policy.
+
+The HTML extractor follows the same rule: recommendation widgets, trackers and technical page chrome are filtered universally, but semantic labels such as sponsored/advertorial/affiliate no longer cause an entire legitimate article or its editorial media to disappear before the channel policy sees it.
 
 Source labels follow the configured output language (`Джерело/Джерела` or `Source/Sources`).
 
