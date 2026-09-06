@@ -19,6 +19,21 @@ _MEDIA_NOISE = (
     "social-share", "share-icon", "analytics", "newsletter-widget", "subscribe-widget",
 )
 _LOGO_WORDS = ("logo", "wordmark", "brandmark", "app-icon", "site-icon", "badge")
+_EXTRACTOR_NOISE = (
+    "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "newsletter", "related-content",
+    "related_content", "recommended-content", "recommended_content", "recommendation-widget", "outbrain",
+    "taboola", "revcontent", "ad-slot", "ad_slot", "ad-unit", "ad_unit", "ad-container", "ad_container",
+    "google-ad", "google_ad", "doubleclick", "native-ad-widget", "commercial-widget", "tracking", "analytics",
+)
+_EXTRACTOR_NONEDITORIAL = (
+    "author", "authors", "byline", "avatar", "profile", "headshot", "share", "sharing", "social", "toolbar",
+    "newsletter", "subscribe", "subscription", "comment", "comments", "related", "recommended", "recommendations",
+)
+_BAD_MEDIA_URLS = (
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com", "amazon-adsystem.com", "adservice.google",
+    "outbrain.com", "taboola.com", "/banner/", "/banners/", "adserver", "ad-server", "adunit", "ad-unit",
+    "tracking", "pixel.gif", "1x1.gif", "favicon", "sprite", "analytics",
+)
 
 
 def _v(row: Any, key: str, default: Any = "") -> Any:
@@ -50,6 +65,45 @@ def _english_output() -> bool:
 
 def source_labels() -> tuple[str, str]:
     return ("Source", "Sources") if _english_output() else ("Джерело", "Джерела")
+
+
+def _source_accept_language() -> str:
+    """Translate the explicit input-language setting into HTTP language preference."""
+    from . import rc45_policy as rc45
+    from . import rc69_media_language as rc69
+    from . import rc70_mixed_language as rc70
+
+    direction = rc45._CURRENT_DIRECTION.get()
+    if direction == rc45.DIRECTION_UKRU_TO_EN:
+        return "uk-UA,uk;q=0.9,ru;q=0.8,en;q=0.5"
+    if direction == rc69.DIRECTION_UK_TO_UK:
+        return "uk-UA,uk;q=0.9,en;q=0.5"
+    if direction == rc69.DIRECTION_RU_TO_UK:
+        return "ru-RU,ru;q=0.9,uk;q=0.6,en;q=0.4"
+    if direction == rc70.DIRECTION_UKRU_TO_UK:
+        return "uk-UA,uk;q=0.9,ru;q=0.8,en;q=0.4"
+    return "en-US,en;q=0.9"
+
+
+def _source_fetch_rc74(url: str, **kwargs: Any):
+    supplied = dict(kwargs.pop("headers", {}) or {})
+    supplied.setdefault("Accept-Language", _source_accept_language())
+    return _PREV["source_fetch"](url, headers=supplied, **kwargs)
+
+
+def universal_extractor_noisy_context(value: str) -> bool:
+    low = str(value or "").casefold().replace("_", "-")
+    return any(term.replace("_", "-") in low for term in _EXTRACTOR_NOISE)
+
+
+def universal_extractor_noneditorial_context(value: str) -> bool:
+    low = str(value or "").casefold().replace("_", "-")
+    return universal_extractor_noisy_context(value) or any(term in low for term in _EXTRACTOR_NONEDITORIAL)
+
+
+def universal_extractor_media_url_allowed(url: str) -> bool:
+    low = str(url or "").casefold()
+    return not any(term in low for term in _BAD_MEDIA_URLS)
 
 
 def universal_media_hard_reject(item: Any, *, marketing_context: bool = False) -> bool:
@@ -279,6 +333,8 @@ def install_rc74_universal_runtime() -> None:
     if _INSTALLED:
         return
 
+    from . import article_extractor
+    from . import collector
     from . import media_pipeline
     from . import production_pipeline as prod
     from . import rc66_editorial_queue as rc66
@@ -292,6 +348,8 @@ def install_rc74_universal_runtime() -> None:
         prepare_one=rc67._prepare_one,
         publish_one=rc66._publish_one,
         decide=prod.decide,
+        source_fetch=collector._source_fetch,
+        collect=rc67._PREV.get("collect"),
         set_direction=getattr(Database, "set_channel_content_direction", None),
         save_policy=getattr(Database, "rc59_save_channel_policy", None),
     )
@@ -300,6 +358,18 @@ def install_rc74_universal_runtime() -> None:
     # channel policy. The engine keeps only universal technical media safety.
     svc._marketing_media_context = lambda _channel: False
     media_pipeline._hard_reject = universal_media_hard_reject
+    article_extractor._looks_noisy_context = universal_extractor_noisy_context
+    article_extractor._looks_noneditorial_media_context = universal_extractor_noneditorial_context
+    article_extractor._media_url_allowed = universal_extractor_media_url_allowed
+
+    # HTTP language preference follows the channel's explicit input-language
+    # direction even in RC67's background collector thread.
+    collector._source_fetch = _source_fetch_rc74
+    if _PREV["collect"] is not None:
+        def collect(service, channel, *, force: bool = False):
+            with channel_context(channel):
+                return _PREV["collect"](service, channel, force=force)
+        rc67._PREV["collect"] = collect
 
     # Source labels follow the explicit output-language direction.
     tg.build_post_text = _build_post_text_rc74
@@ -349,6 +419,6 @@ def install_rc74_universal_runtime() -> None:
 
     LOG.info(
         "RC74 installed: universal-only runtime, per-channel language context in worker threads, "
-        "channel-neutral media gate, deterministic nonblocking pre-dedupe and config-driven publication"
+        "channel-neutral extraction/media gate, deterministic nonblocking pre-dedupe and config-driven publication"
     )
     _INSTALLED = True
