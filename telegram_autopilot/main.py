@@ -47,9 +47,6 @@ from .rc58_editorial_rebuild import install_rc58_editorial_rebuild
 from .rc59_universal_policy import install_rc59_universal_policy
 from .rc60_editorial_quality import install_rc60_editorial_quality
 from .rc61_runtime_fix import install_rc61_runtime_fix
-from .rc62_editorial_control import install_rc62_editorial_control
-from .rc63_training_mode import install_rc63_training_mode
-from .rc64_live_tuning import install_rc64_live_tuning
 from .rc65_universal_final_editor import install_rc65_universal_final_editor
 from .rc66_editorial_queue import install_rc66_editorial_queue
 from .rc66_ui import install_rc66_ui
@@ -64,6 +61,7 @@ from .rc71_editorial_pipeline import install_rc71_editorial_pipeline
 from .rc72_monitoring_policy import install_rc72_monitoring_policy
 from .rc72_channel_policy_ui import install_rc72_channel_policy_ui
 from .rc73_channel_weights_ui import install_rc73_channel_weights_ui
+from .rc74_universal_runtime import install_rc74_universal_runtime
 
 
 def main() -> int:
@@ -107,9 +105,11 @@ def main() -> int:
             install_rc59_universal_policy()
             install_rc60_editorial_quality()
             install_rc61_runtime_fix()
-            install_rc62_editorial_control()
-            install_rc63_training_mode()
-            install_rc64_live_tuning()
+
+            # RC62/63/64 are intentionally retired from the active runtime.
+            # They contained channel-family inference and hard-coded pacing rules.
+            # Channel-specific language, timing, editorial rules and prompts now
+            # come only from each channel's saved configuration.
             install_rc65_universal_final_editor()
             install_rc66_editorial_queue()
             install_rc66_ui()
@@ -124,6 +124,7 @@ def main() -> int:
             install_rc72_monitoring_policy()
             install_rc72_channel_policy_ui()
             install_rc73_channel_weights_ui()
+            install_rc74_universal_runtime()
             db=Database(); db.quick_check(); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
     except AlreadyRunning as exc:
         try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
