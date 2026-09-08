@@ -57,9 +57,8 @@ def _saved_rules(channel_id: int) -> tuple[str, str] | None:
 
 
 def _monitoring_selector_rc72(policy: Any, article: Any, *, channel_id: int):
-    # Compatibility rule: old channels that never had their fine policy explicitly
-    # saved keep the RC68 monitoring behaviour. This prevents a hidden legacy
-    # editorial_profile from suddenly becoming an inclusion filter.
+    # Old channels that never saved an explicit fine policy keep the previous
+    # monitoring behaviour. Saved rules, when present, are the only authority.
     saved = _saved_rules(int(channel_id or 0))
     if saved is None:
         return _PREV_MONITORING_SELECTOR(policy, article, channel_id=int(channel_id or 0))
@@ -77,7 +76,6 @@ def _monitoring_selector_rc72(policy: Any, article: Any, *, channel_id: int):
         }
 
     from . import production_pipeline as production
-    from .ai_router import Result
     from .evidence_pack import build_evidence_pack
     from . import rc68_editorial_value as rc68
 
@@ -127,18 +125,19 @@ SOURCE:
             max_output_tokens=190,
             local_prompt=prompt,
             local_max_output_tokens=210,
-            cloud_timeout_seconds=12,
-            local_timeout_seconds=10,
-            task_timeout_seconds=30,
+            cloud_timeout_seconds=20,
+            local_timeout_seconds=30,
+            task_timeout_seconds=75,
             local_repair=False,
             suppress_provider_on_quota=False,
             allowed_providers={"codex", "gemini", "groq", "nvidia", "cloudflare", "local"},
         )
         included, excluded, reason = parse(result.text)
     except Exception as exc:
-        LOG.warning("RC72 monitoring policy gate unavailable channel_id=%s; fail-open: %s", channel_id, exc)
-        result = Result("monitoring-policy-degraded", "local-rule", "rc72-monitoring-fail-open", "RC72 monitoring fail-open")
-        included, excluded, reason = True, False, f"gate unavailable; fail-open: {exc}"
+        # A technical outage is not editorial permission to publish. Let the
+        # upper pipeline convert SELECTOR_UNAVAILABLE into WAITING_AI/retry.
+        LOG.warning("RC82 monitoring policy gate unavailable channel_id=%s; defer instead of fail-open: %s", channel_id, exc)
+        raise
 
     rejected = bool(excluded or (bool(inclusion) and not included))
     return result, {

@@ -65,11 +65,11 @@ from .rc74_universal_runtime import install_rc74_universal_runtime
 from .rc75_channel_settings_ui import install_rc75_channel_settings_ui
 from .rc79_runtime import install_rc79_runtime
 from .rc80_runtime import install_rc80_runtime
-from .rc81_runtime import install_rc81_runtime, repair_rc81_startup
+from .rc82_stable_runtime import install_rc82_stable_runtime, repair_rc82_startup
 
 
 def main() -> int:
-    logger=configure_logging()
+    logger = configure_logging()
     try:
         with InstanceLock():
             install_rc33_policy()
@@ -110,10 +110,9 @@ def main() -> int:
             install_rc60_editorial_quality()
             install_rc61_runtime_fix()
 
-            # RC62/63/64 are intentionally retired from the active runtime.
-            # They contained channel-family inference and hard-coded pacing rules.
-            # Channel-specific language, timing, editorial rules and prompts now
-            # come only from each channel's saved configuration.
+            # RC62/63/64 remain retired. All channel language, timing, editorial
+            # rules, prompts and media behaviour continue to come from the saved
+            # per-channel configuration built in RC59-RC79.
             install_rc65_universal_final_editor()
             install_rc66_editorial_queue()
             install_rc66_ui()
@@ -132,17 +131,33 @@ def main() -> int:
             install_rc75_channel_settings_ui()
             install_rc79_runtime()
             install_rc80_runtime()
-            install_rc81_runtime()
-            db=Database(); db.quick_check(); repair_rc81_startup(db); recover_interrupted_work(db); root=tk.Tk(); app=MainWindow(root,db); root.protocol("WM_DELETE_WINDOW",app.close); root.mainloop(); return 0
+
+            # RC81 is intentionally NOT installed: its hard-coded Codex model
+            # broke ChatGPT-account Codex and turned outages into retry storms.
+            install_rc82_stable_runtime()
+            db = Database()
+            db.quick_check()
+            repair_rc82_startup(db)
+            recover_interrupted_work(db)
+            root = tk.Tk()
+            app = MainWindow(root, db)
+            root.protocol("WM_DELETE_WINDOW", app.close)
+            root.mainloop()
+            return 0
     except AlreadyRunning as exc:
-        try:r=tk.Tk();r.withdraw();messagebox.showwarning(APP_NAME,str(exc),parent=r);r.destroy()
-        except tk.TclError:pass
+        try:
+            r = tk.Tk(); r.withdraw(); messagebox.showwarning(APP_NAME, str(exc), parent=r); r.destroy()
+        except tk.TclError:
+            pass
         return 2
     except Exception as exc:
-        logger.exception("Startup failed: %s",exc)
-        try:r=tk.Tk();r.withdraw();messagebox.showerror(APP_NAME,str(exc),parent=r);r.destroy()
-        except tk.TclError:pass
+        logger.exception("Startup failed: %s", exc)
+        try:
+            r = tk.Tk(); r.withdraw(); messagebox.showerror(APP_NAME, str(exc), parent=r); r.destroy()
+        except tk.TclError:
+            pass
         return 1
 
 
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())
