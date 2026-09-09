@@ -108,15 +108,26 @@ class MigrationManager:
 
             credentials_message = "Credentials не переносилися."
             if import_credentials:
-                ok, credentials_message = import_legacy_secrets(
-                    legacy_path, overwrite=overwrite_credentials
-                )
-                if not ok and "вже є credentials" not in credentials_message:
+                try:
+                    ok, credentials_message = import_legacy_secrets(
+                        legacy_path, overwrite=overwrite_credentials
+                    )
+                    if not ok and "вже є credentials" not in credentials_message:
+                        report.warnings.append(credentials_message)
+                except Exception as exc:
+                    # Credentials are independent from the migrated SQLite data.
+                    # A filesystem/permission problem must not roll back channels,
+                    # sources, policies and history that were already validated.
+                    credentials_message = (
+                        "Credentials не перенесено: "
+                        + f"{type(exc).__name__}: {exc}"
+                    )
                     report.warnings.append(credentials_message)
             return report, backup, credentials_message
         except Exception:
-            # If the destination copy failed after a backup was created, restore
-            # the previous V2 database through SQLite as well. Never use file swap.
+            # If the destination database copy failed after a backup was created,
+            # restore the previous V2 database through SQLite. Credential failures
+            # are handled above and intentionally do not enter this rollback path.
             if backup is not None and backup.exists():
                 try:
                     self._sqlite_backup(backup, self.target_db)
