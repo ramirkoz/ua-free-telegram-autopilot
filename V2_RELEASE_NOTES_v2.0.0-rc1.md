@@ -1,5 +1,7 @@
 # UA FREE Telegram Autopilot V2 2.0.0-rc1
 
+> **Superseded by 2.0.0-rc2.** RC1 має Windows-баг міграції старої Data: спроба файлового `os.replace()` живої SQLite може дати WinError 32. Для імпорту старої Data використовувати RC2 або новішу версію.
+
 Перший Windows preview чистого V2 runtime.
 
 ## Що змінено
@@ -13,12 +15,3 @@
 - Canonical source URL є обов'язковим publication gate; footer `Джерело` додає publisher.
 - Окрема read-only міграція старої Data: канали, джерела, політики, editorial settings, published history, dedupe/feedback та encrypted credentials. Runtime cooldown/retry/worker state не переносяться.
 - Український V2 UI з окремими екранами черги, історії, AI health, міграції та журналів.
-
-## Як тестувати
-
-1. Розпакувати ZIP у НОВУ папку.
-2. Запустити `UA_FREE_Telegram_Autopilot.exe`.
-3. Якщо V2 база порожня, відкрити вкладку `Міграція` та вибрати стару Data/SQLite. Стару базу V2 читає тільки read-only.
-4. Не замінювати робочу RC82 цією папкою. Це окремий preview для перевірки V2.
-
-Portable не містить `telegram_autopilot/rc*.py` і не містить користувацьких Data/secrets.
