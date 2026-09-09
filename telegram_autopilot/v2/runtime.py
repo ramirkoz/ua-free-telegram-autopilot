@@ -5,8 +5,6 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Callable
 
 from .ai_gateway import AIGateway, GatewayExhausted
 from .dedupe import DedupeEngine
@@ -30,11 +28,7 @@ class ChannelRuntimeState:
 
 
 class RuntimeEngine:
-    """Clean V2 scheduler: one isolated preparation loop per channel.
-
-    A slow/broken source or AI request in one channel cannot starve another channel.
-    Durable leases/jobs survive process restarts; the SQLite job queue is the truth.
-    """
+    """Clean V2 scheduler with one isolated preparation loop per channel."""
 
     def __init__(self, store: V2Store):
         self.store = store
@@ -51,10 +45,18 @@ class RuntimeEngine:
     def start(self) -> None:
         self.store.recover_stale_leases()
         self.stop_event.clear()
+        threading.Thread(target=self._startup_ai_probe, name="V2-AI-Startup-Probe", daemon=True).start()
         for row in self.store.list_channels(enabled_only=True):
-            channel_id = int(row["id"])
-            self._start_channel(channel_id)
+            self._start_channel(int(row["id"]))
         event("app", "V2 runtime started", channels=len(self._threads))
+
+    def _startup_ai_probe(self) -> None:
+        try:
+            health = self.gateway.probe_all()
+            healthy = sum(1 for item in health if str(item.state) == "HEALTHY")
+            event("ai", "startup provider probe complete", healthy=healthy, total=len(health))
+        except Exception as exc:
+            event("ai", "startup provider probe failed", level=logging.WARNING, detail=str(exc)[:1000])
 
     def stop(self, timeout: float = 8.0) -> None:
         self.stop_event.set()
@@ -70,7 +72,6 @@ class RuntimeEngine:
             for channel_id in enabled:
                 if channel_id not in self._threads or not self._threads[channel_id].is_alive():
                     self._start_channel(channel_id)
-        # Disabled channel threads exit themselves on next loop.
 
     def _start_channel(self, channel_id: int) -> None:
         with self._lock:
@@ -116,7 +117,8 @@ class RuntimeEngine:
         job = self.store.claim_job(channel_id=channel_id, worker_id=worker_id, lease_seconds=240)
         if job is None:
             return False
-        job_id = int(job["id"]); article_id = int(job["article_id"])
+        job_id = int(job["id"])
+        article_id = int(job["article_id"])
         article = self.store.get_article(article_id)
         if article is None:
             self.store.cancel_job(job_id, "ARTICLE_MISSING")
@@ -136,7 +138,6 @@ class RuntimeEngine:
                     state.processed += 1
                     return True
 
-            # A previous technical interruption may have left the article partially selected.
             current = self.store.get_article(article_id)
             if current is None:
                 raise RuntimeError("ARTICLE_MISSING")
