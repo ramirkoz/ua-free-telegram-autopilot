@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -11,7 +12,7 @@ from .storage import V2Store, now_iso
 
 
 class MigrationManager:
-    """Read-only legacy import with an atomic-enough SQLite handoff on Windows.
+    """Read-only legacy import with a Windows-safe SQLite handoff.
 
     V2 is a running GUI process and may have short-lived read handles open on the
     destination database. Windows therefore cannot reliably replace the database
@@ -78,14 +79,9 @@ class MigrationManager:
             suffix=".tmp.sqlite3",
             dir=self.target_db.parent,
         )
-        Path(temp_name).unlink(missing_ok=True)
-        try:
-            # mkstemp returns an OS handle which must be closed before SQLite opens it.
-            import os
-            os.close(fd)
-        except OSError:
-            pass
+        os.close(fd)
         temp = Path(temp_name)
+        temp.unlink(missing_ok=True)
 
         backup: Path | None = None
         try:
