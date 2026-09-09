@@ -98,6 +98,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP 'autopilot-v2-data'
           $env:PYTHONPATH = $PWD.Path
+          $env:PYTHONUTF8 = '1'
+          $env:PYTHONIOENCODING = 'utf-8'
           @'
           from pathlib import Path
           import importlib.util
@@ -135,6 +137,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:PYTHONPATH = $PWD.Path
+          $env:PYTHONUTF8 = '1'
+          $env:PYTHONIOENCODING = 'utf-8'
           @'
           from telegram_autopilot.collector import detect_source
           from telegram_autopilot.models import Source
@@ -157,8 +161,9 @@ jobs:
                   successes.append(name)
                   print('V2_LIVE_SOURCE_COLLECTION_OK',name,detected.kind,len(items),items[0].title[:100])
               except Exception as exc:
-                  failures.append((name,str(exc)))
-                  print('V2_LIVE_SOURCE_COLLECTION_WARNING',name,str(exc)[:300])
+                  detail=str(exc).encode('ascii','backslashreplace').decode('ascii')
+                  failures.append((name,detail))
+                  print('V2_LIVE_SOURCE_COLLECTION_WARNING',name,detail[:300])
           assert successes, 'All live sources failed: '+repr(failures)
           print('V2_LIVE_SOURCE_GATE_PASS',len(successes),'of',len(checks),'sources; transient/403 failures do not invalidate the runtime')
           '@ | Set-Content -Path $env:RUNNER_TEMP\v2_source_live_gate.py -Encoding utf8
