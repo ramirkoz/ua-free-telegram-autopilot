@@ -6,4 +6,4 @@ from V2.
 """
 
 V2_SCHEMA_VERSION = 1
-V2_VERSION = "2.0.0-rc1"
+V2_VERSION = "2.0.0-rc2"
