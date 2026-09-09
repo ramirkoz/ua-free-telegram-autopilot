@@ -1,4 +1,4 @@
-name: Autopilot Release
+name: Autopilot V2 Release
 
 on:
   push:
@@ -6,9 +6,12 @@ on:
     paths:
       - VERSION.txt
       - PUBLIC_VERSION.txt
+      - V2_VERSION.txt
       - RELEASE_NOTES_v*.md
+      - requirements.txt
       - telegram_autopilot/**
       - tests/**
+      - app_v2.py
       - pyproject.toml
       - .github/workflows/release.yml
   workflow_dispatch:
@@ -20,178 +23,188 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Validate release metadata
+      - name: Validate V2 release metadata
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $version = (Get-Content VERSION.txt -Raw).Trim()
-          $public = (Get-Content PUBLIC_VERSION.txt -Raw).Trim()
+          $ErrorActionPreference='Stop'
+          $version=(Get-Content VERSION.txt -Raw).Trim()
+          $public=(Get-Content PUBLIC_VERSION.txt -Raw).Trim()
+          $v2=(Get-Content V2_VERSION.txt -Raw).Trim()
           if (-not $version) { throw 'VERSION.txt is empty' }
-          if ($version -ne $public) { throw "VERSION mismatch: $version vs $public" }
-          $notes = "RELEASE_NOTES_v$version.md"
+          if ($version -ne $public -or $version -ne $v2) { throw "Version mismatch: $version / $public / $v2" }
+          $notes="RELEASE_NOTES_v$version.md"
           if (-not (Test-Path $notes)) { throw "Missing $notes" }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "NOTES=$notes" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "NOTES=$notes" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install runtime and test dependencies
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m pip install --disable-pip-version-check -r requirements-test.txt
-
-      - name: Compile and test source
+      - name: Compile and run regression suite
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          python -m compileall -q telegram_autopilot tests app.py
+          $ErrorActionPreference='Stop'
+          python -m compileall -q telegram_autopilot tests app_v2.py
           if ($LASTEXITCODE -ne 0) { throw 'compileall failed' }
           python -m pytest -q
           if ($LASTEXITCODE -ne 0) { throw 'pytest failed' }
-          python -c "from telegram_autopilot import __version__; assert __version__ == '$env:VERSION'; print(__version__)"
-          if ($LASTEXITCODE -ne 0) { throw 'version import gate failed' }
-
-      - name: Build signed portable runtime
+          python -m pytest -q tests/test_v2_migration_windows.py tests/test_v2_credentials_migration.py
+          if ($LASTEXITCODE -ne 0) { throw 'migration regressions failed' }
+          python -c "import openai_codex; from telegram_autopilot import __version__; from telegram_autopilot.v2 import V2_VERSION; assert __version__ == V2_VERSION == '$env:VERSION'; print('SOURCE_CODEX_AND_VERSION_OK', getattr(openai_codex,'__version__','unknown'))"
+          if ($LASTEXITCODE -ne 0) { throw 'Codex/version source gate failed' }
+      - name: Enforce clean active V2 contract
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $dist = Join-Path $PWD 'dist'
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
-          $portableName = "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Windows_Portable"
-          $stage = Join-Path $dist $portableName
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-          $pyHome = (python -c "import sys; print(sys.base_prefix)").Trim()
-          $pythonExe = Join-Path $pyHome 'python.exe'
-          $pythonwExe = Join-Path $pyHome 'pythonw.exe'
-          if (-not (Test-Path $pythonExe)) { throw "Python runtime not found: $pythonExe" }
-          if (-not (Test-Path $pythonwExe)) { throw "Signed pythonw runtime not found: $pythonwExe" }
-          Copy-Item -Path (Join-Path $pyHome '*') -Destination $stage -Recurse -Force
-
-          Copy-Item app.py,VERSION.txt,PUBLIC_VERSION.txt,README.md,$env:NOTES -Destination $stage -Force
-          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
-          Copy-Item $pythonExe (Join-Path $stage '_runtime_console.exe') -Force
-          Copy-Item $pythonwExe (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
-
-          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage '_runtime_console._pth') -Encoding ascii
-          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content -Path (Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth') -Encoding ascii
           @'
-          import os
-          import sys
-
-          if os.path.basename(sys.executable).casefold() == 'ua_free_telegram_autopilot.exe':
-              from telegram_autopilot.main import main
-              os._exit(int(main() or 0))
-          '@ | Set-Content -Path (Join-Path $stage 'sitecustomize.py') -Encoding utf8
-
-          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
-          New-Item -ItemType File -Force -Path (Join-Path $stage 'clean_start.flag') | Out-Null
+          import pathlib,re
+          bad=[]
+          for path in pathlib.Path('telegram_autopilot/v2').glob('*.py'):
+              text=path.read_text(encoding='utf-8')
+              for pattern in (r'install_rc',r'_PREV\[',r'from\s+\.\.rc\d',r'from\s+\.rc\d',r'import\s+telegram_autopilot\.rc\d'):
+                  if re.search(pattern,text): bad.append(f'{path}: {pattern}')
+          if bad: raise SystemExit('V2 RC contamination:\n'+'\n'.join(bad))
+          print('V2_CLEAN_ACTIVE_RUNTIME_OK')
+          '@ | Set-Content $env:RUNNER_TEMP\v2_clean.py -Encoding utf8
+          python $env:RUNNER_TEMP\v2_clean.py
+          if ($LASTEXITCODE -ne 0) { throw 'clean V2 gate failed' }
+      - name: Build signed V2 portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dist=Join-Path $PWD 'dist-v2'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $portableName="UA_FREE_Telegram_Autopilot_v$env:VERSION`_Windows_Portable"
+          $stage=Join-Path $dist $portableName
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $pyHome=(python -c "import sys; print(sys.base_prefix)").Trim()
+          $pythonExe=Join-Path $pyHome 'python.exe'
+          $pythonwExe=Join-Path $pyHome 'pythonw.exe'
+          Copy-Item -Path (Join-Path $pyHome '*') -Destination $stage -Recurse -Force
+          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
+          Copy-Item app_v2.py,VERSION.txt,PUBLIC_VERSION.txt,V2_VERSION.txt,README.md,$env:NOTES -Destination $stage -Force
+          Get-ChildItem (Join-Path $stage 'telegram_autopilot') -File -Filter 'rc*.py' -ErrorAction SilentlyContinue | Remove-Item -Force
           Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
           Remove-Item (Join-Path $stage 'Data') -Recurse -Force -ErrorAction SilentlyContinue
-
-          "PORTABLE_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PORTABLE_NAME=$portableName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Validate signed launcher and portable startup
+          Copy-Item $pythonExe (Join-Path $stage '_runtime_console.exe') -Force
+          Copy-Item $pythonwExe (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
+          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content (Join-Path $stage '_runtime_console._pth') -Encoding ascii
+          @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content (Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth') -Encoding ascii
+          @'
+          import os
+          import sys
+          if os.path.basename(sys.executable).casefold() == 'ua_free_telegram_autopilot.exe':
+              from telegram_autopilot.v2.main import main
+              os._exit(int(main() or 0))
+          '@ | Set-Content (Join-Path $stage 'sitecustomize.py') -Encoding utf8
+          @"
+          UA FREE Telegram Autopilot V2 $env:VERSION
+          Розпакуйте у нову папку та запустіть UA_FREE_Telegram_Autopilot.exe.
+          V2 database: Data\telegram_autopilot_v2.sqlite3
+          Логи: Data\logs\v2
+          Codex 0.147.0 входить до portable runtime; авторизація використовує ChatGPT account.
+          "@ | Set-Content (Join-Path $stage 'README_V2.txt') -Encoding utf8
+          New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
+          $rc=@(Get-ChildItem (Join-Path $stage 'telegram_autopilot') -File -Filter 'rc*.py' -ErrorAction SilentlyContinue)
+          if ($rc.Count -ne 0) { throw "RC modules remain in portable: $($rc.Name -join ', ')" }
+          "PORTABLE_STAGE=$stage" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "PORTABLE_NAME=$portableName" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Validate packaged Codex and clean imports
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $stage = $env:PORTABLE_STAGE
-          $launcher = Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
-          $console = Join-Path $stage '_runtime_console.exe'
-
-          $signature = Get-AuthenticodeSignature $launcher
-          if ($signature.Status -ne 'Valid') { throw "Launcher signature is not valid: $($signature.Status)" }
-          if ($signature.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
-            throw "Unexpected launcher signer: $($signature.SignerCertificate.Subject)"
-          }
-
+          $ErrorActionPreference='Stop'
+          Push-Location $env:PORTABLE_STAGE
+          try {
+            & .\_runtime_console.exe -I -c "import openai_codex; from telegram_autopilot import __version__; from telegram_autopilot.v2 import V2_VERSION; from telegram_autopilot.codex_engine import inspect_codex; from telegram_autopilot.v2.storage import V2Store; from telegram_autopilot.v2.runtime import RuntimeEngine; from telegram_autopilot.v2.ui import MainWindow; s=inspect_codex(); assert __version__ == V2_VERSION == '$env:VERSION'; assert s.installed, s; print('V2_PACKAGED_CODEX_OK', getattr(openai_codex,'__version__','unknown'), s.version)"
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged Codex/import gate failed' }
+          } finally { Pop-Location }
+      - name: Native Windows credential-pair migration smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stage=$env:PORTABLE_STAGE
+          $legacy=Join-Path $env:RUNNER_TEMP 'v2-legacy-credentials-Data'
+          $target=Join-Path $env:RUNNER_TEMP 'v2-credentials-target'
+          Remove-Item $legacy,$target -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $legacy,$target | Out-Null
+          Set-Content (Join-Path $legacy 'secrets.key') 'legacy-key-native-windows' -NoNewline -Encoding ascii
+          Set-Content (Join-Path $legacy 'secrets.secure') 'legacy-secure-native-windows' -NoNewline -Encoding ascii
+          $env:LEGACY_DATA_SMOKE=$legacy; $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA=$target
           Push-Location $stage
           try {
-            & $console -I -c "import telegram_autopilot.main; import tkinter as tk; r=tk.Tk(); r.withdraw(); r.update_idletasks(); r.destroy(); print('SIGNED_RUNTIME_IMPORT_AND_TK_OK')"
-            if ($LASTEXITCODE -ne 0) { throw "Isolated runtime validation failed: $LASTEXITCODE" }
-          } finally {
-            Pop-Location
-          }
-
-          $smokeData = Join-Path $env:RUNNER_TEMP 'autopilot-portable-smoke-data'
-          Remove-Item $smokeData -Recurse -Force -ErrorAction SilentlyContinue
-          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = $smokeData
-          $p = Start-Process -FilePath $launcher -WorkingDirectory $stage -PassThru
-          Start-Sleep -Seconds 8
-          $p.Refresh()
-          if ($p.HasExited) { throw "Packaged EXE exited during smoke test with code $($p.ExitCode)" }
-          $db = Join-Path $smokeData 'telegram_autopilot.sqlite3'
-          if (-not (Test-Path $db)) { throw 'Packaged EXE stayed alive but did not initialize its SQLite database' }
-          & taskkill.exe /PID $p.Id /T /F | Out-Null
-          Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
-          Write-Host 'SIGNED_PORTABLE_EXE_SMOKE_PASS'
-
-      - name: Update Defender and scan extracted runtime
+            & .\_runtime_console.exe -I -c "import os,sqlite3,pathlib; p=pathlib.Path(os.environ['LEGACY_DATA_SMOKE']); sqlite3.connect(p/'telegram_autopilot.sqlite3').close(); from telegram_autopilot.v2.legacy_credentials import import_legacy_secrets; ok,msg=import_legacy_secrets(p); t=pathlib.Path(os.environ['UA_FREE_TELEGRAM_AUTOPILOT_DATA']); assert ok,msg; assert (t/'secrets.key').read_bytes()==b'legacy-key-native-windows'; assert (t/'secrets.secure').read_bytes()==b'legacy-secure-native-windows'; assert not list(t.glob('*.migration.tmp')); print('V2_NATIVE_CREDENTIAL_PAIR_PASS')"
+            if ($LASTEXITCODE -ne 0) { throw 'credential migration smoke failed' }
+          } finally { Pop-Location; Remove-Item Env:LEGACY_DATA_SMOKE -ErrorAction SilentlyContinue; Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue }
+      - name: Validate signed launcher and native Windows GUI startup
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $scanner = Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $scanner) { throw 'Microsoft Defender command-line scanner is unavailable' }
+          $ErrorActionPreference='Stop'
+          $stage=$env:PORTABLE_STAGE; $launcher=Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
+          $sig=Get-AuthenticodeSignature $launcher
+          if ($sig.Status -ne 'Valid') { throw "Launcher signature invalid: $($sig.Status)" }
+          if ($sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') { throw "Unexpected signer: $($sig.SignerCertificate.Subject)" }
+          $smoke=Join-Path $env:RUNNER_TEMP 'autopilot-v2-gui-smoke'
+          Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA=$smoke
+          $p=Start-Process -FilePath $launcher -WorkingDirectory $stage -PassThru
+          Start-Sleep -Seconds 8; $p.Refresh()
+          if ($p.HasExited) { throw "Packaged V2 EXE exited: $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $smoke 'telegram_autopilot_v2.sqlite3'))) { throw 'V2 DB not initialized' }
+          & taskkill.exe /PID $p.Id /T /F | Out-Null
+          Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
+          Write-Host 'V2_NATIVE_GUI_SMOKE_PASS'
+      - name: Microsoft Defender scan extracted portable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $scanner=Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $scanner) { throw 'Defender scanner unavailable' }
           & $scanner.FullName -SignatureUpdate
-          if ($LASTEXITCODE -ne 0) { throw "Defender signature update failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Defender update failed: $LASTEXITCODE" }
           & $scanner.FullName -Scan -ScanType 3 -File $env:PORTABLE_STAGE -DisableRemediation
-          if ($LASTEXITCODE -ne 0) { throw "Defender detected or could not scan the extracted runtime: $LASTEXITCODE" }
-
-      - name: Build archives and checksums
+          if ($LASTEXITCODE -ne 0) { throw "Defender runtime scan failed: $LASTEXITCODE" }
+      - name: Build Portable, clean Source and checksums
         id: assets
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $dist = Join-Path $PWD 'dist'
-          $stage = $env:PORTABLE_STAGE
-          $portableZip = Join-Path $dist "$env:PORTABLE_NAME.zip"
+          $ErrorActionPreference='Stop'
+          $dist=Join-Path $PWD 'dist-v2'; $stage=$env:PORTABLE_STAGE
+          $portableZip=Join-Path $dist "$env:PORTABLE_NAME.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portableZip -CompressionLevel Optimal -Force
-
-          $sourceName = "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Source"
-          $sourceStage = Join-Path $dist $sourceName
+          $sourceName="UA_FREE_Telegram_Autopilot_v$env:VERSION`_Source"
+          $sourceStage=Join-Path $dist $sourceName
           New-Item -ItemType Directory -Force -Path $sourceStage | Out-Null
-          $items = @('.github','docs','launcher','telegram_autopilot','tests','app.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','CHANGELOG.md','DEVELOPMENT.md','VERSION.txt','PUBLIC_VERSION.txt',$env:NOTES)
-          foreach ($item in $items) {
-            if (Test-Path $item) { Copy-Item $item -Destination $sourceStage -Recurse -Force }
-          }
+          Copy-Item telegram_autopilot -Destination $sourceStage -Recurse -Force
+          Get-ChildItem (Join-Path $sourceStage 'telegram_autopilot') -File -Filter 'rc*.py' -ErrorAction SilentlyContinue | Remove-Item -Force
+          foreach($item in @('.github','tests','app_v2.py','pyproject.toml','requirements.txt','requirements-test.txt','README.md','VERSION.txt','PUBLIC_VERSION.txt','V2_VERSION.txt',$env:NOTES)) { if(Test-Path $item){ Copy-Item $item -Destination $sourceStage -Recurse -Force } }
           Get-ChildItem $sourceStage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Get-ChildItem $sourceStage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-          $sourceZip = Join-Path $dist "$sourceName.zip"
+          $sourceZip=Join-Path $dist "$sourceName.zip"
           Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $sourceZip -CompressionLevel Optimal -Force
-
-          $shaFile = Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_SHA256SUMS.txt"
-          $portableHash = (Get-FileHash $portableZip -Algorithm SHA256).Hash.ToLowerInvariant()
-          $sourceHash = (Get-FileHash $sourceZip -Algorithm SHA256).Hash.ToLowerInvariant()
-          @("$portableHash  $([IO.Path]::GetFileName($portableZip))", "$sourceHash  $([IO.Path]::GetFileName($sourceZip))") | Set-Content $shaFile -Encoding ascii
-
-          $scanner = Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $scanner) { throw 'Microsoft Defender command-line scanner is unavailable for ZIP scan' }
+          $shaFile=Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_SHA256SUMS.txt"
+          $portableHash=(Get-FileHash $portableZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceHash=(Get-FileHash $sourceZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          @("$portableHash  $([IO.Path]::GetFileName($portableZip))","$sourceHash  $([IO.Path]::GetFileName($sourceZip))") | Set-Content $shaFile -Encoding ascii
+          $scanner=Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
           & $scanner.FullName -Scan -ScanType 3 -File $portableZip -DisableRemediation
-          if ($LASTEXITCODE -ne 0) { throw "Defender detected or could not scan the release ZIP: $LASTEXITCODE" }
-
-          "portable_zip=$portableZip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "source_zip=$sourceZip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "sha_file=$shaFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Archive exact release assets for synchronization
+          if ($LASTEXITCODE -ne 0) { throw "Defender ZIP scan failed: $LASTEXITCODE" }
+          "portable_zip=$portableZip" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "source_zip=$sourceZip" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha_file=$shaFile" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Archive exact release assets
         uses: actions/upload-artifact@v4
         with:
           name: UA_FREE_Telegram_Autopilot_v${{ env.VERSION }}_RELEASE_ASSETS
@@ -202,38 +215,27 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
-
-      - name: Publish GitHub Release
+      - name: Publish GitHub prerelease
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = "v$env:VERSION"
-          $body = Get-Content $env:NOTES -Raw
-          $portableZip = "${{ steps.assets.outputs.portable_zip }}"
-          $sourceZip = "${{ steps.assets.outputs.source_zip }}"
-          $shaFile = "${{ steps.assets.outputs.sha_file }}"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -f $tag $env:GITHUB_SHA
-          git push origin "refs/tags/$tag" --force
+          $ErrorActionPreference='Stop'
+          $tag="v$env:VERSION"; $body=Get-Content $env:NOTES -Raw
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f $tag $env:GITHUB_SHA; git push origin "refs/tags/$tag" --force
           gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release edit $tag --title "UA FREE Telegram Autopilot $env:VERSION" --notes "$body" --prerelease
-          } else {
-            gh release create $tag --title "UA FREE Telegram Autopilot $env:VERSION" --notes "$body" --prerelease --target $env:GITHUB_SHA
-          }
-          gh release upload $tag "$portableZip" "$sourceZip" "$shaFile" --clobber
-          if ($LASTEXITCODE -ne 0) { throw "GitHub Release publication failed: $LASTEXITCODE" }
-
-      - name: Report release synchronization status
+          if ($LASTEXITCODE -eq 0) { gh release edit $tag --title "UA FREE Telegram Autopilot V2 $env:VERSION" --notes "$body" --prerelease }
+          else { gh release create $tag --title "UA FREE Telegram Autopilot V2 $env:VERSION" --notes "$body" --prerelease --target $env:GITHUB_SHA }
+          gh release upload $tag "${{ steps.assets.outputs.portable_zip }}" "${{ steps.assets.outputs.source_zip }}" "${{ steps.assets.outputs.sha_file }}" --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed' }
+      - name: Report release status
         if: always()
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
         run: |
-          $state = if ($env:JOB_STATUS -eq 'success') { 'success' } else { 'failure' }
-          $description = if ($state -eq 'success') { "v$env:VERSION signed runtime, Defender scan and release passed" } else { "v$env:VERSION release workflow failed" }
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" -f state="$state" -f context='release-sync' -f description="$description" -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $state=if($env:JOB_STATUS -eq 'success'){'success'}else{'failure'}
+          $desc=if($state -eq 'success'){"v$env:VERSION V2 + bundled Codex + Defender release passed"}else{"v$env:VERSION release failed"}
+          gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" -f state="$state" -f context='release-sync' -f description="$desc" -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

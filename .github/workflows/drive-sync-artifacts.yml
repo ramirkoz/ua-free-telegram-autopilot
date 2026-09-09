@@ -1,10 +1,9 @@
-name: RC37 Exact Release Assets for Drive Sync
+name: V2 Exact Release Assets for Drive Sync
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/drive-sync-artifacts.yml
+  workflow_run:
+    workflows: ["Autopilot V2 Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -13,38 +12,47 @@ permissions:
 
 jobs:
   archive-release-assets:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Check out repository
+      - name: Check out current main
         uses: actions/checkout@v4
-
+        with:
+          ref: main
+      - name: Resolve current version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION.txt)"
+          test -n "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Download exact GitHub Release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          tag="v${VERSION}"
+          gh release view "$tag" --repo "${{ github.repository }}" >/dev/null
           mkdir -p release-assets
-          gh release download v0.1.0-rc37 \
+          gh release download "$tag" \
             --repo "${{ github.repository }}" \
             --dir release-assets \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Windows_Portable.zip' \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Source.zip' \
-            --pattern 'UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt'
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Windows_Portable.zip
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_Source.zip
-          test -s release-assets/UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt
-          (cd release-assets && sha256sum -c UA_FREE_Telegram_Autopilot_v0.1.0-rc37_SHA256SUMS.txt)
-
+            --pattern "UA_FREE_Telegram_Autopilot_v${VERSION}_Windows_Portable.zip" \
+            --pattern "UA_FREE_Telegram_Autopilot_v${VERSION}_Source.zip" \
+            --pattern "UA_FREE_Telegram_Autopilot_v${VERSION}_SHA256SUMS.txt"
+          test -s "release-assets/UA_FREE_Telegram_Autopilot_v${VERSION}_Windows_Portable.zip"
+          test -s "release-assets/UA_FREE_Telegram_Autopilot_v${VERSION}_Source.zip"
+          test -s "release-assets/UA_FREE_Telegram_Autopilot_v${VERSION}_SHA256SUMS.txt"
+          (cd release-assets && sha256sum -c "UA_FREE_Telegram_Autopilot_v${VERSION}_SHA256SUMS.txt")
       - name: Upload exact release assets for Drive synchronization
         uses: actions/upload-artifact@v4
         with:
-          name: UA_FREE_Telegram_Autopilot_v0.1.0-rc37_EXACT_RELEASE_ASSETS
+          name: UA_FREE_Telegram_Autopilot_v${{ env.VERSION }}_EXACT_RELEASE_ASSETS
           path: release-assets/*
           compression-level: 0
-          retention-days: 7
-
+          retention-days: 30
       - name: Report exact-asset sync status
         if: always()
         shell: bash
@@ -53,13 +61,13 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           state=failure
-          desc='RC37 exact release asset archive failed'
+          desc="V2 exact release asset archive failed"
           if [ "$JOB_STATUS" = success ]; then
             state=success
-            desc='RC37 exact GitHub Release assets ready for Drive sync'
+            desc="v${VERSION} exact GitHub Release assets ready for Drive sync"
           fi
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state="$state" \
-            -f context='rc37-drive-sync-assets' \
+            -f context='v2-drive-sync-assets' \
             -f description="$desc" \
             -f target_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
