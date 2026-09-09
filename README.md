@@ -1,95 +1,103 @@
-# UA FREE Telegram Autopilot v0.1.0-rc45
+# UA FREE Telegram Autopilot V2 2.0.0-rc3
 
-Windows portable застосунок для багатоканального збору новин, редакційного відбору, AI-рерайту та прямої публікації в Telegram.
+Windows portable застосунок для багатоканального збору новин, редакційного відбору, AI-рерайту та автоматичної публікації в Telegram.
 
-RC45 підтримує два незалежні напрями контенту на рівні кожного каналу:
+## Поточна архітектура
 
-- **Англійська → Українська** — звична схема для CTRL+UA та інших україномовних каналів.
-- **Українська / російська → Англійська** — нативний англомовний редакторський рерайт, а не буквальний переклад.
+V2 є чистим runtime без активного історичного `rcXX` patch stack. Старі RC-файли можуть залишатися в репозиторії лише як історичні regression fixtures, але V2 їх не імпортує і Windows Portable їх не містить.
 
-## Production-конвеєр RC45
+Основні модулі V2:
 
-`джерело → source-health/backoff → exact + pre-rewrite event dedupe → channel profile/categories/weights → media relevance → Evidence Pack → direction-specific author/editor → Fact Guard + number/year checks → final language/editorial gate → final semantic dedupe → Telegram`
+- `telegram_autopilot/v2/storage.py` — SQLite schema, durable jobs, stage/decision/blocked_by.
+- `telegram_autopilot/v2/ingest.py` — збір і нормалізація джерел, Telegram stitching.
+- `telegram_autopilot/v2/dedupe.py` — strict exact/event dedupe і donor media.
+- `telegram_autopilot/v2/editorial.py` — selector, monitoring policy, writer, QA.
+- `telegram_autopilot/v2/ai_gateway.py` — єдиний AI router/health registry.
+- `telegram_autopilot/v2/runtime.py` — fresh-first scheduler, per-channel isolation, recovery.
+- `telegram_autopilot/v2/publisher.py` — publication gate і Telegram transport.
+- `telegram_autopilot/v2/migration.py` + `migration_service.py` — read-only import старої Data.
+- `telegram_autopilot/v2/loghub.py` — окремі журнали за підсистемами.
+- `telegram_autopilot/v2/ui.py` — операторський інтерфейс.
 
-## Налаштування належать конкретному каналу
+## Ключові інваріанти
 
-Для кожного каналу окремо задаються:
+- AI/provider outage не є редакційною відмовою.
+- `WAITING_AI` автоматично прокидається після відновлення здорового провайдера.
+- Свіжі матеріали мають пріоритет над старим backlog.
+- Один проблемний канал не блокує інші.
+- Monitoring використовує збережені inclusion/exclusion rules і не робить fail-open при недоступному AI.
+- Без canonical source URL матеріал не може стати `READY` або `PUBLISHED`.
+- Посилання всередині первинного повідомлення не підміняє джерело самої новини.
+- Publication pacing не обходиться режимом «публікувати одразу».
+- Невизначений результат Telegram write не ретраїться всліпу, щоб не створювати дубль.
 
-- **Напрям контенту**.
-- **Редакційний профіль** — вільний текст: тематика, аудиторія, що публікувати/не публікувати та бажаний стиль.
-- **Редакційні ваги** — операторські категорії з довільними назвами та вагою `0–100`.
-- Telegram target, bot token і параметри автоматизації.
+## AI
 
-Ваги відносні. Наприклад, `30 / 20 / 10` нормалізуються до `50% / 33.3% / 16.7%`. Сума не зобов’язана дорівнювати 100. Вага `0` забороняє автоматичну публікацію категорії. Порожній список означає відсутність тематичного balance gate для цього каналу.
+V2 використовує один health registry для router, workers, scheduler та UI.
 
-Категорії різних каналів не успадковуються й не впливають одна на одну.
+Підтримуються Codex/ChatGPT, Google Gemini, NVIDIA NIM, Groq, Cloudflare та локальний OpenAI-compatible резерв.
 
-## RC45: редакторський відбір
+Codex не має hardcoded `gpt-5.x`: використовується account-default/доступна модель акаунта. Тимчасові network/quota/timeout помилки відокремлені від permanent auth/model/config errors.
 
-Категорійний classifier працює семантично з англійськими, українськими та російськими source-текстами. Назви категорій можуть бути англійською незалежно від мови джерела.
+## Міграція зі старого Autopilot
 
-- Простий однозначний матеріал може класифікуватися локально без AI-виклику.
-- Evergreen/review/guide/conference-looking заголовки навмисно не проходять дешевий literal shortcut: їх додатково перевіряє semantic profile gate.
-- `__OTHER__` означає, що матеріал не відповідає жодній категорії або редакційному профілю, і при налаштованих вагах такий матеріал не публікується.
-- Тимчасова недоступність AI-класифікатора більше не вимикає баланс тихо. Матеріал іде в retry, а не в `balance skipped`.
-- Rolling balance рахується тільки по опублікованих матеріалах цього каналу.
+Не копіюйте стару `Data` поверх V2 вручну.
 
-Універсальний junk gate окремо відсікає buying/affiliate roundups і явно sponsored/affiliate material.
+1. Розпакуйте V2 в нову папку.
+2. Запустіть `UA_FREE_Telegram_Autopilot.exe`.
+3. Відкрийте `Міграція` → `Імпортувати стару Data`.
+4. Виберіть `Data` робочої legacy-версії, рекомендована база для переходу — RC82.
 
-## Дедуплікація
+Legacy SQLite відкривається тільки read-only. Перед заміною V2 БД створюється backup.
 
-RC45 має кілька бар’єрів:
+Переносяться:
 
-1. exact URL/content hash;
-2. **pre-rewrite event dedupe** по source-заголовках, сутностях, продукту, числах і ключових source-фактах;
-3. title duplicate;
-4. фінальний semantic event dedupe безпосередньо перед записом у Telegram.
+- канали та Telegram targets;
+- джерела;
+- ChannelPolicy, inclusion/exclusion, prompts, editorial weights;
+- language/media/publication settings;
+- published history та dedupe history;
+- feedback/learning data;
+- зашифрована пара `secrets.key + secrets.secure` без розшифрування.
 
-Pre-rewrite gate додано після live-випадку, коли дві різні редакції описали один реліз Gemini 3.5 Transcribe, а два українські рерайти стали достатньо різними, щоб старий body-only semantic gate їх не склеїв.
+Не переносяться transient runtime state: старі provider cooldown, retry timers, worker state, circuit state, RC markers та технічні transient errors.
 
-## Англійська → Українська
+RC3 містить Windows-safe SQLite migration через online backup API та окремі унікальні temp-файли для `secrets.key` і `secrets.secure`.
 
-Збережено production core RC40–RC44: Evidence Pack, optional внутрішній editorial bridge, fresh Ukrainian author, trusted final editor, Fact Guard, number/year checks і фінальний український gate.
+## Дані та логи
 
-RC45 змінює редакторську поведінку:
+Portable дані зберігаються у `Data` поруч із програмою.
 
-- одна домінантна новинна думка замість переказу всієї статті;
-- зазвичай 2–3 короткі абзаци;
-- менше другорядних деталей;
-- сильний звичайний факт кращий за вигаданий «хук»;
-- не потрібні обов’язкові драматичний поворот, «чому це важливо» або фінальний kicker;
-- повторювані AI-конструкції на кшталт «найцікавіше тут», «але є нюанс», «іронія в тому», «ставка проста» не повинні бути шаблоном стрічки;
-- канал не посилається сам на себе як на автора/джерело.
+V2 database:
 
-## Українська / російська → Англійська
+`Data/telegram_autopilot_v2.sqlite3`
 
-Reverse mode має окремий writer/editor pipeline:
+Migration backups:
 
-- input gate приймає україномовні та російськомовні джерела;
-- Evidence Pack враховує українські й російські конструкції атрибуції та невизначеності;
-- модель пише **нативний англомовний newsroom rewrite**, а не перекладає речення за реченням;
-- одна головна думка, короткі абзаци, природна англійська без translationese;
-- числа, роки, сутності та фактичні відносини перевіряються до публікації;
-- cross-language Fact Guard не дозволяє перетворити план/угоду на purchase/acquisition або додати сильніші `first/largest/fastest/record` claims без опори в source;
-- fallback-provider draft проходить trusted final pass через Codex/Gemini перед автопублікацією;
-- футер посилання стає `Source`, відеопозначка — `Video`.
+`Data/migration_backups/`
 
-## Cache і зміна напрямку
+Логи:
 
-Post marker містить напрям каналу: `telegram-post-v28:{direction}:...`. Тому після перемикання каналу з UA output на EN output або навпаки старий cached rewrite не може випадково поїхати в Telegram іншою мовою.
+`Data/logs/v2/`
 
-## Медіа й Telegram
+Логи розділені за підсистемами, щоб AI, ingest, editorial, worker, publication та migration не зливалися в один нескінченний файл.
 
-Збережено RC44 media/source semantics і direct-feed transport. Релевантне медіа проходить article-level validation. Перед фактичним Telegram write ще раз запускається semantic duplicate check, включно з cached/retry матеріалами.
+## Запуск із source
 
-## Дані та portable-режим
+```bash
+python app_v2.py
+```
 
-RC45 робить лише адитивну SQLite-міграцію:
+Потрібен Python 3.11+ та залежності з `requirements.txt`.
 
-- `channels.editorial_weights_json`
-- `channels.content_direction TEXT NOT NULL DEFAULT 'en_to_uk'`
-- `articles.editorial_category`
+## Реліз
 
-Старі канали автоматично залишаються в режимі **English → Ukrainian**. Існуючі джерела, історія, ваги та Telegram credentials зберігаються.
+Поточний реліз: `v2.0.0-rc3`.
 
-Для оновлення розпакуйте RC45 у **нову папку** та перенесіть туди всю папку `Data` з попередньої версії. Runtime-файли поверх старої збірки не накладайте.
+Windows Portable будується на GitHub Actions під Windows, проходить regression tests, clean-V2 import gate, native GUI startup, credential-pair migration smoke та Microsoft Defender scan.
+
+SHA256 поточного Windows Portable:
+
+`a3c5ed24bc6fcd4584222abba87d11d42ea82eafda6c4785d59eb5e090d844ac`
+
+Legacy RC82 зберігається як rollback baseline, але не є поточною mainline-архітектурою.
