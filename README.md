@@ -1,4 +1,4 @@
-# UA FREE Telegram Autopilot V2 2.0.0-rc3
+# UA FREE Telegram Autopilot V2 2.0.0-rc4
 
 Windows portable застосунок для багатоканального збору новин, редакційного відбору, AI-рерайту та автоматичної публікації в Telegram.
 
@@ -37,7 +37,9 @@ V2 використовує один health registry для router, workers, sch
 
 Підтримуються Codex/ChatGPT, Google Gemini, NVIDIA NIM, Groq, Cloudflare та локальний OpenAI-compatible резерв.
 
-Codex не має hardcoded `gpt-5.x`: використовується account-default/доступна модель акаунта. Тимчасові network/quota/timeout помилки відокремлені від permanent auth/model/config errors.
+RC4 робить Codex 0.147.0 частиною самого Windows Portable runtime. Тобто нова V2-папка більше не залежить від `Data/ai_runtime` старої RC82 або від випадково встановленого SDK у сусідній програмі. Авторизація використовує ChatGPT account користувача. Codex не має hardcoded `gpt-5.x`: використовується account-default/доступна модель акаунта.
+
+Тимчасові network/quota/timeout помилки відокремлені від permanent auth/model/config errors. Після відновлення здорового провайдера AI-blocked jobs повертаються в робочу чергу без витрачання editorial retry budget.
 
 ## Міграція зі старого Autopilot
 
@@ -50,35 +52,19 @@ Codex не має hardcoded `gpt-5.x`: використовується account-
 
 Legacy SQLite відкривається тільки read-only. Перед заміною V2 БД створюється backup.
 
-Переносяться:
-
-- канали та Telegram targets;
-- джерела;
-- ChannelPolicy, inclusion/exclusion, prompts, editorial weights;
-- language/media/publication settings;
-- published history та dedupe history;
-- feedback/learning data;
-- зашифрована пара `secrets.key + secrets.secure` без розшифрування.
+Переносяться канали та Telegram targets, джерела, ChannelPolicy, inclusion/exclusion, prompts, editorial weights, language/media/publication settings, published/dedupe history, feedback та зашифрована пара `secrets.key + secrets.secure` без розшифрування.
 
 Не переносяться transient runtime state: старі provider cooldown, retry timers, worker state, circuit state, RC markers та технічні transient errors.
 
-RC3 містить Windows-safe SQLite migration через online backup API та окремі унікальні temp-файли для `secrets.key` і `secrets.secure`.
+Міграція використовує Windows-safe SQLite online backup API та окремі унікальні temp-файли для `secrets.key` і `secrets.secure`.
 
 ## Дані та логи
 
 Portable дані зберігаються у `Data` поруч із програмою.
 
-V2 database:
-
-`Data/telegram_autopilot_v2.sqlite3`
-
-Migration backups:
-
-`Data/migration_backups/`
-
-Логи:
-
-`Data/logs/v2/`
+- V2 database: `Data/telegram_autopilot_v2.sqlite3`
+- Migration backups: `Data/migration_backups/`
+- Логи: `Data/logs/v2/`
 
 Логи розділені за підсистемами, щоб AI, ingest, editorial, worker, publication та migration не зливалися в один нескінченний файл.
 
@@ -92,12 +78,8 @@ python app_v2.py
 
 ## Реліз
 
-Поточний реліз: `v2.0.0-rc3`.
+Поточний release line: `v2.0.0-rc4`.
 
-Windows Portable будується на GitHub Actions під Windows, проходить regression tests, clean-V2 import gate, native GUI startup, credential-pair migration smoke та Microsoft Defender scan.
-
-SHA256 поточного Windows Portable:
-
-`a3c5ed24bc6fcd4584222abba87d11d42ea82eafda6c4785d59eb5e090d844ac`
+Windows Portable будується на GitHub Actions під Windows і перед публікацією проходить full regression suite, clean-V2 gate, перевірку вбудованого Codex SDK, native GUI startup, credential-pair migration smoke та Microsoft Defender scan. Точні SHA256 публікуються разом із release assets у `UA_FREE_Telegram_Autopilot_v2.0.0-rc4_SHA256SUMS.txt`.
 
 Legacy RC82 зберігається як rollback baseline, але не є поточною mainline-архітектурою.
