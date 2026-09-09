@@ -1,4 +1,4 @@
-name: Autopilot CI
+name: Autopilot V2 CI
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
       - develop/**
       - hotfix/**
+      - sync/**
   pull_request:
     branches:
       - main
@@ -16,9 +17,9 @@ permissions:
 
 jobs:
   source-gate:
-    name: Source gate / Ubuntu / Python 3.12
+    name: V2 source gate / Ubuntu / Python 3.12
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,7 +31,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
 
       - name: Reject committed runtime Data and secrets
         shell: bash
@@ -41,68 +44,60 @@ jobs:
             exit 1
           fi
 
-      - name: Compile source
-        run: python -m compileall -q telegram_autopilot tests app.py
+      - name: Compile V2 source
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
 
-      - name: Run regression tests
+      - name: Run full regression suite
         run: python -m pytest -q
 
-      - name: Import core without creating production Data
+      - name: Enforce canonical version and clean V2 contract
         shell: bash
         run: |
           set -euo pipefail
-          export UA_FREE_TELEGRAM_AUTOPILOT_DATA="$RUNNER_TEMP/autopilot-data"
+          export UA_FREE_TELEGRAM_AUTOPILOT_DATA="$RUNNER_TEMP/autopilot-v2-data"
           python - <<'PY'
-          from pathlib import Path
+          import pathlib, re
           from telegram_autopilot import __version__
-          from telegram_autopilot.database import Database
-          from telegram_autopilot.rc33_policy import install_rc33_policy
-          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
-          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
-          from telegram_autopilot.rc46_transport import install_rc46_transport
-          from telegram_autopilot.rc37_policy import install_rc37_policy
-          from telegram_autopilot.rc38_policy import install_rc38_policy
-          from telegram_autopilot.rc39_policy import install_rc39_policy
-          from telegram_autopilot.rc40_policy import install_rc40_policy
-          from telegram_autopilot.rc41_policy import install_rc41_policy
-          from telegram_autopilot.rc42_policy import install_rc42_policy
-          from telegram_autopilot.rc45_policy import install_rc45_policy
-          from telegram_autopilot.rc45_editorial_fit import install_rc45_editorial_fit
-          from telegram_autopilot.rc45_style import install_rc45_style
-          from telegram_autopilot.rc45_fact_guard import install_rc45_fact_guard
-          from telegram_autopilot.rc46_policy import install_rc46_policy
-          install_rc33_policy()
-          install_rc35_source_compat()
-          install_rc44_source_transport()
-          install_rc46_transport()
-          install_rc37_policy()
-          install_rc38_policy()
-          install_rc39_policy()
-          install_rc40_policy()
-          install_rc41_policy()
-          install_rc42_policy()
-          install_rc45_policy()
-          install_rc45_editorial_fit()
-          install_rc45_style()
-          install_rc45_fact_guard()
-          install_rc46_policy()
-          db = Database()
-          db.quick_check()
-          with db.connect() as con:
-              channel_cols = {row[1] for row in con.execute("PRAGMA table_info(channels)")}
-              article_cols = {row[1] for row in con.execute("PRAGMA table_info(articles)")}
-          assert "editorial_weights_json" in channel_cols
-          assert "content_direction" in channel_cols
-          assert "editorial_category" in article_cols
-          expected = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-          assert __version__ == expected, (__version__, expected)
-          print("AUTOPILOT_SOURCE_GATE_OK", __version__)
+          from telegram_autopilot.v2 import V2_VERSION
+          from telegram_autopilot.v2.storage import V2Store
+
+          version = pathlib.Path('VERSION.txt').read_text(encoding='utf-8').strip()
+          public = pathlib.Path('PUBLIC_VERSION.txt').read_text(encoding='utf-8').strip()
+          v2_file = pathlib.Path('V2_VERSION.txt').read_text(encoding='utf-8').strip()
+          assert __version__ == V2_VERSION == version == public == v2_file, (__version__, V2_VERSION, version, public, v2_file)
+
+          root = pathlib.Path('telegram_autopilot/v2')
+          patterns = (
+              r'install_rc', r'_PREV\[', r'from\s+\.\.rc\d', r'from\s+\.rc\d',
+              r'import\s+telegram_autopilot\.rc\d', r'from\s+\.\.\s+import\s+rc\d',
+          )
+          bad = []
+          for path in root.glob('*.py'):
+              text = path.read_text(encoding='utf-8')
+              for pattern in patterns:
+                  if re.search(pattern, text):
+                      bad.append(f'{path}: {pattern}')
+          if bad:
+              raise SystemExit('V2 RC contamination:\n' + '\n'.join(bad))
+
+          migration = pathlib.Path('telegram_autopilot/v2/migration_service.py').read_text(encoding='utf-8')
+          assert 'os.replace(' not in migration
+          credentials = pathlib.Path('telegram_autopilot/v2/legacy_credentials.py').read_text(encoding='utf-8')
+          assert 'with_suffix(".migration.tmp")' not in credentials
+          assert "with_suffix('.migration.tmp')" not in credentials
+
+          store = V2Store(pathlib.Path(__import__('os').environ['UA_FREE_TELEGRAM_AUTOPILOT_DATA']) / 'telegram_autopilot_v2.sqlite3')
+          with store.connect() as con:
+              tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+          required = {'channels','channel_policies','sources','articles','jobs','provider_health'}
+          assert required <= tables, required - tables
+          print('V2_SOURCE_GATE_OK', V2_VERSION)
           PY
 
   windows-gate:
-    name: Windows / Python ${{ matrix.python-version }}
+    name: V2 Windows / Python ${{ matrix.python-version }}
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -119,100 +114,79 @@ jobs:
 
       - name: Install dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
 
-      - name: Compile source
+      - name: Compile V2 source
         shell: pwsh
-        run: python -m compileall -q telegram_autopilot tests app.py
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
 
-      - name: Run regression tests
+      - name: Run full regression suite
         shell: pwsh
         run: python -m pytest -q
 
-      - name: Live supported-source collection gate
+      - name: Import V2 entrypoint and verify isolated database
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-v2-data"
+          $env:PYTHONPATH = $PWD.Path
+          @'
+          from pathlib import Path
+          import os
+          import tkinter
+          from telegram_autopilot import __version__
+          from telegram_autopilot.v2 import V2_VERSION
+          from telegram_autopilot.v2.main import v2_database_path
+          from telegram_autopilot.v2.storage import V2Store
+          from telegram_autopilot.v2.runtime import RuntimeEngine
+          from telegram_autopilot.v2.migration_service import MigrationManager
+
+          expected = Path('VERSION.txt').read_text(encoding='utf-8').strip()
+          assert __version__ == V2_VERSION == expected
+          store = V2Store(v2_database_path())
+          with store.connect() as con:
+              row = con.execute('PRAGMA quick_check').fetchone()
+          assert row and row[0] == 'ok', row
+          RuntimeEngine(store)
+          MigrationManager(v2_database_path())
+          print('V2_WINDOWS_IMPORT_GATE_OK', V2_VERSION, v2_database_path())
+          '@ | Set-Content -Path $env:RUNNER_TEMP\v2_windows_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\v2_windows_gate.py
+          if ($LASTEXITCODE -ne 0) { throw 'V2 Windows import gate failed' }
+
+      - name: Native Windows migration regressions
         if: matrix.python-version == '3.12'
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
+          python -m pytest -q tests/test_v2_migration_windows.py tests/test_v2_credentials_migration.py
+          if ($LASTEXITCODE -ne 0) { throw 'V2 Windows migration regressions failed' }
+
+      - name: Live V2 supported-source collection gate
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           $env:PYTHONPATH = $PWD.Path
           @'
-          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
-          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
-          from telegram_autopilot.rc46_transport import install_rc46_transport
+          from telegram_autopilot.collector import detect_source
           from telegram_autopilot.models import Source
-          install_rc35_source_compat()
-          install_rc44_source_transport()
-          install_rc46_transport()
-          from telegram_autopilot.collector import detect_source, collect_source
+          from telegram_autopilot.v2.ingest import collect
 
           checks = [
-              ("Ars Technica", "https://arstechnica.com/", 100),
-              ("Rest of World", "https://restofworld.org/feed/latest/", 87),
-              ("Knowable Magazine", "https://knowablemagazine.org/rss", 90),
+              ('Ars Technica', 'https://arstechnica.com/', 100),
+              ('Rest of World', 'https://restofworld.org/feed/latest/', 87),
+              ('Knowable Magazine', 'https://knowablemagazine.org/rss', 90),
           ]
           for index, (name, url, priority) in enumerate(checks, start=1):
               detected = detect_source(url)
               source = Source(id=index, channel_id=1, kind=detected.kind, name=name, url=detected.url, enabled=True, initialized=False, last_checked_at=None, last_error=None, priority=priority)
-              items = collect_source(source)
-              assert items, f"{name} detected as {detected.kind} ({detected.url}) but returned zero articles"
+              items = collect(source)
+              assert items, f'{name} detected as {detected.kind} ({detected.url}) but returned zero articles'
               assert any((item.title or '').strip() for item in items)
-              print("LIVE_SOURCE_COLLECTION_OK", name, detected.kind, detected.url, len(items), items[0].title[:120])
-          '@ | Set-Content -Path $env:RUNNER_TEMP\source_live_gate.py -Encoding utf8
-          python $env:RUNNER_TEMP\source_live_gate.py
-          if ($LASTEXITCODE -ne 0) { throw "Live supported-source collection gate failed" }
-
-      - name: Import Windows entrypoint and verify isolated database
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA = Join-Path $env:RUNNER_TEMP "autopilot-data"
-          $env:PYTHONPATH = $PWD.Path
-          @'
-          from pathlib import Path
-          import tkinter
-          import telegram_autopilot.main
-          from telegram_autopilot import __version__
-          from telegram_autopilot.database import Database
-          from telegram_autopilot.rc33_policy import install_rc33_policy
-          from telegram_autopilot.rc35_source_compat import install_rc35_source_compat
-          from telegram_autopilot.rc44_source_transport import install_rc44_source_transport
-          from telegram_autopilot.rc46_transport import install_rc46_transport
-          from telegram_autopilot.rc37_policy import install_rc37_policy
-          from telegram_autopilot.rc38_policy import install_rc38_policy
-          from telegram_autopilot.rc39_policy import install_rc39_policy
-          from telegram_autopilot.rc40_policy import install_rc40_policy
-          from telegram_autopilot.rc41_policy import install_rc41_policy
-          from telegram_autopilot.rc42_policy import install_rc42_policy
-          from telegram_autopilot.rc45_policy import install_rc45_policy
-          from telegram_autopilot.rc45_editorial_fit import install_rc45_editorial_fit
-          from telegram_autopilot.rc45_style import install_rc45_style
-          from telegram_autopilot.rc45_fact_guard import install_rc45_fact_guard
-          from telegram_autopilot.rc46_policy import install_rc46_policy
-
-          install_rc33_policy()
-          install_rc35_source_compat()
-          install_rc44_source_transport()
-          install_rc46_transport()
-          install_rc37_policy()
-          install_rc38_policy()
-          install_rc39_policy()
-          install_rc40_policy()
-          install_rc41_policy()
-          install_rc42_policy()
-          install_rc45_policy()
-          install_rc45_editorial_fit()
-          install_rc45_style()
-          install_rc45_fact_guard()
-          install_rc46_policy()
-
-          db = Database()
-          db.quick_check()
-          with db.connect() as con:
-              channel_cols = {row[1] for row in con.execute("PRAGMA table_info(channels)")}
-          assert "content_direction" in channel_cols
-          expected = Path("VERSION.txt").read_text(encoding="utf-8").strip()
-          assert __version__ == expected, (__version__, expected)
-          print("AUTOPILOT_WINDOWS_SOURCE_GATE_OK", __version__)
-          '@ | Set-Content -Path $env:RUNNER_TEMP\windows_import_gate.py -Encoding utf8
-          python $env:RUNNER_TEMP\windows_import_gate.py
-          if ($LASTEXITCODE -ne 0) { throw "Windows import gate failed" }
+              print('V2_LIVE_SOURCE_COLLECTION_OK', name, detected.kind, detected.url, len(items), items[0].title[:120])
+          '@ | Set-Content -Path $env:RUNNER_TEMP\v2_source_live_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\v2_source_live_gate.py
+          if ($LASTEXITCODE -ne 0) { throw 'V2 live supported-source collection gate failed' }
