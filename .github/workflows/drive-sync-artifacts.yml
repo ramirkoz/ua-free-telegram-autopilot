@@ -1,11 +1,9 @@
 name: V2 Exact Release Assets for Drive Sync
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - VERSION.txt
-      - .github/workflows/drive-sync-artifacts.yml
+  workflow_run:
+    workflows: ["Autopilot V2 Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -14,12 +12,14 @@ permissions:
 
 jobs:
   archive-release-assets:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out repository
+      - name: Check out current main
         uses: actions/checkout@v4
-
+        with:
+          ref: main
       - name: Resolve current version
         shell: bash
         run: |
@@ -27,24 +27,15 @@ jobs:
           version="$(tr -d '\r\n' < VERSION.txt)"
           test -n "$version"
           echo "VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Wait for GitHub Release and download exact assets
+      - name: Download exact GitHub Release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="v${VERSION}"
+          gh release view "$tag" --repo "${{ github.repository }}" >/dev/null
           mkdir -p release-assets
-          found=0
-          for i in $(seq 1 30); do
-            if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-              found=1
-              break
-            fi
-            sleep 10
-          done
-          test "$found" = 1
           gh release download "$tag" \
             --repo "${{ github.repository }}" \
             --dir release-assets \
@@ -55,7 +46,6 @@ jobs:
           test -s "release-assets/UA_FREE_Telegram_Autopilot_v${VERSION}_Source.zip"
           test -s "release-assets/UA_FREE_Telegram_Autopilot_v${VERSION}_SHA256SUMS.txt"
           (cd release-assets && sha256sum -c "UA_FREE_Telegram_Autopilot_v${VERSION}_SHA256SUMS.txt")
-
       - name: Upload exact release assets for Drive synchronization
         uses: actions/upload-artifact@v4
         with:
@@ -63,7 +53,6 @@ jobs:
           path: release-assets/*
           compression-level: 0
           retention-days: 30
-
       - name: Report exact-asset sync status
         if: always()
         shell: bash
