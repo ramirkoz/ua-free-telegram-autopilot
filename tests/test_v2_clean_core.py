@@ -193,14 +193,17 @@ def test_runtime_channel_isolation_on_ai_outage(tmp_path: Path):
     runtime.editorial=FakeEditorial(); runtime.publisher=FakePublisher(); runtime.ingest.collect_channel=lambda cid:{"seen":0,"added":0,"errors":0}
     runtime.start(); deadline=time.time()+4
     try:
+        c1 = None
+        c2 = c3 = None
         while time.time()<deadline:
             with store.connect() as con:
-                c2=con.execute("SELECT decision FROM articles WHERE channel_id=2").fetchone()[0]; c3=con.execute("SELECT decision FROM articles WHERE channel_id=3").fetchone()[0]
-            if c2=="REJECT" and c3=="REJECT": break
+                c1=con.execute("SELECT a.blocked_by,j.state,a.retry_count FROM articles a JOIN jobs j ON j.article_id=a.id WHERE a.channel_id=1").fetchone()
+                c2=con.execute("SELECT decision FROM articles WHERE channel_id=2").fetchone()[0]
+                c3=con.execute("SELECT decision FROM articles WHERE channel_id=3").fetchone()[0]
+            if c1 is not None and c1["blocked_by"]=="AI" and c1["state"]=="WAITING" and c2=="REJECT" and c3=="REJECT":
+                break
             time.sleep(.05)
-        with store.connect() as con:
-            c1=con.execute("SELECT a.blocked_by,j.state,a.retry_count FROM articles a JOIN jobs j ON j.article_id=a.id WHERE a.channel_id=1").fetchone()
-            c2=con.execute("SELECT decision FROM articles WHERE channel_id=2").fetchone()[0]; c3=con.execute("SELECT decision FROM articles WHERE channel_id=3").fetchone()[0]
+        assert c1 is not None
         assert c1["blocked_by"]=="AI" and c1["state"]=="WAITING" and c1["retry_count"]==0
         assert c2=="REJECT" and c3=="REJECT"
     finally: runtime.stop()
