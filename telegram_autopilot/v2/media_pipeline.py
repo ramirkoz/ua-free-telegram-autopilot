@@ -109,10 +109,6 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
         if len(items) < max(1, min(24, int(max_items))):
             items.append(MediaItem(kind, url))
 
-    # RC14/15 Telegram layouts could over-count one visual image when the public
-    # page exposed several resized/signed URL variants.  New layouts advertise an
-    # identity version and may trust their declared count; old Telegram layouts use
-    # the canonical unique count observed here to avoid false "3 media" galleries.
     identity_version = 0
     if isinstance(layout, dict):
         tg_meta = layout.get("telegram")
