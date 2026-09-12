@@ -296,20 +296,29 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                         if legacy_id in article_id_map and legacy_dup in article_id_map:
                             new.execute("UPDATE articles SET duplicate_of=? WHERE id=?", (article_id_map[legacy_dup],article_id_map[legacy_id]))
 
-                feedback_table = next((name for name in ("article_feedback","feedback","reaction_feedback") if name in tables), "")
+                feedback_table = next((name for name in ("telegram_feedback","article_feedback","feedback","reaction_feedback") if name in tables), "")
                 if feedback_table:
                     for row in old.execute(f"SELECT * FROM {feedback_table}"):
                         d=_row_dict(row); old_aid=_int(_pick(d,"article_id","id",default=0),0); new_aid=article_id_map.get(old_aid)
                         if not new_aid: continue
                         cid=_int(d.get("channel_id"),0) or _int(new.execute("SELECT channel_id FROM articles WHERE id=?",(new_aid,)).fetchone()[0],0)
-                        known={"article_id","id","channel_id","telegram_message_id","checked_at","published_at","views","forwards","replies","likes","dislikes","fires","other_reactions"}
+                        known={"article_id","id","channel_id","telegram_message_id","checked_at","published_at","views","forwards","replies","likes","dislikes","fires","other_reactions",
+                               "editor_admin_count","editor_reacted_count","editor_coverage","reactor_scan_complete","reactor_scanned","audience_reactions_json",
+                               "audience_total","audience_positive","audience_negative","audience_fires","audience_other"}
                         extras={k:v for k,v in d.items() if k not in known}
                         new.execute(
-                            """INSERT OR REPLACE INTO feedback(article_id,channel_id,telegram_message_id,checked_at,published_at,views,forwards,replies,likes,dislikes,fires,other_reactions,legacy_config_json)
-                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            """INSERT OR REPLACE INTO feedback(
+                                   article_id,channel_id,telegram_message_id,checked_at,published_at,views,forwards,replies,likes,dislikes,fires,other_reactions,
+                                   editor_admin_count,editor_reacted_count,editor_coverage,reactor_scan_complete,reactor_scanned,audience_reactions_json,
+                                   audience_total,audience_positive,audience_negative,audience_fires,audience_other,legacy_config_json)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (new_aid,cid,str(d.get("telegram_message_id") or ""),str(d.get("checked_at") or ""),str(d.get("published_at") or ""),
                              _int(d.get("views"),0),_int(d.get("forwards"),0),_int(d.get("replies"),0),_int(d.get("likes"),0),_int(d.get("dislikes"),0),
-                             _int(d.get("fires"),0),_int(d.get("other_reactions"),0),json.dumps(extras,ensure_ascii=False,separators=(",",":"),default=str)),
+                             _int(d.get("fires"),0),_int(d.get("other_reactions"),0),_int(d.get("editor_admin_count"),0),_int(d.get("editor_reacted_count"),0),
+                             str(d.get("editor_coverage") or "legacy"),_int(d.get("reactor_scan_complete"),0),_int(d.get("reactor_scanned"),0),
+                             str(d.get("audience_reactions_json") or "{}"),_int(d.get("audience_total"),0),_int(d.get("audience_positive"),0),
+                             _int(d.get("audience_negative"),0),_int(d.get("audience_fires"),0),_int(d.get("audience_other"),0),
+                             json.dumps(extras,ensure_ascii=False,separators=(",",":"),default=str)),
                         )
                         report.feedback_imported += 1
                 new.commit()
