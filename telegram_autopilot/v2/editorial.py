@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ..evidence_pack import build_evidence_pack
 from ..fact_guard import validate_fact_guard
@@ -12,6 +12,7 @@ from ..ukrainian_quality import apply_safe_ukrainian_fixes, human_style_issues, 
 from .ai_gateway import AIGateway, GatewayExhausted
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, Stage
 from .loghub import event
+from .learning import LearningEngine
 from .storage import V2Store
 
 
@@ -132,10 +133,15 @@ def _number_tokens(text: str) -> set[str]:
     return result
 
 
-def validate_writer_output(article: Any, text: str, *, min_chars: int, max_chars: int) -> str:
+TELEGRAM_BODY_SAFE_MAX = 880
+
+
+def validate_writer_output(article: Any, text: str, *, min_chars: int, max_chars: int, hard_max_chars: int | None = None) -> str:
     value = apply_safe_ukrainian_fixes(str(text or "")).strip()
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
+    if hard_max_chars is not None and len(value) > int(hard_max_chars):
+        raise ValueError(f"Непридатна довжина Telegram-тексту: понад жорсткий ліміт {int(hard_max_chars)}")
     if len(value) > max(int(max_chars) + 250, int(max_chars) * 3 // 2):
         raise ValueError("Непридатна довжина Telegram-тексту: надто довго")
     if not looks_ukrainian(value):
@@ -172,6 +178,7 @@ class EditorialEngine:
     def __init__(self, store: V2Store, gateway: AIGateway):
         self.store = store
         self.gateway = gateway
+        self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         return self._select_monitoring(channel, article) if channel.mode == ChannelMode.MONITORING else self._select_editorial(channel, article)
@@ -209,8 +216,18 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         p = channel.policy
+        learning = self.learning.topic_assessment(channel.id, article)
+        if learning.hard_suppress:
+            reason = (
+                f"LEARNING_ADMIN_DISLIKE: very close recent editor-disliked story #{learning.matched_article_id}; "
+                f"similarity={learning.matched_similarity:.2f}"
+            )
+            event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
+            return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
+        topic_memory = self.learning.topic_memory_block(channel.id, article)
         prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Перевір лише відповідність SOURCE політиці каналу. Не оцінюй broad appeal або wow.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
+{topic_memory}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 5600)}
 Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."]}}"""
 
@@ -223,14 +240,21 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 
         fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=340, timeout_seconds=25)
         fit = parse_fit(fit_result.text)
-        score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
+        raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
+        score = max(0, min(100, raw_score + int(learning.fit_adjustment)))
+        if learning.fit_adjustment:
+            event(
+                "learning", "topic soft adjustment", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                admin_score=round(learning.admin_score, 3), audience_score=round(learning.audience_score, 3),
+                adjustment=int(learning.fit_adjustment), raw_fit=raw_score, adjusted_fit=score,
+            )
         if fit["decision"] == "reject":
             return EditorialOutcome(Decision.REJECT, reason=_clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
         value = self._value_gate(article)
         allowed, code, value_score = self._value_allowed(value, score)
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
-        return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
+        return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
@@ -259,38 +283,50 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 
     def write(self, channel: ChannelConfig, article: Any, selection: EditorialOutcome) -> EditorialOutcome:
         p = channel.policy
+        effective_max = max(120, min(int(p.target_max_chars), TELEGRAM_BODY_SAFE_MAX))
+        effective_min = max(80, min(int(p.target_min_chars), effective_max))
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
+        style_memory = self.learning.style_memory_block(channel.id, article)
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
-CHANNEL PURPOSE: {p.purpose}\nWRITING RULES: {p.writing_rules}\nSTYLE RULES: {p.style_rules}\nEXTRA: {p.writer_extra_prompt}\nANGLE: {selection.angle}
-Цільова довжина: {p.target_min_chars}-{p.target_max_chars} символів.
-PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.\n{protected}
-SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 6200)}
+CHANNEL PURPOSE: {p.purpose}
+WRITING RULES: {p.writing_rules}
+STYLE RULES: {p.style_rules}
+EXTRA: {p.writer_extra_prompt}
+{style_memory}
+ANGLE: {selection.angle}
+Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {TELEGRAM_BODY_SAFE_MAX} символів, бо система додає окремий footer джерела.
+PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
+{protected}
+SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
+SOURCE:
+{_source_pack(article, 6200)}
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def validator(raw: str) -> None:
-            validate_writer_output(article, raw, min_chars=p.target_min_chars, max_chars=p.target_max_chars)
+            validate_writer_output(article, raw, min_chars=effective_min, max_chars=effective_max, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
 
         result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
-        draft = validate_writer_output(article, result.text, min_chars=p.target_min_chars, max_chars=p.target_max_chars)
-        final = self._final_edit(channel, article, draft)
+        draft = validate_writer_output(article, result.text, min_chars=effective_min, max_chars=effective_max, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
+        final = self._final_edit(channel, article, draft, min_chars=effective_min, max_chars=effective_max)
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
-    def _final_edit(self, channel: ChannelConfig, article: Any, draft: str) -> str:
+    def _final_edit(self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int) -> str:
         p = channel.policy
+        style_memory = self.learning.style_memory_block(channel.id, article)
         prompt = f"""Ти фінальний редактор. Виправ ТІЛЬКИ мову, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Якщо текст уже добрий, поверни його без змін.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def validator(raw: str) -> None:
-            validate_writer_output(article, raw, min_chars=p.target_min_chars, max_chars=p.target_max_chars)
+            validate_writer_output(article, raw, min_chars=min_chars, max_chars=max_chars, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
 
         try:
             result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28)
-            return validate_writer_output(article, result.text, min_chars=p.target_min_chars, max_chars=p.target_max_chars)
+            return validate_writer_output(article, result.text, min_chars=min_chars, max_chars=max_chars, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
         except GatewayExhausted:
             return draft
 
-    def process_article(self, article_id: int) -> EditorialOutcome:
+    def process_article(self, article_id: int, heartbeat: Callable[[], None] | None = None) -> EditorialOutcome:
         article = self.store.get_article(article_id)
         if article is None:
             raise KeyError(article_id)
@@ -301,13 +337,25 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\nSOURCE:\n{_source_pack
         if not canonical.startswith(("http://", "https://")):
             self.store.update_article(article_id, blocked_by=str(BlockedBy.SOURCE), last_error_code="SOURCE_MISSING", last_error_detail="Немає canonical source URL")
             raise RuntimeError("SOURCE_MISSING")
+        if heartbeat is not None:
+            try: heartbeat()
+            except Exception: pass
         selection = self.select(channel, article)
+        if heartbeat is not None:
+            try: heartbeat()
+            except Exception: pass
         self.store.update_article(article_id, stage=str(Stage.SELECTED), editorial_value_score=selection.editorial_value_score, ai_provider=selection.provider, ai_model=selection.model, status_detail=selection.reason)
         event("editorial", "selector decision", channel_id=channel.id, article_id=article_id, decision=str(selection.decision), reason=selection.reason, fit=selection.fit_score, value=selection.editorial_value_score)
         if selection.decision == Decision.REJECT:
             self.store.update_article(article_id, decision=str(Decision.REJECT), blocked_by=str(BlockedBy.NONE), reject_reason=selection.reason)
             return selection
+        if heartbeat is not None:
+            try: heartbeat()
+            except Exception: pass
         written = self.write(channel, article, selection)
+        if heartbeat is not None:
+            try: heartbeat()
+            except Exception: pass
         self.store.update_article(article_id, stage=str(Stage.QA_PASSED), draft_text=written.draft_text, final_text=written.final_text, ai_provider=written.provider, ai_model=written.model, status_detail=written.reason)
         self.store.mark_ready(article_id)
         event("editorial", "article ready", channel_id=channel.id, article_id=article_id, provider=written.provider, model=written.model, chars=len(written.final_text))
