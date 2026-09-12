@@ -9,6 +9,7 @@ from typing import Any
 from .domain import Decision, Stage
 from .loghub import event
 from .storage import V2Store
+from .urlnorm import normalize_url
 
 _GENERIC = {
     "the","and","for","with","from","this","that","into","about","after","before","new","how","why","what",
@@ -63,10 +64,10 @@ def _overlap(a: set[str], b: set[str]) -> tuple[int,float]:
 
 
 def _same_event(current: Any, candidate: Any) -> tuple[bool,str]:
-    au=str(_v(current,"canonical_source_url","") or _v(current,"source_url","")).strip()
-    bu=str(_v(candidate,"canonical_source_url","") or _v(candidate,"source_url","")).strip()
+    au=normalize_url(str(_v(current,"canonical_source_url","") or _v(current,"source_url","")).strip())
+    bu=normalize_url(str(_v(candidate,"canonical_source_url","") or _v(candidate,"source_url","")).strip())
     if au and bu and au==bu:
-        return True,"same canonical URL"
+        return True,"same normalized canonical URL"
     ah=str(_v(current,"content_hash","")).strip(); bh=str(_v(candidate,"content_hash","")).strip()
     if ah and bh and ah==bh:
         return True,"same content hash"
