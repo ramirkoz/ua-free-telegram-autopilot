@@ -1,0 +1,47 @@
+name: One-shot RC18 canonical source sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.sync/rc18_source.b85'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Synchronize canonical RC18 source
+        shell: bash
+        run: |
+          if [ ! -f .sync/rc18_source.b85 ]; then
+            echo "Source payload already cleaned up."
+            exit 0
+          fi
+          python - <<'PY'
+          import base64, pathlib, shutil, zipfile
+          payload = pathlib.Path('.sync/rc18_source.b85').read_text(encoding='ascii')
+          archive = pathlib.Path('/tmp/rc18_source.zip')
+          archive.write_bytes(base64.b85decode(payload.encode('ascii')))
+          root = pathlib.Path('/tmp/rc18_source')
+          shutil.rmtree(root, ignore_errors=True)
+          root.mkdir(parents=True)
+          with zipfile.ZipFile(archive) as z:
+              z.extractall(root)
+          shutil.rmtree('telegram_autopilot', ignore_errors=True)
+          shutil.copytree(root / 'telegram_autopilot', 'telegram_autopilot')
+          for name in ('app_v2.py','PUBLIC_VERSION.txt','V2_VERSION.txt','VERSION.txt','README.md','RELEASE_NOTES_v2.0.0-rc18.md'):
+              shutil.copy2(root / name, name)
+          PY
+          git config user.name "UA FREE sync"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A telegram_autopilot app_v2.py PUBLIC_VERSION.txt V2_VERSION.txt VERSION.txt README.md RELEASE_NOTES_v2.0.0-rc18.md
+          if git diff --cached --quiet; then
+            echo "Canonical RC18 source is already synchronized."
+            exit 0
+          fi
+          git commit -m "Synchronize canonical Autopilot v2.0.0-rc18 source"
+          git push
