@@ -161,3 +161,4 @@ def processing_media_gate(channel: ChannelConfig, article: Mapping[str, Any] | A
 def media_bundle_complete(bundle: MediaBundle) -> bool:
     """Whether every media item declared/observed at ingest survived validation."""
     return bundle.source_media_count <= bundle.count
+
