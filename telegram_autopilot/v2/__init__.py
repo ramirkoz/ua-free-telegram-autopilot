@@ -5,5 +5,5 @@ RC82 is treated as a behavioural specification only; no ``rcXX`` module is impor
 from V2.
 """
 
-V2_SCHEMA_VERSION = 1
-V2_VERSION = "2.0.0-rc4"
+V2_SCHEMA_VERSION = 2
+V2_VERSION = "2.0.0-rc18"
