@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -45,9 +46,6 @@ def _source_fetch(url: str, **kwargs):
     try:
         return fetch_url(url, headers=headers, **kwargs)
     except NetworkError as exc:
-        # Some CDNs are stricter on the first anonymous request. A second normal
-        # document-navigation profile is harmless for public GET sources and
-        # fixes feeds that gate on browser navigation headers.
         if "HTTP 403" not in str(exc):
             raise
         retry_headers = dict(headers)
@@ -338,7 +336,7 @@ def parse_rss(xml_bytes: bytes) -> list[CollectedArticle]:
     return items
 
 
-def _enrich_article(item: CollectedArticle) -> CollectedArticle:
+def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0) -> CollectedArticle:
     if not item.url:
         return item
     try:
@@ -346,7 +344,7 @@ def _enrich_article(item: CollectedArticle) -> CollectedArticle:
             item.url,
             max_bytes=6 * 1024 * 1024,
             allowed_content_types={"text/html", "application/xhtml+xml"},
-            timeout=25,
+            timeout=max(5.0, min(20.0, float(timeout))),
         )
         extracted = extract_article_content(response.body.decode("utf-8", errors="replace"), item.url)
         if len(extracted.text) > len(item.raw_text):
@@ -355,10 +353,6 @@ def _enrich_article(item: CollectedArticle) -> CollectedArticle:
             item.article_layout_json = extracted.layout_json
         if (not item.title or item.title == "Без заголовка") and extracted.title:
             item.title = extracted.title
-        # Once the actual article page is available, trust its structurally filtered
-        # editorial media over images embedded in RSS descriptions, which often
-        # contain ad creatives or newsletter banners. RSS media remains a fallback
-        # only when the article page exposes no usable editorial media.
         preferred_media = extracted.media_urls if extracted.media_urls else item.media_urls
         item.media_urls = list(dict.fromkeys(preferred_media))[:24]
     except Exception:
@@ -414,87 +408,64 @@ class _LinkParser(HTMLParser):
 
 
 class _TelegramChannelParser(HTMLParser):
+    _VOID_TAGS={"area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"}
+    _NON_CONTENT={"tgme_widget_message_user_photo","tgme_widget_message_author_photo","tgme_widget_message_reaction","tgme_widget_message_link_preview","link_preview_image","emoji","reaction","avatar","user_photo","author_photo"}
+    _VIDEO_THUMB={"tgme_widget_message_video_thumb","video_thumb","video_poster"}
+
     def __init__(self, username: str) -> None:
         super().__init__(convert_charrefs=True)
-        self.username = username
-        self.depth = 0
-        self.message_depth: int | None = None
-        self.text_depth: int | None = None
-        self.current: dict[str, object] | None = None
-        self.items: list[CollectedArticle] = []
+        self.username=username; self.stack=[]; self.message_depth=None; self.text_depth=None
+        self.current=None; self.items=[]
 
     @staticmethod
-    def _classes(attrs: dict[str, str]) -> set[str]:
-        return {item for item in attrs.get("class", "").split() if item}
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.depth += 1
-        values = {str(k).casefold(): str(v or "") for k, v in attrs}
-        classes = self._classes(values)
-        if tag.casefold() == "div" and "tgme_widget_message" in classes and values.get("data-post"):
-            self._finish_current()
-            self.current = {"post": values["data-post"], "text": [], "published": None, "media": []}
-            self.message_depth = self.depth
-        if self.current is None:
-            return
-        if "tgme_widget_message_text" in classes:
-            self.text_depth = self.depth
-        if tag.casefold() == "time" and values.get("datetime"):
-            self.current["published"] = values["datetime"]
-        media = self.current["media"]
-        assert isinstance(media, list)
-        if tag.casefold() == "img" and values.get("src"):
-            encoded = encode_media("image", values["src"])
-            if encoded not in media:
-                media.append(encoded[:3020])
-        if tag.casefold() in {"video", "source"} and values.get("src"):
-            encoded = encode_media("video", values["src"])
-            if encoded not in media:
-                media.append(encoded[:3020])
-        style = values.get("style", "")
-        if style:
-            match = re.search(r"background-image\s*:\s*url\(['\"]?([^'\")]+)", style, flags=re.I)
-            if match:
-                url = match.group(1)
-                encoded = encode_media("image", url)
-                if encoded not in media:
-                    media.append(encoded[:3020])
-
-    def handle_data(self, data: str) -> None:
-        if self.current is not None and self.text_depth is not None and self.depth >= self.text_depth:
-            text = self.current["text"]
-            assert isinstance(text, list)
-            text.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if self.current is not None and self.text_depth == self.depth:
-            self.text_depth = None
-        if self.current is not None and self.message_depth == self.depth and tag.casefold() == "div":
-            self._finish_current()
-        self.depth = max(0, self.depth - 1)
-
-    def close(self) -> None:
-        super().close()
-        self._finish_current()
-
-    def _finish_current(self) -> None:
-        if not self.current:
-            return
-        post = str(self.current.get("post") or "").strip()
-        text_parts = self.current.get("text")
-        text = " ".join("".join(text_parts if isinstance(text_parts, list) else []).split())
-        media = self.current.get("media")
-        media_list = list(media) if isinstance(media, list) else []
+    def _classes(attrs: dict[str,str]) -> set[str]: return {item for item in attrs.get("class","").split() if item}
+    def _all_classes(self,current:set[str]) -> set[str]:
+        out=set(current)
+        for _,classes in self.stack: out.update(classes)
+        return out
+    @staticmethod
+    def _has(classes:set[str], markers:set[str]) -> bool:
+        folded={str(c).casefold() for c in classes}; return any(m in c for c in folded for m in markers)
+    def _add(self,kind:str,url:str,classes:set[str]) -> None:
+        if self.current is None or self._has(classes,self._NON_CONTENT): return
+        if kind=="image" and self._has(classes,self._VIDEO_THUMB): return
+        media=self.current["media"]; assert isinstance(media,list)
+        encoded=encode_media(kind,url)
+        if encoded not in media: media.append(encoded[:3020])
+    def _start(self,tag,attrs,self_closing=False):
+        values={str(k).casefold():str(v or "") for k,v in attrs}; classes=self._classes(values); tag=tag.casefold(); depth=len(self.stack)+1
+        if tag=="div" and "tgme_widget_message" in classes and values.get("data-post"):
+            self._finish_current(); self.current={"post":values["data-post"],"text":[],"published":None,"media":[]}; self.message_depth=depth
+        if self.current is not None:
+            if "tgme_widget_message_text" in classes: self.text_depth=depth
+            if tag=="time" and values.get("datetime"): self.current["published"]=values["datetime"]
+            all_classes=self._all_classes(classes)
+            if tag=="img" and values.get("src"): self._add("image",values["src"],all_classes)
+            if tag in {"video","source"} and values.get("src"): self._add("video",values["src"],all_classes)
+            style=values.get("style","")
+            if style:
+                m=re.search(r"background-image\s*:\s*url\(['\"]?([^'\")]+)",style,flags=re.I)
+                if m: self._add("image",m.group(1),all_classes)
+        if not self_closing and tag not in self._VOID_TAGS: self.stack.append((tag,classes))
+    def handle_starttag(self,tag,attrs): self._start(tag,attrs,False)
+    def handle_startendtag(self,tag,attrs): self._start(tag,attrs,True)
+    def handle_data(self,data):
+        if self.current is not None and self.text_depth is not None and len(self.stack)>=self.text_depth:
+            text=self.current["text"]; assert isinstance(text,list); text.append(data)
+    def handle_endtag(self,tag):
+        tag=tag.casefold(); depth=len(self.stack)
+        if self.current is not None and self.text_depth==depth: self.text_depth=None
+        if self.current is not None and self.message_depth==depth and tag=="div": self._finish_current()
+        for idx in range(len(self.stack)-1,-1,-1):
+            if self.stack[idx][0]==tag: del self.stack[idx:]; break
+    def close(self): super().close(); self._finish_current(); self.stack.clear()
+    def _finish_current(self):
+        if not self.current:return
+        post=str(self.current.get("post") or "").strip(); tp=self.current.get("text"); text=" ".join("".join(tp if isinstance(tp,list) else []).split()); media=self.current.get("media"); ml=list(media) if isinstance(media,list) else []
         if post and text:
-            url = "https://t.me/" + post
-            title = text[:220] + ("…" if len(text) > 220 else "")
-            self.items.append(
-                CollectedArticle(post[:1000], title, url, text, str(self.current.get("published") or "") or None, media_list[:24])
-            )
-        self.current = None
-        self.message_depth = None
-        self.text_depth = None
-
+            url="https://t.me/"+post; title=text[:220]+("…" if len(text)>220 else "")
+            self.items.append(CollectedArticle(post[:1000],title,url,text,str(self.current.get("published") or "") or None,ml[:24]))
+        self.current=None; self.message_depth=None; self.text_depth=None
 
 def _collect_telegram(source: Source) -> list[CollectedArticle]:
     username = _telegram_username(source.url)
@@ -534,8 +505,11 @@ def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
             items = parse_rss(response.body)
             if not items:
                 continue
-            for item in items[:20]:
-                _enrich_article(item)
+            deadline = time.monotonic() + 70.0
+            for item in items[:6]:
+                if time.monotonic() >= deadline:
+                    break
+                _enrich_article(item, timeout=12.0)
             return items[:40]
         except Exception:
             continue
@@ -550,11 +524,14 @@ def collect_source(source: Source) -> list[CollectedArticle]:
                 source.url,
                 max_bytes=8 * 1024 * 1024,
                 allowed_content_types={"application/rss+xml", "application/atom+xml", "application/xml", "text/xml", "text/plain"},
-                timeout=35,
+                timeout=20,
             )
             items = parse_rss(response.body)
-            for item in items[:20]:
-                _enrich_article(item)
+            deadline = time.monotonic() + 70.0
+            for item in items[:6]:
+                if time.monotonic() >= deadline:
+                    break
+                _enrich_article(item, timeout=12.0)
             return items[:40]
         if source.kind == "page":
             try:
@@ -562,7 +539,7 @@ def collect_source(source: Source) -> list[CollectedArticle]:
                     source.url,
                     max_bytes=5 * 1024 * 1024,
                     allowed_content_types={"text/html", "application/xhtml+xml"},
-                    timeout=35,
+                    timeout=20,
                 )
             except NetworkError as exc:
                 if "HTTP 429" in str(exc) or "HTTP 403" in str(exc):
@@ -576,16 +553,21 @@ def collect_source(source: Source) -> list[CollectedArticle]:
             base_host = (urlsplit(source.url).hostname or "").lower()
             seen: set[str] = set()
             result: list[CollectedArticle] = []
+            deadline = time.monotonic() + 75.0
+            attempted = 0
             for url, text in parser.links:
+                if time.monotonic() >= deadline or attempted >= 8:
+                    break
                 host = (urlsplit(url).hostname or "").lower()
                 if host != base_host or url in seen or len(text) < 18:
                     continue
                 seen.add(url)
-                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []))
+                attempted += 1
+                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=12.0)
                 if len(item.raw_text) < 250:
                     continue
                 result.append(item)
-                if len(result) >= 30:
+                if len(result) >= 8:
                     break
             return result
     except NetworkError as exc:
