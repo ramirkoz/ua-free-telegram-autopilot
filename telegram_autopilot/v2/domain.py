@@ -128,6 +128,19 @@ class ProviderHealth:
 
 
 @dataclass(slots=True)
+class AIModelHealth:
+    provider: str
+    model: str
+    state: ProviderState = ProviderState.UNKNOWN
+    detail: str = ""
+    consecutive_failures: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    cooldown_until: str = ""
+    updated_at: str = ""
+
+
+@dataclass(slots=True)
 class MigrationReport:
     source: str
     channels_total: int = 0
