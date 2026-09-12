@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 
 
-LOG_NAMES = ("app", "ingest", "ai", "editorial", "worker", "publish", "migration")
+LOG_NAMES = (
+    "app", "ingest", "ai", "editorial", "worker", "publish",
+    "migration", "supervisor", "feedback", "learning", "media",
+)
 
 
 class ContextFormatter(logging.Formatter):
@@ -64,12 +67,22 @@ class LogHub:
 
 
 def logger(name: str) -> logging.Logger:
-    if name not in LOG_NAMES:
-        raise ValueError(f"Unknown V2 log stream: {name}")
-    return logging.getLogger(f"telegram_autopilot.v2.{name}")
+    """Return a module logger without allowing telemetry to break the module itself.
+
+    Registered module streams get their own rotating file. If a future module emits
+    an event before its stream is registered, fall back to the app stream instead of
+    raising inside production code. The original stream is preserved by ``event``.
+    """
+    clean = str(name or "app").strip() or "app"
+    if clean not in LOG_NAMES:
+        return logging.getLogger("telegram_autopilot.v2.app")
+    return logging.getLogger(f"telegram_autopilot.v2.{clean}")
 
 
 def event(name: str, message: str, *, level: int = logging.INFO, **context: Any) -> None:
-    logger(name).log(level, message, extra={"context": context})
+    clean = str(name or "app").strip() or "app"
+    if clean not in LOG_NAMES:
+        context = {"original_stream": clean, **context}
+    logger(clean).log(level, message, extra={"context": context})
     if level >= logging.ERROR:
         logging.getLogger("telegram_autopilot.v2.errors").log(level, message, extra={"context": context})
