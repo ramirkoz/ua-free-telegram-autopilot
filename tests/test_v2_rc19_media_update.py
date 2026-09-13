@@ -143,7 +143,7 @@ def test_update_protocol_accepts_only_version_and_hash(tmp_path: Path) -> None:
     protocol = UpdateProtocol(tmp_path / "updates")
     request = protocol.validate_request({
         "request_id": "request-1234",
-        "target_version": "2.0.0-rc24",
+        "target_version": "2.0.0-rc9999",
         "sha256": "a" * 64,
         "source": "agent",
         "url": "https://evil.example/payload.zip",
@@ -151,14 +151,14 @@ def test_update_protocol_accepts_only_version_and_hash(tmp_path: Path) -> None:
     })
     assert request.release_url == (
         "https://github.com/ramirkoz/ua-free-telegram-autopilot/releases/download/"
-        "v2.0.0-rc24/UA_FREE_Telegram_Autopilot_v2.0.0-rc24_Update.zip"
+        "v2.0.0-rc9999/UA_FREE_Telegram_Autopilot_v2.0.0-rc9999_Update.zip"
     )
     assert protocol.request_is_newer(request)
     assert UPDATE_RUNTIME_ABI == "py312-v1"
     with pytest.raises(ValueError, match="UPDATE_VERSION_INVALID"):
         protocol.validate_request({"target_version": "https://evil.example", "sha256": "a" * 64})
     with pytest.raises(ValueError, match="UPDATE_SHA256_INVALID"):
-        protocol.validate_request({"target_version": "2.0.0-rc24", "sha256": "not-a-hash"})
+        protocol.validate_request({"target_version": "2.0.0-rc9999", "sha256": "not-a-hash"})
 
 
 def test_database_backup_is_consistent(tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ def test_database_backup_is_consistent(tmp_path: Path) -> None:
     protocol = UpdateProtocol(tmp_path / "Data" / "updates")
     request = protocol.validate_request({
         "request_id": "backup-test-1",
-        "target_version": "2.0.0-rc24",
+        "target_version": "2.0.0-rc9999",
         "sha256": "b" * 64,
     })
     backup = protocol.backup_database(store, request)
