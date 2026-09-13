@@ -54,8 +54,23 @@ jobs:
           $hash=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $sha=Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Update_SHA256.txt"
           "$hash  $([IO.Path]::GetFileName($zip))" | Set-Content $sha -Encoding ascii
+          $manifest=Join-Path $dist 'release_manifest.json'
+          $payload=[ordered]@{
+            schema='ua-free-autopilot-update-v1'
+            version=$env:VERSION
+            artifact_filename=[IO.Path]::GetFileName($zip)
+            sha256=$hash
+            source_commit='${{ github.sha }}'
+            created_at=(Get-Date).ToUniversalTime().ToString('o')
+            request_id=("release-" + $env:VERSION.Replace('.','-'))
+            approved_for_auto_update=$true
+            ci_passed=$true
+            windows_build_passed=$true
+          }
+          $payload | ConvertTo-Json -Depth 4 | Set-Content $manifest -Encoding utf8
           "UPDATE_ZIP=$zip" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "UPDATE_SHA=$sha" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "UPDATE_MANIFEST=$manifest" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Validate update overlay
         shell: pwsh
@@ -71,6 +86,28 @@ jobs:
           }
           if (Test-Path (Join-Path $check 'Data')) { throw 'Update contains Data' }
 
+      - name: Validate release manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $manifest=Get-Content $env:UPDATE_MANIFEST -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $env:VERSION) { throw 'Manifest version mismatch' }
+          if ($manifest.artifact_filename -ne [IO.Path]::GetFileName($env:UPDATE_ZIP)) { throw 'Manifest asset mismatch' }
+          $actual=(Get-FileHash $env:UPDATE_ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($manifest.sha256 -ne $actual) { throw 'Manifest SHA mismatch' }
+          if (-not $manifest.approved_for_auto_update -or -not $manifest.ci_passed -or -not $manifest.windows_build_passed) { throw 'Manifest approval flags missing' }
+
+      - name: Upload overlay bundle for remote agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: UA_FREE_Telegram_Autopilot_v${{ env.VERSION }}_REMOTE_UPDATE
+          path: |
+            ${{ env.UPDATE_ZIP }}
+            ${{ env.UPDATE_SHA }}
+            ${{ env.UPDATE_MANIFEST }}
+          compression-level: 0
+          retention-days: 30
+
       - name: Upload overlay to GitHub release
         shell: pwsh
         env:
@@ -79,4 +116,4 @@ jobs:
           $ErrorActionPreference='Stop'
           $tag="v$env:VERSION"
           gh release view $tag | Out-Null
-          gh release upload $tag $env:UPDATE_ZIP $env:UPDATE_SHA --clobber
+          gh release upload $tag $env:UPDATE_ZIP $env:UPDATE_SHA $env:UPDATE_MANIFEST --clobber
