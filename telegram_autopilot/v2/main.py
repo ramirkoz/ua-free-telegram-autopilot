@@ -9,10 +9,10 @@ from ..instance_lock import AlreadyRunning, InstanceLock
 from ..paths import data_dir
 from . import V2_VERSION
 from .loghub import LogHub, event
-from .runtime import RuntimeEngine
+from .production_runtime import ProductionRuntimeEngine as RuntimeEngine
 from .hardened_storage import HardenedV2Store
 from .strict_ingest import StrictIngestService
-from .responsive_ui import ResponsiveMainWindow as MainWindow
+from .production_ui import ProductionMainWindow as MainWindow
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
 from .update_protocol import UpdateProtocol
 
@@ -33,8 +33,6 @@ def main() -> int:
             app = MainWindow(store, runtime, logs)
             update_coordinator = UpdateCoordinator(app, store, runtime)
 
-            # RC9: never run one-time DB maintenance on the Tk thread. RC8 did so from
-            # V2Store.__init__, before the window was drawn, which made a migrated DB look hung.
             maintenance_done = threading.Event()
             maintenance_result: dict[str, object] = {}
             app.set_startup_ready(False, "Підготовка бази… інтерфейс залишається активним")
