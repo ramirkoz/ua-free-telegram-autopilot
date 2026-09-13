@@ -191,6 +191,8 @@ class SupervisorService:
             "recent_errors_10m": recent_errors,
         }
 
+
+
     def _media_snapshot(self) -> dict[str, Any]:
         """Detect actual publication loss, not raw source URL variants.
 
@@ -277,6 +279,8 @@ class SupervisorService:
                 cid = int(ch["id"])
                 active = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state IN ('QUEUED','WAITING','LEASED')", (cid,)).fetchone()[0] or 0)
                 due = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='QUEUED' AND available_at<=?", (cid, now_value)).fetchone()[0] or 0)
+                # RC6 only looked at active jobs here. Once a job was completed it
+                # disappeared from that query, making real progress invisible.
                 last_job_activity = str(con.execute("SELECT COALESCE(MAX(updated_at),'') FROM jobs WHERE channel_id=?", (cid,)).fetchone()[0] or "")
                 last_active_job_update = str(con.execute("SELECT COALESCE(MAX(updated_at),'') FROM jobs WHERE channel_id=? AND state IN ('QUEUED','WAITING','LEASED')", (cid,)).fetchone()[0] or "")
                 oldest_due = str(con.execute(
@@ -469,6 +473,9 @@ class SupervisorService:
         snapshot = self.build_snapshot()
         self._atomic_json(self.status_path, snapshot)
         self._mirror_file(self.status_path, "status.json")
+        # Direct file telemetry replaces the old Telegram-alert/agent chain.
+        # Keep a compact rolling audit feed next to status/incident so a human or
+        # ChatGPT can inspect what actually happened without a second bot.
         recent_payload = {
             "generated_at": now_iso(),
             "version": V2_VERSION,
@@ -489,6 +496,8 @@ class SupervisorService:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except Exception:
             try:
+                # RSS/Atom feeds often preserve RFC 2822 dates such as
+                # ``Fri, 11 Sep 2026 01:08:30 +0000``.
                 dt = parsedate_to_datetime(raw)
             except Exception:
                 return None
@@ -568,6 +577,10 @@ class SupervisorService:
         ai_down = operational and ai_needed and healthy == 0
         runtime_started = self._parse_iso(str(snapshot.get("runtime_started_at") or ""))
         runtime_age = max(0.0, now - runtime_started) if runtime_started is not None else 0.0
+        # RC14 could miss a real outage for five minutes every time provider health
+        # briefly flapped. A large WAITING_AI backlog is already hard evidence that
+        # the pipeline has no usable capacity, so escalate it after only the short
+        # startup guard. Small/ambiguous outages still use the operator grace.
         hard_ai_down = bool(ai_down and ai_blocked >= 25 and runtime_age >= 30.0)
         elapsed = self._condition_elapsed("AI_DOWN", ai_down, now)
         if ai_down and (hard_ai_down or elapsed >= cfg.ai_grace_seconds):
@@ -658,6 +671,9 @@ class SupervisorService:
         self._atomic_json(self.incident_path, payload)
         self._mirror_file(self.incident_path, "incident.json")
 
+        # Create one diagnostic bundle when an incident first appears. Persistent
+        # incidents keep updating status/incident/recent_events; they do not spam a
+        # Telegram bot and do not invoke a separate analysis agent.
         for inc in incidents:
             if inc.code not in new_codes:
                 continue
@@ -700,6 +716,10 @@ class SupervisorService:
         except Exception as exc:
             db_events = [{"stream": "supervisor", "event": "audit_read_error", "detail": str(exc)}]
 
+        # V2 operational telemetry primarily goes through loghub, while audit_events
+        # is intentionally sparse.  RC16 therefore mirrored an almost empty
+        # recent_events.json.  Merge compact structured tails from the real logs so
+        # the Drive feed is useful without a Telegram bot or analysis agent.
         log_events = self._recent_log_events(cap)
         combined = db_events + log_events
         combined.sort(key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""), reverse=True)

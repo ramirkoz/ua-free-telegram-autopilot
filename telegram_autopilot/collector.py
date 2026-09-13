@@ -46,6 +46,9 @@ def _source_fetch(url: str, **kwargs):
     try:
         return fetch_url(url, headers=headers, **kwargs)
     except NetworkError as exc:
+        # Some CDNs are stricter on the first anonymous request. A second normal
+        # document-navigation profile is harmless for public GET sources and
+        # fixes feeds that gate on browser navigation headers.
         if "HTTP 403" not in str(exc):
             raise
         retry_headers = dict(headers)
@@ -353,6 +356,10 @@ def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0) -> Collect
             item.article_layout_json = extracted.layout_json
         if (not item.title or item.title == "Без заголовка") and extracted.title:
             item.title = extracted.title
+        # Once the actual article page is available, trust its structurally filtered
+        # editorial media over images embedded in RSS descriptions, which often
+        # contain ad creatives or newsletter banners. RSS media remains a fallback
+        # only when the article page exposes no usable editorial media.
         preferred_media = extracted.media_urls if extracted.media_urls else item.media_urls
         item.media_urls = list(dict.fromkeys(preferred_media))[:24]
     except Exception:

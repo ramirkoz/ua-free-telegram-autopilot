@@ -6,12 +6,131 @@ import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from . import V2_SCHEMA_VERSION
-from .domain import BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, ProviderHealth, ProviderState, Stage
+from ..media import encode_media, media_identity, valid_public_media
+from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, ProviderHealth, ProviderState, Stage
+from .urlnorm import normalize_url
 
+
+
+
+def _clean_media_json(value: str, *, limit: int = 24) -> str:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except Exception:
+        parsed = []
+    values = [str(x) for x in parsed if str(x).strip()] if isinstance(parsed, list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        media = valid_public_media(value)
+        if not media:
+            continue
+        kind, url = media
+        key = media_identity(kind, url)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(encode_media(kind, url))
+        if len(out) >= max(1, int(limit)):
+            break
+    return json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+
+
+def _layout_source_kind(value: str) -> str:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except Exception:
+        return ""
+    return str(parsed.get("source_kind") or "").strip().casefold() if isinstance(parsed, dict) else ""
+
+
+def _telegram_media_filter_version(value: str) -> int:
+    try:
+        parsed=json.loads(str(value or "{}"))
+        tg=parsed.get("telegram") if isinstance(parsed,dict) else None
+        return int(tg.get("media_filter_version") or 0) if isinstance(tg,dict) else 0
+    except Exception:
+        return 0
+
+
+def _media_json_count(value: str) -> int:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except Exception:
+        return 0
+    return len(parsed) if isinstance(parsed, list) else 0
+
+
+def _parse_datetime_value(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = parsedate_to_datetime(raw)
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_datetime_value(value: str) -> str:
+    dt = _parse_datetime_value(value)
+    return dt.astimezone().isoformat(timespec="seconds") if dt is not None else str(value or "")
+
+
+def _merge_media_json(old_value: str, new_value: str, *, limit: int = 24) -> str:
+    values: list[str] = []
+    for raw in (old_value, new_value):
+        try:
+            parsed = json.loads(str(raw or "[]"))
+        except Exception:
+            parsed = []
+        if isinstance(parsed, list):
+            values.extend(str(x) for x in parsed if str(x).strip())
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        parsed = valid_public_media(value)
+        if not parsed:
+            continue
+        kind, url = parsed
+        key = media_identity(kind, url)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(encode_media(kind, url))
+        if len(out) >= max(1, int(limit)):
+            break
+    return json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+
+
+def _refresh_layout(old_value: str, new_value: str) -> str:
+    """Prefer the newest ingest layout while preserving restart-safe delivery state."""
+    try:
+        old = json.loads(str(old_value or "{}"))
+    except Exception:
+        old = {}
+    try:
+        new = json.loads(str(new_value or "{}"))
+    except Exception:
+        new = {}
+    if not isinstance(old, dict):
+        old = {}
+    if not isinstance(new, dict) or not new:
+        return json.dumps(old, ensure_ascii=False, separators=(",", ":"))
+    delivery = old.get("telegram_delivery")
+    if isinstance(delivery, dict) and delivery:
+        new["telegram_delivery"] = delivery
+    return json.dumps(new, ensure_ascii=False, separators=(",", ":"))
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -62,6 +181,12 @@ CREATE TABLE IF NOT EXISTS sources (
  last_error TEXT NOT NULL DEFAULT '',legacy_config_json TEXT NOT NULL DEFAULT '{}',UNIQUE(channel_id,url)
 );
 CREATE INDEX IF NOT EXISTS idx_sources_channel ON sources(channel_id,enabled,priority,id);
+CREATE TABLE IF NOT EXISTS source_health (
+ source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,consecutive_failures INTEGER NOT NULL DEFAULT 0,
+ cooldown_until TEXT NOT NULL DEFAULT '',last_duration_ms INTEGER NOT NULL DEFAULT 0,last_outcome TEXT NOT NULL DEFAULT '',
+ last_error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_source_health_cooldown ON source_health(cooldown_until);
 CREATE TABLE IF NOT EXISTS articles (
  id INTEGER PRIMARY KEY AUTOINCREMENT,legacy_article_id INTEGER,channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
  source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,external_id TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',
@@ -91,13 +216,30 @@ CREATE TABLE IF NOT EXISTS provider_health (
  provider TEXT PRIMARY KEY,state TEXT NOT NULL DEFAULT 'UNKNOWN',model TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',consecutive_failures INTEGER NOT NULL DEFAULT 0,
  success_count INTEGER NOT NULL DEFAULT 0,failure_count INTEGER NOT NULL DEFAULT 0,cooldown_until TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ai_model_health (
+ provider TEXT NOT NULL,model TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'UNKNOWN',detail TEXT NOT NULL DEFAULT '',consecutive_failures INTEGER NOT NULL DEFAULT 0,
+ success_count INTEGER NOT NULL DEFAULT 0,failure_count INTEGER NOT NULL DEFAULT 0,cooldown_until TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,
+ PRIMARY KEY(provider,model)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_model_health_provider ON ai_model_health(provider,state,updated_at DESC);
 CREATE TABLE IF NOT EXISTS feedback (
  article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
  telegram_message_id TEXT NOT NULL DEFAULT '',checked_at TEXT NOT NULL DEFAULT '',published_at TEXT NOT NULL DEFAULT '',views INTEGER NOT NULL DEFAULT 0,
  forwards INTEGER NOT NULL DEFAULT 0,replies INTEGER NOT NULL DEFAULT 0,likes INTEGER NOT NULL DEFAULT 0,dislikes INTEGER NOT NULL DEFAULT 0,
- fires INTEGER NOT NULL DEFAULT 0,other_reactions INTEGER NOT NULL DEFAULT 0,legacy_config_json TEXT NOT NULL DEFAULT '{}'
+ fires INTEGER NOT NULL DEFAULT 0,other_reactions INTEGER NOT NULL DEFAULT 0,
+ editor_admin_count INTEGER NOT NULL DEFAULT 0,editor_reacted_count INTEGER NOT NULL DEFAULT 0,editor_coverage TEXT NOT NULL DEFAULT 'legacy',
+ reactor_scan_complete INTEGER NOT NULL DEFAULT 0,reactor_scanned INTEGER NOT NULL DEFAULT 0,audience_reactions_json TEXT NOT NULL DEFAULT '{}',
+ audience_total INTEGER NOT NULL DEFAULT 0,audience_positive INTEGER NOT NULL DEFAULT 0,audience_negative INTEGER NOT NULL DEFAULT 0,
+ audience_fires INTEGER NOT NULL DEFAULT 0,audience_other INTEGER NOT NULL DEFAULT 0,legacy_config_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_channel ON feedback(channel_id,published_at DESC);
+CREATE TABLE IF NOT EXISTS feedback_editor_reactions (
+ article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+ telegram_message_id TEXT NOT NULL,admin_peer_id TEXT NOT NULL,admin_name TEXT NOT NULL DEFAULT '',checked_at TEXT NOT NULL,
+ likes INTEGER NOT NULL DEFAULT 0,dislikes INTEGER NOT NULL DEFAULT 0,fires INTEGER NOT NULL DEFAULT 0,other_reactions_json TEXT NOT NULL DEFAULT '{}',
+ PRIMARY KEY(article_id,admin_peer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_editor_channel_checked ON feedback_editor_reactions(channel_id,checked_at DESC);
 CREATE TABLE IF NOT EXISTS audit_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,stream TEXT NOT NULL,event TEXT NOT NULL,channel_id INTEGER,article_id INTEGER,
  provider TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}'
@@ -124,6 +266,171 @@ class V2Store:
         with self._init_lock:
             with self.connect() as con:
                 con.executescript(SCHEMA); con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
+
+    def run_startup_maintenance(self) -> dict[str, int]:
+        """Run potentially expensive one-time maintenance outside the Tk/UI thread.
+
+        RC8 executed URL backfill synchronously from ``V2Store.__init__`` before the main
+        window existed. On a migrated database that could look exactly like an application
+        hang. RC9 keeps schema creation synchronous (fast) and exposes maintenance explicitly
+        so the launcher can run it in a background worker before starting the runtime.
+        """
+        normalized = self._normalize_existing_canonical_urls()
+        reconciled = self._reconcile_published_url_duplicates()
+        recovered_hotlinks = self._recover_rc17_hotlink_failures()
+        sanitized_telegram = self._sanitize_pre_rc18_telegram_media()
+        return {
+            "normalized_urls": int(normalized),
+            "reconciled_duplicates": int(reconciled),
+            "recovered_hotlink_failures": int(recovered_hotlinks),
+            "sanitized_telegram_media": int(sanitized_telegram),
+        }
+
+    def _sanitize_pre_rc18_telegram_media(self) -> int:
+        """Remove contaminated Telegram media snapshots produced before RC18.
+
+        RC17 could store the channel avatar and video poster as attachments. Those
+        URLs cannot be reliably distinguished later without their HTML ancestry, so
+        pending Telegram rows using the old filter version are reset and allowed to
+        be repopulated by the next clean t.me/s ingest. Published history is never
+        modified.
+        """
+        key = "rc18_telegram_media_filter_reset_v1"
+        with self.connect() as con:
+            done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            if done and str(done[0] or "") == "1":
+                return 0
+        changed = 0
+        stamp = now_iso()
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                rows = con.execute("SELECT id,article_layout_json FROM articles WHERE stage<>'PUBLISHED' AND decision='PENDING'").fetchall()
+                for row in rows:
+                    try:
+                        layout=json.loads(str(row["article_layout_json"] or "{}"))
+                    except Exception:
+                        layout={}
+                    if not isinstance(layout, dict) or str(layout.get("source_kind") or "").casefold() != "telegram":
+                        continue
+                    tg=layout.get("telegram")
+                    if isinstance(tg, dict) and int(tg.get("media_filter_version") or 0) >= 2:
+                        continue
+                    # Preserve non-media metadata but make it explicit that this row
+                    # needs a clean source snapshot before REQUIRED media can publish.
+                    if isinstance(tg, dict):
+                        tg["media_count"] = 0
+                        tg["media_group"] = False
+                        tg["media_filter_version"] = 0
+                    layout["blocks"] = [b for b in list(layout.get("blocks") or []) if not (isinstance(b, dict) and str(b.get("type") or "") == "media")]
+                    con.execute(
+                        "UPDATE articles SET media_json='[]',article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' THEN blocked_by ELSE blocked_by END,last_error_code=CASE WHEN last_error_code LIKE 'MEDIA_%' THEN last_error_code ELSE last_error_code END WHERE id=?",
+                        (json.dumps(layout,ensure_ascii=False,separators=(",", ":")), int(row["id"])),
+                    )
+                    # Do not force a publish retry with stale fake media. The collector
+                    # will refresh recent rows; old rows will age out via max_age_hours.
+                    con.execute("UPDATE jobs SET available_at=?,updated_at=? WHERE article_id=? AND state='QUEUED'", (stamp,stamp,int(row["id"])))
+                    changed += 1
+                con.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, "1"))
+                con.commit()
+            except Exception:
+                con.rollback(); raise
+        return changed
+
+    def _recover_rc17_hotlink_failures(self) -> int:
+        """Wake READY rows poisoned by RC16 Telegram remote-fetch failures.
+
+        RC17 no longer gives Telegram remote media URLs, so WEBPAGE_CURL_FAILED is
+        not a valid reason to keep those articles blocked.  This one-time repair is
+        deliberately narrow and never reopens unrelated Telegram/media failures.
+        """
+        key = "rc17_hotlink_media_recovery_v1"
+        with self.connect() as con:
+            done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            if done and str(done[0] or "") == "1":
+                return 0
+        stamp = now_iso()
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                cur = con.execute(
+                    """UPDATE articles
+                       SET blocked_by='NONE',last_error_code='',last_error_detail='',next_retry_at=''
+                       WHERE stage='READY' AND decision='PUBLISH'
+                         AND blocked_by IN ('TELEGRAM','MEDIA')
+                         AND last_error_detail LIKE '%WEBPAGE_CURL_FAILED%'"""
+                )
+                changed = int(cur.rowcount or 0)
+                con.execute(
+                    "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, "1"),
+                )
+                con.commit()
+            except Exception:
+                con.rollback(); raise
+        return changed
+
+    def _normalize_existing_canonical_urls(self) -> int:
+        """One-time RC8 backfill so old tracking URLs participate in exact dedupe."""
+        key = "canonical_url_normalization_v1"
+        with self.connect() as con:
+            done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            if done and str(done[0] or "") == "1":
+                return 0
+        changed = 0
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                rows = con.execute("SELECT id,source_url,canonical_source_url FROM articles").fetchall()
+                for row in rows:
+                    original = str(row["canonical_source_url"] or row["source_url"] or "").strip()
+                    normalized = normalize_url(original)
+                    if normalized and normalized != str(row["canonical_source_url"] or ""):
+                        con.execute("UPDATE articles SET canonical_source_url=? WHERE id=?", (normalized, int(row["id"])))
+                        changed += 1
+                con.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, "1"))
+                con.commit()
+            except Exception:
+                con.rollback(); raise
+        return changed
+
+    def _reconcile_published_url_duplicates(self) -> int:
+        """One-time cleanup: queued/READY copies of an already published normalized URL become DUPLICATE.
+
+        We intentionally do not rewrite two rows that are both already PUBLISHED: RC8 cannot undo
+        Telegram history. It only guarantees that another queued copy of that page will not publish again.
+        """
+        key = "published_url_reconcile_v1"
+        with self.connect() as con:
+            done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            if done and str(done[0] or "") == "1":
+                return 0
+        changed = 0
+        stamp = now_iso()
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                published = con.execute("""SELECT channel_id,canonical_source_url,MAX(id) AS published_id
+                    FROM articles WHERE stage='PUBLISHED' AND canonical_source_url<>''
+                    GROUP BY channel_id,canonical_source_url""").fetchall()
+                for row in published:
+                    pid = int(row["published_id"] or 0)
+                    if pid <= 0:
+                        continue
+                    dupes = con.execute("""SELECT id FROM articles WHERE channel_id=? AND canonical_source_url=? AND id<>?
+                        AND stage<>'PUBLISHED' AND decision<>'DUPLICATE'""",
+                        (int(row["channel_id"]), str(row["canonical_source_url"]), pid)).fetchall()
+                    for dup in dupes:
+                        aid = int(dup["id"]); detail = f"Already published normalized URL as article #{pid}"
+                        con.execute("""UPDATE articles SET stage=?,decision=?,blocked_by=?,duplicate_of=?,reject_reason=?,status_detail=?,last_error_code='',last_error_detail='',next_retry_at='' WHERE id=?""",
+                            (str(Stage.DEDUPED), str(Decision.DUPLICATE), str(BlockedBy.NONE), pid, detail, detail, aid))
+                        con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=? AND state<>'DONE'", (stamp, aid))
+                        changed += 1
+                con.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, "1"))
+                con.commit()
+            except Exception:
+                con.rollback(); raise
+        return changed
 
     def list_channels(self, *, enabled_only: bool=False) -> list[sqlite3.Row]:
         where=" WHERE enabled=1" if enabled_only else ""
@@ -173,6 +480,44 @@ class V2Store:
     def get_article(self, article_id: int) -> sqlite3.Row | None:
         with self.connect() as con: return con.execute("SELECT a.*,s.name AS source_name,s.url AS source_root_url FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.id=?",(int(article_id),)).fetchone()
 
+    def find_equivalent_article(self, channel_id: int, url: str, *, exclude_article_id: int | None = None, published_only: bool = False, hours: int | None = None) -> sqlite3.Row | None:
+        target = normalize_url(url)
+        if not target:
+            return None
+        clauses = ["channel_id=?", "canonical_source_url=?"]
+        args: list[Any] = [int(channel_id), target]
+        if exclude_article_id is not None:
+            clauses.append("id<>?"); args.append(int(exclude_article_id))
+        if published_only:
+            clauses.append("stage='PUBLISHED'")
+        if hours is not None and int(hours) > 0:
+            time_col = "published_at" if published_only else "discovered_at"
+            clauses.append(f"datetime({time_col})>=datetime('now',?)")
+            args.append(f"-{max(1,int(hours))} hours")
+        query = "SELECT * FROM articles WHERE " + " AND ".join(clauses) + " ORDER BY id DESC LIMIT 1"
+        with self.connect() as con:
+            row = con.execute(query, tuple(args)).fetchone()
+            if row is not None:
+                return row
+            # Compatibility fallback for databases that have not yet been backfilled or
+            # imported rows carrying a raw tracking URL. Keep this bounded.
+            scan_clauses = ["channel_id=?"]
+            scan_args: list[Any] = [int(channel_id)]
+            if exclude_article_id is not None:
+                scan_clauses.append("id<>?"); scan_args.append(int(exclude_article_id))
+            if published_only:
+                scan_clauses.append("stage='PUBLISHED'")
+            if hours is not None and int(hours) > 0:
+                time_col = "published_at" if published_only else "discovered_at"
+                scan_clauses.append(f"datetime({time_col})>=datetime('now',?)")
+                scan_args.append(f"-{max(1,int(hours))} hours")
+            scan = con.execute("SELECT * FROM articles WHERE " + " AND ".join(scan_clauses) + " ORDER BY id DESC LIMIT 2000", tuple(scan_args)).fetchall()
+            for candidate in scan:
+                value = str(candidate["canonical_source_url"] or candidate["source_url"] or "")
+                if normalize_url(value) == target:
+                    return candidate
+        return None
+
     def recent_candidates(self, channel_id: int, *, article_id: int, hours: int=72, limit: int=120) -> list[sqlite3.Row]:
         with self.connect() as con:
             return list(con.execute("""SELECT a.*,s.name AS source_name FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.channel_id=? AND a.id<>? AND datetime(a.discovered_at)>=datetime('now',?) AND a.stage<>'ARCHIVED' ORDER BY a.id DESC LIMIT ?""",(int(channel_id),int(article_id),f"-{max(1,int(hours))} hours",max(1,int(limit)))))
@@ -183,7 +528,52 @@ class V2Store:
             return str(row[0] or "") if row else ""
 
     def ready_articles(self, channel_id: int, limit: int=100) -> list[sqlite3.Row]:
-        with self.connect() as con: return list(con.execute("SELECT a.*,s.name AS source_name FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH' ORDER BY datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,a.id DESC LIMIT ?",(int(channel_id),max(1,int(limit)))))
+        """Return publishable READY rows without retry-storming blocked articles.
+
+        A READY article blocked by Telegram/media is eligible again only when an
+        explicit ``next_retry_at`` has elapsed.  Permanent/media-refresh blockers
+        with an empty retry timestamp stay quiet until ingest or operator action
+        clears the blocker.
+        """
+        stamp = now_iso()
+        with self.connect() as con:
+            return list(con.execute(
+                """SELECT a.*,s.name AS source_name
+                   FROM articles a JOIN sources s ON s.id=a.source_id
+                   WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
+                     AND (a.blocked_by='NONE' OR (a.next_retry_at<>'' AND datetime(a.next_retry_at)<=datetime(?)))
+                   ORDER BY datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,a.id DESC
+                   LIMIT ?""",
+                (int(channel_id), stamp, max(1,int(limit))),
+            ))
+
+    def publication_backoff(
+        self,
+        article_id: int,
+        *,
+        blocked_by: BlockedBy,
+        error_code: str,
+        detail: str,
+        retry_seconds: int | None,
+        count_attempt: bool = True,
+    ) -> str:
+        """Persist publication failure backoff directly on the article.
+
+        Publication itself is not a separate job, so relying on the processing-job
+        lease cannot throttle retries.  RC16 therefore retried definite Telegram
+        4xx failures several times per second.  RC17 gives READY publication its
+        own durable clock. ``None`` means wait for source/operator refresh.
+        """
+        retry_at = ''
+        if retry_seconds is not None:
+            retry_at = (datetime.now(timezone.utc) + timedelta(seconds=max(30, int(retry_seconds)))).astimezone().isoformat(timespec='seconds')
+        with self.connect() as con:
+            con.execute(
+                """UPDATE articles SET blocked_by=?,last_error_code=?,last_error_detail=?,next_retry_at=?,
+                          retry_count=retry_count+? WHERE id=?""",
+                (str(blocked_by), str(error_code)[:120], str(detail)[:2000], retry_at, 1 if count_attempt else 0, int(article_id)),
+            )
+        return retry_at
 
     def update_article(self, article_id: int, **fields: Any) -> None:
         allowed={"title","source_url","canonical_source_url","raw_text","content_hash","source_published_at","stage","decision","blocked_by","status_detail","reject_reason","duplicate_of","event_key","event_summary","editorial_category","editorial_value_score","tags_json","topic_major","topic_minor","draft_text","final_text","ai_provider","ai_model","media_json","article_layout_json","ready_at","published_at","telegram_message_id","telegram_media_count","last_error_code","last_error_detail","retry_count","next_retry_at","legacy_status"}
@@ -193,11 +583,44 @@ class V2Store:
         with self.connect() as con: con.execute(f"UPDATE articles SET {assignments} WHERE id=?",tuple(clean.values())+(int(article_id),))
 
     def insert_collected(self, *, channel_id:int,source_id:int,external_id:str,title:str,source_url:str,raw_text:str,content_hash:str="",source_published_at:str="",media_json:str="[]",article_layout_json:str="{}") -> int:
-        stamp=now_iso(); canonical=str(source_url or "").strip()
+        stamp=now_iso(); canonical=normalize_url(str(source_url or "").strip())
+        source_published_at = _normalize_datetime_value(str(source_published_at or ""))
+        is_telegram_snapshot = _layout_source_kind(article_layout_json) == "telegram"
         with self.transaction() as con:
             try:
-                con.execute("BEGIN IMMEDIATE"); row=con.execute("SELECT id FROM articles WHERE channel_id=? AND source_id=? AND external_id=?",(int(channel_id),int(source_id),str(external_id))).fetchone()
-                if row: con.commit(); return int(row["id"])
+                con.execute("BEGIN IMMEDIATE")
+                row=con.execute("SELECT id,stage,decision,media_json,article_layout_json,last_error_code FROM articles WHERE channel_id=? AND source_id=? AND external_id=?",(int(channel_id),int(source_id),str(external_id))).fetchone()
+                if row:
+                    aid = int(row["id"])
+                    # Telegram/web pages can reveal the media part one poll later than
+                    # the text. Refresh non-published rows instead of freezing the first
+                    # incomplete snapshot forever.
+                    if str(row["stage"]) != str(Stage.PUBLISHED):
+                        refreshed_media = _clean_media_json(str(media_json or "[]")) if is_telegram_snapshot else _merge_media_json(str(row["media_json"] or "[]"), str(media_json or "[]"))
+                        refreshed_layout = _refresh_layout(str(row["article_layout_json"] or "{}"), str(article_layout_json or "{}"))
+                        media_ready = _media_json_count(refreshed_media) > 0
+                        clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
+                        prior_error = str(row["last_error_code"] or "")
+                        clear_media_block = (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot) or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
+                        clear_flag = 1 if clear_media_block else 0
+                        con.execute(
+                            "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
+                            (str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
+                        )
+                        if clear_media_block:
+                            con.execute("UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=? AND state='WAITING'",(stamp,stamp,aid))
+                    con.commit(); return aid
+                # Hard identity guard: the same article URL must not become a second DB row
+                # merely because the publisher changed utm_/itm_/ref style tracking parameters.
+                if canonical:
+                    row=con.execute("SELECT id,stage,media_json,article_layout_json FROM articles WHERE channel_id=? AND canonical_source_url=? ORDER BY id DESC LIMIT 1",(int(channel_id),canonical)).fetchone()
+                    if row:
+                        aid = int(row["id"])
+                        if str(row["stage"]) != str(Stage.PUBLISHED):
+                            refreshed_media = _clean_media_json(str(media_json or "[]")) if is_telegram_snapshot else _merge_media_json(str(row["media_json"] or "[]"), str(media_json or "[]"))
+                            refreshed_layout = _refresh_layout(str(row["article_layout_json"] or "{}"), str(article_layout_json or "{}"))
+                            con.execute("UPDATE articles SET media_json=?,article_layout_json=? WHERE id=?",(refreshed_media,refreshed_layout,aid))
+                        con.commit(); return aid
                 cur=con.execute("INSERT INTO articles(channel_id,source_id,external_id,title,source_url,canonical_source_url,raw_text,content_hash,source_published_at,discovered_at,media_json,article_layout_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(int(channel_id),int(source_id),str(external_id),str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),stamp,str(media_json),str(article_layout_json)))
                 aid=int(cur.lastrowid); con.commit()
             except Exception: con.rollback(); raise
@@ -223,7 +646,16 @@ class V2Store:
             try:
                 con.execute("BEGIN IMMEDIATE"); args=[]; channel_sql=""
                 if channel_id is not None: channel_sql=" AND j.channel_id=?"; args.append(int(channel_id))
-                row=con.execute("""SELECT j.* FROM jobs j JOIN articles a ON a.id=j.article_id WHERE j.state IN ('QUEUED','WAITING') AND datetime(j.available_at)<=datetime('now') AND a.decision='PENDING'"""+channel_sql+" ORDER BY j.priority ASC,CASE WHEN a.source_published_at<>'' THEN datetime(a.source_published_at) ELSE datetime(a.discovered_at) END DESC,j.id ASC LIMIT 1",tuple(args)).fetchone()
+                # Fresh-first remains the default, but jobs within four hours of their
+                # channel TTL get a rescue lane so they are processed instead of simply
+                # aging out while newer items continually arrive.
+                row=con.execute("""SELECT j.* FROM jobs j JOIN articles a ON a.id=j.article_id JOIN channels c ON c.id=j.channel_id
+                    WHERE j.state IN ('QUEUED','WAITING') AND datetime(j.available_at)<=datetime('now') AND a.decision='PENDING'"""+channel_sql+"""
+                    ORDER BY j.priority ASC,
+                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 >= MAX(1,c.max_age_hours-4) THEN 0 ELSE 1 END ASC,
+                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 >= MAX(1,c.max_age_hours-4) THEN julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) END ASC,
+                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 < MAX(1,c.max_age_hours-4) THEN julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) END DESC,
+                      j.id ASC LIMIT 1""",tuple(args)).fetchone()
                 if row is None: con.commit(); return None
                 con.execute("UPDATE jobs SET state='LEASED',lease_owner=?,lease_until=?,updated_at=? WHERE id=?",(owner,until,stamp,int(row["id"]))); con.commit(); jid=int(row["id"])
             except Exception: con.rollback(); raise
@@ -243,6 +675,85 @@ class V2Store:
             con.execute("UPDATE jobs SET state='WAITING',available_at=?,lease_owner='',lease_until='',attempts=attempts+?,error_code=?,error_detail=?,updated_at=? WHERE id=?",(available,1 if count_attempt else 0,str(error_code)[:120],str(detail)[:2000],stamp,int(job_id)))
             con.execute("UPDATE articles SET blocked_by=?,last_error_code=?,last_error_detail=?,next_retry_at=?,retry_count=retry_count+? WHERE id=?",(str(blocked_by),str(error_code)[:120],str(detail)[:2000],available,1 if count_attempt else 0,int(row["article_id"])))
 
+    def expire_stale_jobs(self, channel_id:int, max_age_hours:int) -> int:
+        """Archive pending work older than the channel maximum age.
+
+        RC17 delegated timestamp parsing to SQLite ``datetime()``. Telegram/RSS rows
+        can carry RFC2822 dates (for example ``Fri, 11 Sep 2026 13:20:00 +0300``),
+        which SQLite does not parse, so stale jobs survived beyond TTL. RC18 parses
+        timestamps in Python, normalizes parseable legacy values to ISO, and expires
+        the same conservative QUEUED/WAITING + PENDING set.
+        """
+        hours=int(max_age_hours or 0)
+        if hours <= 0:
+            return 0
+        cutoff=datetime.now(timezone.utc)-timedelta(hours=hours)
+        stamp=now_iso(); reason=f"Перевищено максимальний вік матеріалу ({hours} год)."
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                rows=con.execute(
+                    """SELECT DISTINCT j.article_id,a.source_published_at,a.discovered_at
+                       FROM jobs j JOIN articles a ON a.id=j.article_id
+                       WHERE j.channel_id=?
+                         AND j.state IN ('QUEUED','WAITING')
+                         AND a.decision='PENDING'
+                         AND a.stage<>'READY' AND a.stage<>'PUBLISHED'""",
+                    (int(channel_id),),
+                ).fetchall()
+                ids: list[int] = []
+                for row in rows:
+                    aid=int(row["article_id"])
+                    source_raw=str(row["source_published_at"] or "").strip()
+                    discovered_raw=str(row["discovered_at"] or "").strip()
+                    dt=_parse_datetime_value(source_raw) or _parse_datetime_value(discovered_raw)
+                    if source_raw:
+                        normalized=_normalize_datetime_value(source_raw)
+                        if normalized and normalized != source_raw and _parse_datetime_value(normalized) is not None:
+                            con.execute("UPDATE articles SET source_published_at=? WHERE id=?", (normalized, aid))
+                    if dt is not None and dt < cutoff:
+                        ids.append(aid)
+                if not ids:
+                    con.commit(); return 0
+                ids=list(dict.fromkeys(ids))
+                marks=','.join('?' for _ in ids)
+                con.execute(
+                    f"UPDATE jobs SET state='DONE',lease_owner='',lease_until='',error_code='STALE_MAX_AGE',error_detail=?,updated_at=? WHERE channel_id=? AND article_id IN ({marks}) AND state IN ('QUEUED','WAITING')",
+                    (reason,stamp,int(channel_id),*ids),
+                )
+                con.execute(
+                    f"UPDATE articles SET stage=?,decision=?,blocked_by=?,reject_reason=?,last_error_code='STALE_MAX_AGE',last_error_detail=?,next_retry_at='' WHERE id IN ({marks}) AND decision='PENDING'",
+                    (str(Stage.ARCHIVED),str(Decision.REJECT),str(BlockedBy.NONE),reason,reason,*ids),
+                )
+                con.commit(); return len(ids)
+            except Exception:
+                con.rollback(); raise
+
+    def requeue_quality_rewrite(self, article_id:int, *, error_code:str, detail:str, max_attempts:int=3) -> str:
+        stamp=now_iso(); max_attempts=max(1,int(max_attempts))
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                row=con.execute("SELECT channel_id FROM articles WHERE id=?",(int(article_id),)).fetchone()
+                if row is None:
+                    con.commit(); return "ARTICLE_MISSING"
+                retry_job=con.execute("SELECT attempts FROM jobs WHERE article_id=? AND job_type='rewrite_oversize'",(int(article_id),)).fetchone()
+                attempt=(int(retry_job["attempts"] or 0) if retry_job else 0)+1
+                if attempt>=max_attempts:
+                    con.execute("UPDATE articles SET stage=?,decision=?,blocked_by=?,last_error_code=?,last_error_detail=?,retry_count=retry_count+1,next_retry_at='' WHERE id=?",(str(Stage.QA_PASSED),str(Decision.PENDING),str(BlockedBy.QUALITY),"TELEGRAM_OVERSIZE_BLOCKED",str(detail)[:2000],int(article_id)))
+                    con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',attempts=?,error_code=?,error_detail=?,updated_at=? WHERE article_id=? AND job_type='rewrite_oversize'",(attempt,"TELEGRAM_OVERSIZE_BLOCKED",str(detail)[:2000],stamp,int(article_id)))
+                    con.commit(); return "QUALITY_BLOCKED"
+                con.execute("UPDATE articles SET stage=?,decision=?,blocked_by=?,last_error_code=?,last_error_detail=?,retry_count=retry_count+1,next_retry_at=? WHERE id=?",(str(Stage.QA_PASSED),str(Decision.PENDING),str(BlockedBy.QUALITY),str(error_code)[:120],str(detail)[:2000],stamp,int(article_id)))
+                con.execute("""INSERT INTO jobs(article_id,channel_id,job_type,state,priority,available_at,lease_owner,lease_until,attempts,error_code,error_detail,created_at,updated_at)
+                               VALUES(?,?,'rewrite_oversize','QUEUED',0,?,'','',1,?,?,?,?)
+                               ON CONFLICT(article_id,job_type) DO UPDATE SET state='QUEUED',priority=0,available_at=excluded.available_at,lease_owner='',lease_until='',attempts=jobs.attempts+1,error_code=excluded.error_code,error_detail=excluded.error_detail,updated_at=excluded.updated_at""",(int(article_id),int(row["channel_id"]),stamp,str(error_code)[:120],str(detail)[:2000],stamp,stamp))
+                con.commit(); return "QUALITY_REWRITE_QUEUED"
+            except Exception:
+                con.rollback(); raise
+
+    def block_article(self, article_id:int, *, blocked_by:BlockedBy, error_code:str, detail:str) -> None:
+        self.update_article(int(article_id),stage=str(Stage.QA_PASSED),decision=str(Decision.PENDING),blocked_by=str(blocked_by),last_error_code=str(error_code)[:120],last_error_detail=str(detail)[:2000],next_retry_at='')
+
     def wake_blocked(self, blocked_by:BlockedBy, *, limit:int=20) -> int:
         stamp=now_iso()
         with self.transaction() as con:
@@ -253,6 +764,45 @@ class V2Store:
                     con.execute("UPDATE articles SET blocked_by='NONE',last_error_code='',last_error_detail='',next_retry_at='' WHERE id=?",(int(row["article_id"]),))
                 con.commit(); return len(rows)
             except Exception: con.rollback(); raise
+
+    def source_health(self, source_id: int) -> sqlite3.Row | None:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM source_health WHERE source_id=?", (int(source_id),)).fetchone()
+
+    def source_cooldown_active(self, source_id: int) -> tuple[bool, str]:
+        row = self.source_health(source_id)
+        until = str(_row_get(row, "cooldown_until", "") or "")
+        if not until:
+            return False, ""
+        try:
+            dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc) > datetime.now(timezone.utc), until
+        except Exception:
+            return False, until
+
+    def record_source_success(self, source_id: int, duration_ms: int) -> None:
+        stamp = now_iso()
+        with self.connect() as con:
+            con.execute("""INSERT INTO source_health(source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at)
+                           VALUES(?,0,'',?,'OK','',?)
+                           ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=0,cooldown_until='',last_duration_ms=excluded.last_duration_ms,last_outcome='OK',last_error='',updated_at=excluded.updated_at""",
+                        (int(source_id), max(0,int(duration_ms)), stamp))
+
+    def record_source_failure(self, source_id: int, duration_ms: int, detail: str) -> tuple[int, str]:
+        current = self.source_health(source_id)
+        failures = int(_row_get(current, "consecutive_failures", 0) or 0) + 1
+        cooldown = ""
+        if failures >= 2:
+            seconds = min(21600, 900 * (2 ** min(5, failures - 2)))
+            cooldown = (datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
+        stamp = now_iso()
+        with self.connect() as con:
+            con.execute("""INSERT INTO source_health(source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at)
+                           VALUES(?,?,?,?, 'ERROR', ?, ?)
+                           ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,last_duration_ms=excluded.last_duration_ms,last_outcome='ERROR',last_error=excluded.last_error,updated_at=excluded.updated_at""",
+                        (int(source_id), failures, cooldown, max(0,int(duration_ms)), str(detail)[:1200], stamp))
+        return failures, cooldown
 
     def provider_health(self) -> list[ProviderHealth]:
         with self.connect() as con: rows=con.execute("SELECT * FROM provider_health ORDER BY provider").fetchall()
@@ -265,6 +815,42 @@ class V2Store:
 
     def set_provider_health(self, health:ProviderHealth) -> None:
         with self.connect() as con: con.execute("""INSERT INTO provider_health(provider,state,model,detail,consecutive_failures,success_count,failure_count,cooldown_until,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET state=excluded.state,model=excluded.model,detail=excluded.detail,consecutive_failures=excluded.consecutive_failures,success_count=excluded.success_count,failure_count=excluded.failure_count,cooldown_until=excluded.cooldown_until,updated_at=excluded.updated_at""",(health.provider,str(health.state),health.model,health.detail,int(health.consecutive_failures),int(health.success_count),int(health.failure_count),health.cooldown_until,health.updated_at or now_iso()))
+
+    def ai_model_health(self, provider: str | None = None) -> list[AIModelHealth]:
+        with self.connect() as con:
+            if provider:
+                rows = con.execute("SELECT * FROM ai_model_health WHERE provider=? ORDER BY model", (str(provider),)).fetchall()
+            else:
+                rows = con.execute("SELECT * FROM ai_model_health ORDER BY provider,model").fetchall()
+        out: list[AIModelHealth] = []
+        for row in rows:
+            try:
+                state = ProviderState(str(row["state"]))
+            except Exception:
+                state = ProviderState.UNKNOWN
+            out.append(AIModelHealth(
+                provider=str(row["provider"]), model=str(row["model"]), state=state, detail=str(row["detail"] or ""),
+                consecutive_failures=int(row["consecutive_failures"] or 0), success_count=int(row["success_count"] or 0),
+                failure_count=int(row["failure_count"] or 0), cooldown_until=str(row["cooldown_until"] or ""), updated_at=str(row["updated_at"] or ""),
+            ))
+        return out
+
+    def set_ai_model_health(self, health: AIModelHealth) -> None:
+        with self.connect() as con:
+            con.execute("""INSERT INTO ai_model_health(provider,model,state,detail,consecutive_failures,success_count,failure_count,cooldown_until,updated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?)
+                           ON CONFLICT(provider,model) DO UPDATE SET state=excluded.state,detail=excluded.detail,consecutive_failures=excluded.consecutive_failures,
+                           success_count=excluded.success_count,failure_count=excluded.failure_count,cooldown_until=excluded.cooldown_until,updated_at=excluded.updated_at""",
+                        (health.provider,health.model,str(health.state),health.detail,int(health.consecutive_failures),int(health.success_count),
+                         int(health.failure_count),health.cooldown_until,health.updated_at or now_iso()))
+
+    def clear_ai_model_cooldowns(self, provider: str | None = None) -> int:
+        with self.connect() as con:
+            if provider:
+                cur = con.execute("UPDATE ai_model_health SET cooldown_until='' WHERE provider=? AND cooldown_until<>''", (str(provider),))
+            else:
+                cur = con.execute("UPDATE ai_model_health SET cooldown_until='' WHERE cooldown_until<>''")
+            return int(cur.rowcount or 0)
 
     def audit(self, stream:str,event:str, *, channel_id:int|None=None,article_id:int|None=None,provider:str="",stage:str="",detail:str="",payload:Mapping[str,Any]|None=None) -> None:
         with self.connect() as con: con.execute("INSERT INTO audit_events(created_at,stream,event,channel_id,article_id,provider,stage,detail,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",(now_iso(),str(stream),str(event),channel_id,article_id,str(provider),str(stage),str(detail)[:2000],json.dumps(dict(payload or {}),ensure_ascii=False,separators=(",",":"),default=str)))
@@ -281,12 +867,64 @@ class V2Store:
         row=self.get_article(article_id)
         if row is None:return False,"ARTICLE_MISSING"
         if str(row["decision"])!=str(Decision.PUBLISH) or str(row["stage"])!=str(Stage.READY):return False,"NOT_READY"
-        if not str(row["canonical_source_url"] or "").strip().startswith(("http://","https://")):return False,"SOURCE_MISSING"
+        canonical=normalize_url(str(row["canonical_source_url"] or row["source_url"] or "").strip())
+        if not canonical.startswith(("http://","https://")):return False,"SOURCE_MISSING"
+        if canonical != str(row["canonical_source_url"] or ""):
+            self.update_article(article_id,canonical_source_url=canonical)
         if not str(row["final_text"] or "").strip():return False,"TEXT_MISSING"
+        channel=self.get_channel(int(row["channel_id"]))
+        hours=int(channel.dedupe_window_hours if channel else 72)
+        published=self.find_equivalent_article(int(row["channel_id"]),canonical,exclude_article_id=int(article_id),published_only=True,hours=hours)
+        if published is not None:
+            return False,f"ALREADY_PUBLISHED:{int(published['id'])}"
         return True,"OK"
 
-    def mark_published(self, article_id:int, *, message_id:str,media_count:int=0) -> None:
+    def mark_duplicate(self, article_id:int, duplicate_of:int, reason:str) -> None:
+        detail=str(reason)[:2000]
+        self.update_article(article_id,stage=str(Stage.DEDUPED),decision=str(Decision.DUPLICATE),blocked_by=str(BlockedBy.NONE),duplicate_of=int(duplicate_of),reject_reason=detail,status_detail=detail,last_error_code="",last_error_detail="",next_retry_at="")
+        with self.connect() as con:
+            con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=?",(now_iso(),int(article_id)))
+
+    def telegram_delivery_state(self, article_id:int) -> dict[str,Any]:
+        row=self.get_article(article_id)
+        if row is None:return {}
+        try: layout=json.loads(str(row["article_layout_json"] or "{}"))
+        except Exception: layout={}
+        if not isinstance(layout,dict):return {}
+        value=layout.get("telegram_delivery")
+        return dict(value) if isinstance(value,dict) else {}
+
+    def record_telegram_media_delivery(self, article_id:int, message_ids:list[str]|tuple[str,...], *, caption_attached:bool=False, caption_message_id:str="") -> None:
+        """Persist successfully sent media chunks before the final captioned chunk.
+
+        For publications with >10 media, Telegram requires multiple groups. Earlier
+        uncaptioned chunks are persisted so a retry does not duplicate them.
+        """
+        row=self.get_article(article_id)
+        if row is None:raise KeyError(article_id)
+        try: layout=json.loads(str(row["article_layout_json"] or "{}"))
+        except Exception: layout={}
+        if not isinstance(layout,dict):layout={}
+        delivery=layout.get("telegram_delivery")
+        if not isinstance(delivery,dict):delivery={}
+        ids=[str(x) for x in message_ids if str(x).strip()]
+        delivery.update({"media_message_ids":ids,"media_sent_at":now_iso(),"delivery_mode":"caption_media_v1","caption_attached":bool(caption_attached),"caption_message_id":str(caption_message_id or ""),"complete":False})
+        layout["telegram_delivery"]=delivery
+        self.update_article(article_id,article_layout_json=json.dumps(layout,ensure_ascii=False,separators=(",",":")),status_detail="Telegram media chunk sent; final captioned media pending")
+
+    def mark_published(self, article_id:int, *, message_id:str,media_count:int=0,message_ids:list[str]|tuple[str,...]|None=None) -> None:
         ok,reason=self.publication_guard(article_id)
         if not ok:raise ValueError(reason)
-        self.update_article(article_id,stage=str(Stage.PUBLISHED),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),published_at=now_iso(),telegram_message_id=str(message_id),telegram_media_count=int(media_count))
+        row=self.get_article(article_id)
+        if row is None:raise KeyError(article_id)
+        try: layout=json.loads(str(row["article_layout_json"] or "{}"))
+        except Exception: layout={}
+        if not isinstance(layout,dict):layout={}
+        delivery=layout.get("telegram_delivery")
+        if not isinstance(delivery,dict):delivery={}
+        ids=[str(x) for x in (message_ids or [message_id]) if str(x).strip()]
+        if str(message_id) and str(message_id) not in ids:ids.append(str(message_id))
+        delivery.update({"message_ids":ids,"primary_message_id":str(message_id),"media_count":int(media_count),"expected_media_count":int(media_count),"completed_at":now_iso(),"complete":True})
+        layout["telegram_delivery"]=delivery
+        self.update_article(article_id,stage=str(Stage.PUBLISHED),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),published_at=now_iso(),telegram_message_id=str(message_id),telegram_media_count=int(media_count),article_layout_json=json.dumps(layout,ensure_ascii=False,separators=(",",":")),status_detail="")
         with self.connect() as con: con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?",(now_iso(),int(article_id)))

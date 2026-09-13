@@ -455,3 +455,4 @@ class IngestService:
             if con.execute("SELECT 1 FROM articles WHERE source_id=? AND external_id=?",(int(source_id),str(external_id))).fetchone() is not None:
                 return True
         return self.store.find_equivalent_article(int(channel_id),str(url or "")) is not None
+
