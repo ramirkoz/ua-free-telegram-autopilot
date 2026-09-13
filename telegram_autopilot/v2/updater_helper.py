@@ -54,6 +54,38 @@ def _download(request: UpdateRequest, target: Path) -> None:
         shutil.copyfileobj(response, out, length=1024 * 1024)
 
 
+
+
+def _configured_mirror_dir() -> Path | None:
+    config = data_dir() / "supervisor" / "config.json"
+    try:
+        value = json.loads(config.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(value, dict):
+        return None
+    raw = str(value.get("mirror_dir") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path if path.is_dir() else None
+
+
+def _obtain_archive(request: UpdateRequest, target: Path) -> str:
+    # The canonical remote-maintenance path is the user's Google Drive Desktop
+    # supervisor feed. The remote agent drops an exact, SHA-pinned overlay there.
+    # This also works for a private GitHub repository without ever storing a GitHub
+    # token inside the portable application.
+    mirror = _configured_mirror_dir()
+    if mirror is not None:
+        candidate = mirror / request.asset_name
+        if candidate.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, target)
+            return "drive-mirror"
+    _download(request, target)
+    return "github-release"
+
 def _safe_extract(zip_path: Path, target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as archive:
@@ -218,11 +250,11 @@ def main(argv: list[str] | None = None) -> int:
     parent_gone = False
     try:
         protocol.write_state("DOWNLOADING", request=request, url=request.release_url)
-        _download(request, archive)
+        source = _obtain_archive(request, archive)
         actual = protocol.sha256(archive)
         if actual.casefold() != request.sha256.casefold():
             raise RuntimeError(f"UPDATE_SHA256_MISMATCH expected={request.sha256} actual={actual}")
-        protocol.write_state("VERIFIED", request=request, sha256=actual)
+        protocol.write_state("VERIFIED", request=request, sha256=actual, artifact_source=source)
         _safe_extract(archive, stage)
         _validate_stage(stage, request, runtime)
         if not _wait_parent(int(args.parent_pid)):

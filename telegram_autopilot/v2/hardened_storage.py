@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .domain import ChannelMode, Stage
+from .media_pipeline import build_publication_media_bundle
 from .storage import V2Store, _clean_media_json, _layout_source_kind, _media_json_count, now_iso
 from .urlnorm import normalize_url
 
@@ -70,6 +71,8 @@ class HardenedV2Store(V2Store):
             media_json=fresh_media,
             article_layout_json=article_layout_json,
         )
+        # Select one editorial candidate from the full fresh snapshot before it is
+        # persisted as the durable publication candidate. Monitoring keeps albums.
         self._enforce_single_article_if_editorial(article_id)
         return article_id
 
@@ -90,13 +93,13 @@ class HardenedV2Store(V2Store):
         row = row or self.get_article(int(article_id))
         if row is None:
             return False
-        cleaned = _clean_media_json(str(row["media_json"] or "[]"))
-        try:
-            media = json.loads(cleaned)
-        except Exception:
-            media = []
-        media = list(media) if isinstance(media, list) else []
-        trimmed_media = media[:1]
+        channel = self.get_channel(int(row["channel_id"]))
+        if channel is None or channel.mode != ChannelMode.EDITORIAL:
+            return False
+
+        selected = build_publication_media_bundle(channel, row)
+        chosen = selected.items[0] if selected.items else None
+        next_media_list = [chosen.encoded] if chosen is not None else []
 
         try:
             layout = json.loads(str(row["article_layout_json"] or "{}"))
@@ -104,24 +107,31 @@ class HardenedV2Store(V2Store):
             layout = {}
         if not isinstance(layout, dict):
             layout = {}
-        blocks = list(layout.get("blocks") or []) if isinstance(layout.get("blocks"), list) else []
-        kept_media = False
+
+        # Keep exactly the same selected item in both durable representations.
+        # RC19 truncated media_json and layout independently, which could preserve A
+        # in one place and B in the other; build_media_bundle then resurrected both.
         new_blocks: list[Any] = []
-        for block in blocks:
-            if isinstance(block, dict) and str(block.get("type") or "") == "media":
-                if kept_media:
-                    continue
-                kept_media = True
-            new_blocks.append(block)
-        if blocks:
-            layout["blocks"] = new_blocks
+        for block in list(layout.get("blocks") or []):
+            if not isinstance(block, dict) or str(block.get("type") or "") != "media":
+                new_blocks.append(block)
+        if chosen is not None:
+            new_blocks.append({
+                "type": "media", "index": 1, "kind": chosen.kind, "url": chosen.url,
+                "caption": "", "alt": "", "context": str(row["title"] or "")[:700], "position": 0.05,
+            })
+            layout["featured"] = chosen.encoded if chosen.kind == "image" else ""
+        else:
+            layout["featured"] = ""
+        layout["featured_video"] = ""
+        layout["blocks"] = new_blocks
         tg = layout.get("telegram")
         if isinstance(tg, dict):
-            tg["media_count"] = min(1, len(trimmed_media))
+            tg["media_count"] = 1 if chosen is not None else 0
             tg["media_group"] = False
             tg["stitched"] = False
 
-        next_media = json.dumps(trimmed_media, ensure_ascii=False, separators=(",", ":"))
+        next_media = json.dumps(next_media_list, ensure_ascii=False, separators=(",", ":"))
         next_layout = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
         changed = next_media != str(row["media_json"] or "[]") or next_layout != str(row["article_layout_json"] or "{}")
         if changed:
@@ -139,7 +149,7 @@ class HardenedV2Store(V2Store):
                 """
                 SELECT a.* FROM articles a
                 JOIN channels c ON c.id=a.channel_id
-                WHERE c.channel_mode='editorial' AND a.stage<>'PUBLISHED'
+                WHERE c.channel_mode='editorial' AND a.stage='READY'
                 """
             ).fetchall()
         for row in rows:

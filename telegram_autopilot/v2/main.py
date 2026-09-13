@@ -12,8 +12,8 @@ from .loghub import LogHub, event
 from .runtime import RuntimeEngine
 from .hardened_storage import HardenedV2Store
 from .strict_ingest import StrictIngestService
-from .ui import MainWindow
-from .update_coordinator import UpdateCoordinator
+from .responsive_ui import ResponsiveMainWindow as MainWindow
+from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
 from .update_protocol import UpdateProtocol
 
 

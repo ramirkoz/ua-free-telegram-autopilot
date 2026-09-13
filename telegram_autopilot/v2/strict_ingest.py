@@ -16,6 +16,27 @@ from .loghub import event
 class StrictTelegramParser(base.TelegramParser):
     """RC19 Telegram parser: negative filters plus positive content ancestry."""
 
+    _NON_CONTENT_MEDIA_MARKERS = base.TelegramParser._NON_CONTENT_MEDIA_MARKERS | {
+        "tgme_widget_message_owner_photo",
+        "tgme_widget_message_from_photo",
+        "tgme_widget_message_forwarded_from",
+        "tgme_widget_message_reply",
+        "tgme_widget_message_reply_thumb",
+        "tgme_widget_message_link_preview",
+        "tgme_widget_message_webpage",
+        "tgme_channel_info",
+        "tgme_channel_photo",
+        "peer_photo",
+        "channel_photo",
+        "channel_avatar",
+        "sender_photo",
+        "message_author_photo",
+        "link_preview",
+        "webpage_preview",
+        "reply_preview",
+        "forward_header",
+    }
+
     _CONTENT_MEDIA_MARKERS = {
         "tgme_widget_message_photo_wrap",
         "tgme_widget_message_video_wrap",
