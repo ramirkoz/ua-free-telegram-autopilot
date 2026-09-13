@@ -1,0 +1,82 @@
+name: Autopilot V2 Update Overlay
+
+on:
+  workflow_run:
+    workflows: ["Autopilot V2 Release"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-overlay:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out released main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Read update metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $version=(Get-Content VERSION.txt -Raw).Trim()
+          if (-not $version) { throw 'VERSION.txt is empty' }
+          $abi=(Get-Content UPDATE_RUNTIME_ABI.txt -Raw).Trim()
+          if (-not $abi) { throw 'UPDATE_RUNTIME_ABI.txt is empty' }
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "UPDATE_ABI=$abi" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build deterministic update overlay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dist=Join-Path $PWD 'dist-update'
+          $stage=Join-Path $dist 'stage'
+          Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
+          Get-ChildItem (Join-Path $stage 'telegram_autopilot') -File -Filter 'rc*.py' -ErrorAction SilentlyContinue | Remove-Item -Force
+          foreach($item in @('app_v2.py','README.md','VERSION.txt','PUBLIC_VERSION.txt','V2_VERSION.txt','requirements.txt','UPDATE_RUNTIME_ABI.txt',"RELEASE_NOTES_v$env:VERSION.md")) {
+            if (-not (Test-Path $item)) { throw "Missing update file: $item" }
+            Copy-Item $item -Destination $stage -Force
+          }
+          Get-ChildItem $stage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $stage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          if (Test-Path (Join-Path $stage 'Data')) { throw 'Update overlay must never contain Data' }
+          $zip=Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Update.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sha=Join-Path $dist "UA_FREE_Telegram_Autopilot_v$env:VERSION`_Update_SHA256.txt"
+          "$hash  $([IO.Path]::GetFileName($zip))" | Set-Content $sha -Encoding ascii
+          "UPDATE_ZIP=$zip" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "UPDATE_SHA=$sha" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Validate update overlay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $check=Join-Path $env:RUNNER_TEMP 'autopilot-update-check'
+          Remove-Item $check -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive $env:UPDATE_ZIP -DestinationPath $check -Force
+          if ((Get-Content (Join-Path $check 'VERSION.txt') -Raw).Trim() -ne $env:VERSION) { throw 'Update VERSION mismatch' }
+          if ((Get-Content (Join-Path $check 'UPDATE_RUNTIME_ABI.txt') -Raw).Trim() -ne $env:UPDATE_ABI) { throw 'Update ABI mismatch' }
+          foreach($required in @('app_v2.py','telegram_autopilot\v2\main.py','telegram_autopilot\v2\updater_helper.py','telegram_autopilot\v2\update_protocol.py')) {
+            if (-not (Test-Path (Join-Path $check $required))) { throw "Update missing $required" }
+          }
+          if (Test-Path (Join-Path $check 'Data')) { throw 'Update contains Data' }
+
+      - name: Upload overlay to GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $tag="v$env:VERSION"
+          gh release view $tag | Out-Null
+          gh release upload $tag $env:UPDATE_ZIP $env:UPDATE_SHA --clobber
