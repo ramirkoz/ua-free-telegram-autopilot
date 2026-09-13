@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '.sync/rc18_source.b85'
+      - '.github/workflows/one-shot-rc18-source-sync.yml'
 
 permissions:
   contents: write
@@ -12,36 +12,50 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Synchronize canonical RC18 source
+      - name: Download canonical RC18 source and synchronize whole files
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ ! -f .sync/rc18_source.b85 ]; then
-            echo "Source payload already cleaned up."
-            exit 0
-          fi
-          python - <<'PY'
-          import base64, pathlib, shutil, zipfile
-          payload = pathlib.Path('.sync/rc18_source.b85').read_text(encoding='ascii')
-          archive = pathlib.Path('/tmp/rc18_source.zip')
-          archive.write_bytes(base64.b85decode(payload.encode('ascii')))
-          root = pathlib.Path('/tmp/rc18_source')
-          shutil.rmtree(root, ignore_errors=True)
-          root.mkdir(parents=True)
-          with zipfile.ZipFile(archive) as z:
-              z.extractall(root)
-          shutil.rmtree('telegram_autopilot', ignore_errors=True)
-          shutil.copytree(root / 'telegram_autopilot', 'telegram_autopilot')
-          for name in ('app_v2.py','PUBLIC_VERSION.txt','V2_VERSION.txt','VERSION.txt','README.md','RELEASE_NOTES_v2.0.0-rc18.md'):
-              shutil.copy2(root / name, name)
+          set -euo pipefail
+          src=/tmp/UA_FREE_Telegram_Autopilot_v2.0.0-rc18_Source.zip
+          curl -fL --retry 2 --retry-delay 2 \
+            'https://drive.usercontent.google.com/download?id=12KbXIIlZ_XrkHQUewMROctSsXM9IdvbT&export=download&confirm=t' \
+            -o "$src"
+          unzip -tq "$src"
+          rm -rf /tmp/rc18-src
+          mkdir -p /tmp/rc18-src
+          unzip -q "$src" -d /tmp/rc18-src
+          cd /tmp/rc18-src
+          while IFS= read -r -d '' path; do
+            path="${path#./}"
+            current_sha="$(gh api "repos/$REPO/contents/$path?ref=main" --jq .sha 2>/dev/null || true)"
+            desired_sha="$(python - "$path" <<'PY'
+          import hashlib, pathlib, sys
+          p=pathlib.Path(sys.argv[1]); b=p.read_bytes()
+          print(hashlib.sha1(f'blob {len(b)}\0'.encode()+b).hexdigest())
           PY
-          git config user.name "UA FREE sync"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A telegram_autopilot app_v2.py PUBLIC_VERSION.txt V2_VERSION.txt VERSION.txt README.md RELEASE_NOTES_v2.0.0-rc18.md
-          if git diff --cached --quiet; then
-            echo "Canonical RC18 source is already synchronized."
-            exit 0
-          fi
-          git commit -m "Synchronize canonical Autopilot v2.0.0-rc18 source"
-          git push
+            )"
+            if [ "$current_sha" = "$desired_sha" ]; then
+              echo "exact $path"
+              continue
+            fi
+            content="$(base64 -w0 "$path")"
+            if [ -n "$current_sha" ]; then
+              gh api --method PUT "repos/$REPO/contents/$path" \
+                -f message="Sync exact Autopilot v2.0.0-rc18: $path" \
+                -f content="$content" \
+                -f sha="$current_sha" \
+                -f branch=main >/dev/null
+            else
+              gh api --method PUT "repos/$REPO/contents/$path" \
+                -f message="Add exact Autopilot v2.0.0-rc18: $path" \
+                -f content="$content" \
+                -f branch=main >/dev/null
+            fi
+            echo "synced $path"
+          done < <(find . -type f -print0 | sort -z)
