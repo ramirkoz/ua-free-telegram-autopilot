@@ -17,39 +17,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Synchronize exact canonical RC18 files
+      - name: Build exact RC18 source and commit
         shell: bash
         run: |
           set -euo pipefail
-          cat .sync/rc18.remaining.part1.b64 .sync/rc18.remaining.part2.b64 | base64 -d > /tmp/rc18_remaining.tar.gz
-          echo '29de700dd90859f00f1560dac726d1736c32715876f990237a2ca35c3f6c2540  /tmp/rc18_remaining.tar.gz' | sha256sum -c -
-          rm -rf /tmp/rc18_remaining
-          mkdir -p /tmp/rc18_remaining
-          tar -xzf /tmp/rc18_remaining.tar.gz -C /tmp/rc18_remaining
 
-          paths=(
-            telegram_autopilot/collector.py
-            telegram_autopilot/telegram.py
-            telegram_autopilot/ui.py
-            telegram_autopilot/v2/ingest.py
-            telegram_autopilot/v2/migration.py
-            telegram_autopilot/v2/publisher.py
-            telegram_autopilot/v2/storage.py
-            telegram_autopilot/v2/supervisor.py
-            telegram_autopilot/v2/ui.py
-          )
-          for p in "${paths[@]}"; do
-            test -f "/tmp/rc18_remaining/$p"
-            cp "/tmp/rc18_remaining/$p" "$p"
-          done
+          # Reconstruct the six canonical files that were not already present as Git blobs.
+          base64 -d .sync/files/collector.py.gz.b64 | gzip -dc > telegram_autopilot/collector.py
+          base64 -d .sync/files/telegram.py.gz.b64 | gzip -dc > telegram_autopilot/telegram.py
+          base64 -d .sync/files/ui.py.gz.b64 | gzip -dc > telegram_autopilot/ui.py
+          cat .sync/v2storage.part00 .sync/v2storage.part01 .sync/v2storage.part02 .sync/v2storage.part03 | base64 -d | gzip -dc > telegram_autopilot/v2/storage.py
+          cat .sync/v2supervisor.part00 .sync/v2supervisor.part01 .sync/v2supervisor.fix00 .sync/v2supervisor.fix01 .sync/v2supervisor.fix02 | base64 -d | gzip -dc > telegram_autopilot/v2/supervisor.py
+          cat .sync/v2ui.part00 .sync/v2ui.part01 .sync/v2ui.fix00 .sync/v2ui.fix01 .sync/v2ui.fix02 .sync/v2ui.fix03 .sync/v2ui.part03 | base64 -d | gzip -dc > telegram_autopilot/v2/ui.py
+
+          # These three exact canonical blobs already exist in repository history.
+          git cat-file blob 30643962e4d45e483ced5f4ab385d5335138837d > telegram_autopilot/v2/ingest.py
+          git cat-file blob 15500b31c1d05f6258861a1662880836b7c831e5 > telegram_autopilot/v2/migration.py
+          git cat-file blob 1137d0eec3aaa341cdd09ca3a23b51cf91d6a841 > telegram_autopilot/v2/publisher.py
 
           while read -r expected path; do
             actual="$(git hash-object "$path")"
-            if [ "$actual" != "$expected" ]; then
-              echo "SHA mismatch: $path expected=$expected actual=$actual" >&2
-              exit 1
-            fi
-            echo "exact $path $actual"
+            echo "$path $actual"
+            test "$actual" = "$expected"
           done <<'EOF'
           a9ed009f8b3d3d4ba421de288ff61ff9dd2194a9 telegram_autopilot/collector.py
           b1bf4f8defc7bf770d4c568bc06e7ac27467c6a2 telegram_autopilot/telegram.py
@@ -62,16 +51,16 @@ jobs:
           a1615d322aad2ae22f3c654b568325543fd70b3f telegram_autopilot/v2/ui.py
           EOF
 
-          rm -f .sync/rc18.remaining.part1.b64 .sync/rc18.remaining.part2.b64
-          rmdir .sync 2>/dev/null || true
+          python -m py_compile \
+            telegram_autopilot/collector.py telegram_autopilot/telegram.py telegram_autopilot/ui.py \
+            telegram_autopilot/v2/ingest.py telegram_autopilot/v2/migration.py telegram_autopilot/v2/publisher.py \
+            telegram_autopilot/v2/storage.py telegram_autopilot/v2/supervisor.py telegram_autopilot/v2/ui.py
 
+          rm -rf .sync
+          git rm --ignore-unmatch .github/workflows/one-shot-rc18-source-sync.yml
           git config user.name 'UA FREE sync'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git status --short
-          if git diff --cached --quiet; then
-            echo 'RC18 canonical files already exact.'
-            exit 0
-          fi
           git commit -m 'Synchronize canonical Autopilot v2.0.0-rc18 source'
           git push origin HEAD:main
