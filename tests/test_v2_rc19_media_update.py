@@ -55,12 +55,12 @@ def test_monitoring_preserves_gallery(tmp_path: Path) -> None:
     assert len(json.loads(row["media_json"])) == 2
 
 
-def test_telegram_parser_requires_real_media_ancestry() -> None:
+def test_telegram_parser_uses_exact_post_boundary_not_brittle_wrapper_allowlist() -> None:
     html = """
     <div class="tgme_widget_message" data-post="sourcechan/100">
       <a class="tgme_widget_message_user_photo"><img src="https://cdn.example/avatar.jpg"></a>
-      <div class="mystery_logo"><img src="https://cdn.example/logo.jpg"></div>
-      <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn.example/story.jpg')"></a>
+      <div class="site_logo"><img src="https://cdn.example/logo.jpg"></div>
+      <div class="telegram-new-unknown-media-wrapper" style="background-image:url('https://cdn.example/story.jpg')"></div>
       <div class="tgme_widget_message_text">Справжній текст поста</div>
       <time datetime="2026-09-13T09:00:00+00:00"></time>
     </div>
@@ -91,7 +91,7 @@ def test_telegram_neighbour_media_is_never_stitched() -> None:
     layout = json.loads(items[0].article_layout_json)
     assert layout["telegram"]["message_ids"] == ["101"]
     assert layout["telegram"]["stitched"] is False
-    assert layout["telegram"]["media_filter_version"] == 3
+    assert layout["telegram"]["media_filter_version"] == 4
 
 
 def test_pre_rc19_telegram_snapshot_is_quarantined(tmp_path: Path) -> None:
@@ -143,7 +143,7 @@ def test_update_protocol_accepts_only_version_and_hash(tmp_path: Path) -> None:
     protocol = UpdateProtocol(tmp_path / "updates")
     request = protocol.validate_request({
         "request_id": "request-1234",
-        "target_version": "2.0.0-rc22",
+        "target_version": "2.0.0-rc23",
         "sha256": "a" * 64,
         "source": "agent",
         "url": "https://evil.example/payload.zip",
@@ -151,14 +151,14 @@ def test_update_protocol_accepts_only_version_and_hash(tmp_path: Path) -> None:
     })
     assert request.release_url == (
         "https://github.com/ramirkoz/ua-free-telegram-autopilot/releases/download/"
-        "v2.0.0-rc22/UA_FREE_Telegram_Autopilot_v2.0.0-rc22_Update.zip"
+        "v2.0.0-rc23/UA_FREE_Telegram_Autopilot_v2.0.0-rc23_Update.zip"
     )
     assert protocol.request_is_newer(request)
     assert UPDATE_RUNTIME_ABI == "py312-v1"
     with pytest.raises(ValueError, match="UPDATE_VERSION_INVALID"):
         protocol.validate_request({"target_version": "https://evil.example", "sha256": "a" * 64})
     with pytest.raises(ValueError, match="UPDATE_SHA256_INVALID"):
-        protocol.validate_request({"target_version": "2.0.0-rc22", "sha256": "not-a-hash"})
+        protocol.validate_request({"target_version": "2.0.0-rc23", "sha256": "not-a-hash"})
 
 
 def test_database_backup_is_consistent(tmp_path: Path) -> None:
