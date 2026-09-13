@@ -7,10 +7,14 @@ from pathlib import Path
 
 from ..instance_lock import AlreadyRunning, InstanceLock
 from ..paths import data_dir
+from . import V2_VERSION
 from .loghub import LogHub, event
 from .runtime import RuntimeEngine
-from .storage import V2Store
+from .hardened_storage import HardenedV2Store
+from .strict_ingest import StrictIngestService
 from .ui import MainWindow
+from .update_coordinator import UpdateCoordinator
+from .update_protocol import UpdateProtocol
 
 
 def v2_database_path() -> Path:
@@ -23,9 +27,11 @@ def main() -> int:
     event("app", "V2 startup", database=str(v2_database_path()))
     try:
         with InstanceLock():
-            store = V2Store(v2_database_path())
+            store = HardenedV2Store(v2_database_path())
             runtime = RuntimeEngine(store)
+            runtime.ingest = StrictIngestService(store)
             app = MainWindow(store, runtime, logs)
+            update_coordinator = UpdateCoordinator(app, store, runtime)
 
             # RC9: never run one-time DB maintenance on the Tk thread. RC8 did so from
             # V2Store.__init__, before the window was drawn, which made a migrated DB look hung.
@@ -40,8 +46,6 @@ def main() -> int:
                 except Exception as exc:
                     maintenance_result["error"] = exc
                     event("app", "startup maintenance failed", level=40, detail=str(exc)[:1600])
-                # Optional feedback/learning schema is deliberately isolated: analytics must never
-                # prevent the core autopilot from starting.
                 try:
                     maintenance_result["feedback_stats"] = app.feedback.ensure_schema()
                     event("feedback", "schema ready", **dict(maintenance_result["feedback_stats"]))
@@ -71,6 +75,12 @@ def main() -> int:
                 else:
                     app.set_feedback_ready(False, f"Статистика / навчання недоступні: {feedback_error}")
                 app.set_startup_ready(True, f"Підготовка бази завершена: URL={stats.get('normalized_urls', 0)}, дублікати={stats.get('reconciled_duplicates', 0)}")
+                try:
+                    UpdateProtocol().mark_startup_healthy(V2_VERSION)
+                    update_coordinator.start()
+                    event("update", "startup health marker written", version=V2_VERSION)
+                except Exception as exc:
+                    event("update", "startup health marker failed", level=30, detail=str(exc)[:1000])
                 if store.list_channels(enabled_only=True):
                     app.after(250, app.start_runtime)
                 else:
@@ -80,7 +90,6 @@ def main() -> int:
                 threading.Thread(target=maintenance_worker, name="V2-Startup-Maintenance", daemon=True).start()
                 finish_startup_when_ready()
 
-            # Give Tk time to paint the window before any maintenance work starts.
             app.after(150, begin_startup_maintenance)
             app.mainloop()
     except AlreadyRunning as exc:
