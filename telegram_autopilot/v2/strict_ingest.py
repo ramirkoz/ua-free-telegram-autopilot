@@ -14,7 +14,15 @@ from .loghub import event
 
 
 class StrictTelegramParser(base.TelegramParser):
-    """RC19 Telegram parser: negative filters plus positive content ancestry."""
+    """RC22 Telegram parser: exact message ownership + aggressive chrome rejection.
+
+    The positive wrapper allowlist used in RC19-RC21 was too brittle: Telegram can
+    change or omit wrapper class names while the media still belongs to the exact
+    ``data-post`` widget. The parser already creates ``current`` only inside that
+    widget, so the widget itself is the positive ownership boundary. RC22 accepts
+    media anywhere inside that exact widget unless the element/ancestor classes
+    identify known Telegram chrome, previews, avatars, reactions or promotional UI.
+    """
 
     _NON_CONTENT_MEDIA_MARKERS = base.TelegramParser._NON_CONTENT_MEDIA_MARKERS | {
         "tgme_widget_message_owner_photo",
@@ -35,35 +43,27 @@ class StrictTelegramParser(base.TelegramParser):
         "webpage_preview",
         "reply_preview",
         "forward_header",
-    }
-
-    _CONTENT_MEDIA_MARKERS = {
-        "tgme_widget_message_photo_wrap",
-        "tgme_widget_message_video_wrap",
-        "tgme_widget_message_video_player",
-        "tgme_widget_message_roundvideo",
-        "tgme_widget_message_roundvideo_player",
-        "tgme_widget_message_grouped_wrap",
-        "tgme_widget_message_grouped_layer",
-        "tgme_widget_message_document_wrap",
-        "tgme_widget_message_document",
-        "js-message_photo",
-        "js-message_video",
+        "brandmark",
+        "brand_logo",
+        "channel_logo",
+        "site_logo",
+        "promo",
+        "sponsor",
+        "subscribe",
+        "follow_button",
     }
 
     def _add_media(self, kind: str, url: str, classes: set[str]) -> None:
         if self.current is None:
             return
-        if not self._contains_marker(classes, self._CONTENT_MEDIA_MARKERS):
-            # Reuse RC18's non-content counter so Supervisor telemetry remains
-            # backward-compatible while unknown wrappers are fail-closed.
-            self.current["raw_media_candidates"] = int(self.current.get("raw_media_candidates") or 0) + 1
-            self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
-            return
+        # ``self.current`` is opened only by one concrete Telegram data-post.
+        # Do not require Telegram's unstable content-wrapper class names here.
+        # The base implementation still applies the expanded ancestor blacklist,
+        # video-poster rejection and duplicate identity filter.
         super()._add_media(kind, url, classes)
 
 
-def _article_v3(username: str, entry: base.TelegramEntry) -> CollectedArticle:
+def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
     article = base._to_article(username, entry, [])
     try:
         layout = json.loads(str(article.article_layout_json or "{}"))
@@ -75,7 +75,7 @@ def _article_v3(username: str, entry: base.TelegramEntry) -> CollectedArticle:
     if not isinstance(tg, dict):
         tg = {}
         layout["telegram"] = tg
-    tg["media_filter_version"] = 3
+    tg["media_filter_version"] = 4
     tg["stitched"] = False
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article
@@ -90,7 +90,7 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             base._post_number(entry.post) if base._post_number(entry.post) is not None else 10**18,
         ),
     )
-    return [_article_v3(username, entry) for entry in ordered if entry.text]
+    return [_article_v4(username, entry) for entry in ordered if entry.text]
 
 
 def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
@@ -117,7 +117,7 @@ def collect_strict(source: Source) -> list[CollectedArticle]:
 
 
 class StrictIngestService(base.IngestService):
-    """RC19 ingest keeps RC18 scheduling/source health but uses strict Telegram ownership."""
+    """Strict Telegram ownership with the existing parallel/source-health scheduler."""
 
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
         added = seen = errors = skipped = 0
