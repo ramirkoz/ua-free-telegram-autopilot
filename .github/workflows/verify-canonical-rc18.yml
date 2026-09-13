@@ -19,13 +19,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' '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' | base64 -d | gzip -dc > /tmp/expected.txt
+          cat .verify/rc18.part00.txt .verify/rc18.part01.txt > /tmp/expected.txt
           failures=0; total=0
           while read -r expected path; do
             total=$((total+1))
-            if [ ! -f "$path" ]; then echo "MISSING $path"; failures=$((failures+1)); continue; fi
+            if [ ! -f "$path" ]; then
+              echo "MISSING $path"
+              failures=$((failures+1))
+              continue
+            fi
             actual="$(git hash-object "$path")"
-            if [ "$actual" != "$expected" ]; then echo "MISMATCH $path expected=$expected actual=$actual"; failures=$((failures+1)); fi
+            if [ "$actual" != "$expected" ]; then
+              echo "MISMATCH $path expected=$expected actual=$actual"
+              failures=$((failures+1))
+            fi
           done < /tmp/expected.txt
           echo "TOTAL=$total FAILURES=$failures"
           test "$total" -eq 57
@@ -38,6 +45,8 @@ jobs:
           set -euo pipefail
           git config user.name 'UA FREE sync'
           git config user.email 'actions@users.noreply.github.com'
+          rm -rf .verify
           git rm .github/workflows/verify-canonical-rc18.yml
-          git commit -m 'Remove completed RC18 verification workflow'
+          git add -A
+          git commit -m 'Remove completed RC18 verification files'
           git push origin HEAD:main
