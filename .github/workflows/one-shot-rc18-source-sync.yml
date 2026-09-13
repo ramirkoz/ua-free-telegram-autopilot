@@ -15,47 +15,63 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Download canonical RC18 source and synchronize whole files
+        with:
+          fetch-depth: 0
+      - name: Synchronize exact canonical RC18 files
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          src=/tmp/UA_FREE_Telegram_Autopilot_v2.0.0-rc18_Source.zip
-          curl -fL --retry 2 --retry-delay 2 \
-            'https://drive.usercontent.google.com/download?id=12KbXIIlZ_XrkHQUewMROctSsXM9IdvbT&export=download&confirm=t' \
-            -o "$src"
-          unzip -tq "$src"
-          rm -rf /tmp/rc18-src
-          mkdir -p /tmp/rc18-src
-          unzip -q "$src" -d /tmp/rc18-src
-          cd /tmp/rc18-src
-          while IFS= read -r -d '' path; do
-            path="${path#./}"
-            current_sha="$(gh api "repos/$REPO/contents/$path?ref=main" --jq .sha 2>/dev/null || true)"
-            desired_sha="$(python - "$path" <<'PY'
-          import hashlib, pathlib, sys
-          p=pathlib.Path(sys.argv[1]); b=p.read_bytes()
-          print(hashlib.sha1(f'blob {len(b)}\0'.encode()+b).hexdigest())
-          PY
-            )"
-            if [ "$current_sha" = "$desired_sha" ]; then
-              echo "exact $path"
-              continue
+          cat .sync/rc18.remaining.part1.b64 .sync/rc18.remaining.part2.b64 | base64 -d > /tmp/rc18_remaining.tar.gz
+          echo '29de700dd90859f00f1560dac726d1736c32715876f990237a2ca35c3f6c2540  /tmp/rc18_remaining.tar.gz' | sha256sum -c -
+          rm -rf /tmp/rc18_remaining
+          mkdir -p /tmp/rc18_remaining
+          tar -xzf /tmp/rc18_remaining.tar.gz -C /tmp/rc18_remaining
+
+          paths=(
+            telegram_autopilot/collector.py
+            telegram_autopilot/telegram.py
+            telegram_autopilot/ui.py
+            telegram_autopilot/v2/ingest.py
+            telegram_autopilot/v2/migration.py
+            telegram_autopilot/v2/publisher.py
+            telegram_autopilot/v2/storage.py
+            telegram_autopilot/v2/supervisor.py
+            telegram_autopilot/v2/ui.py
+          )
+          for p in "${paths[@]}"; do
+            test -f "/tmp/rc18_remaining/$p"
+            cp "/tmp/rc18_remaining/$p" "$p"
+          done
+
+          while read -r expected path; do
+            actual="$(git hash-object "$path")"
+            if [ "$actual" != "$expected" ]; then
+              echo "SHA mismatch: $path expected=$expected actual=$actual" >&2
+              exit 1
             fi
-            content="$(base64 -w0 "$path")"
-            if [ -n "$current_sha" ]; then
-              gh api --method PUT "repos/$REPO/contents/$path" \
-                -f message="Sync exact Autopilot v2.0.0-rc18: $path" \
-                -f content="$content" \
-                -f sha="$current_sha" \
-                -f branch=main >/dev/null
-            else
-              gh api --method PUT "repos/$REPO/contents/$path" \
-                -f message="Add exact Autopilot v2.0.0-rc18: $path" \
-                -f content="$content" \
-                -f branch=main >/dev/null
-            fi
-            echo "synced $path"
-          done < <(find . -type f -print0 | sort -z)
+            echo "exact $path $actual"
+          done <<'EOF'
+          a9ed009f8b3d3d4ba421de288ff61ff9dd2194a9 telegram_autopilot/collector.py
+          b1bf4f8defc7bf770d4c568bc06e7ac27467c6a2 telegram_autopilot/telegram.py
+          9ecb75eb5988148efc261dae5b4522c5d93a82a9 telegram_autopilot/ui.py
+          30643962e4d45e483ced5f4ab385d5335138837d telegram_autopilot/v2/ingest.py
+          15500b31c1d05f6258861a1662880836b7c831e5 telegram_autopilot/v2/migration.py
+          1137d0eec3aaa341cdd09ca3a23b51cf91d6a841 telegram_autopilot/v2/publisher.py
+          50cda4a4c9e464d5d490d39b5df101253fbcff77 telegram_autopilot/v2/storage.py
+          efb51599a95ac2497aaa32f221ac4dc2367af44d telegram_autopilot/v2/supervisor.py
+          a1615d322aad2ae22f3c654b568325543fd70b3f telegram_autopilot/v2/ui.py
+          EOF
+
+          rm -f .sync/rc18.remaining.part1.b64 .sync/rc18.remaining.part2.b64
+          rmdir .sync 2>/dev/null || true
+
+          git config user.name 'UA FREE sync'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git status --short
+          if git diff --cached --quiet; then
+            echo 'RC18 canonical files already exact.'
+            exit 0
+          fi
+          git commit -m 'Synchronize canonical Autopilot v2.0.0-rc18 source'
+          git push origin HEAD:main
