@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '.syncfull/part25'
-      - '.syncfull/trigger'
+      - '.syncfull/trigger2'
   workflow_dispatch:
 
 permissions:
@@ -25,66 +24,57 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import base64, tarfile, shutil
-          root = Path('.')
-          parts = sorted((root / '.syncfull').glob('part[0-9][0-9]'))
-          expected = [root / '.syncfull' / f'part{i:02d}' for i in range(26)]
-          if parts != expected:
-              raise SystemExit(f'chunk set mismatch: got {len(parts)}, expected 26')
-          payload = ''.join(p.read_text(encoding='ascii') for p in parts)
-          archive = Path('/tmp/rc18-mismatches.tar.gz')
+          root=Path('.')
+          parts=sorted((root/'.syncfull').glob('part[0-9][0-9]'))
+          expected=[root/'.syncfull'/f'part{i:02d}' for i in range(26)]
+          if parts != expected: raise SystemExit(f'chunk set mismatch: {len(parts)}')
+          payload=''.join(p.read_text(encoding='ascii') for p in parts)
+          archive=Path('/tmp/rc18-mismatches.tar.gz')
           archive.write_bytes(base64.b64decode(payload, validate=True))
-          out = Path('/tmp/rc18-restore')
-          out.mkdir(parents=True, exist_ok=True)
-          with tarfile.open(archive, 'r:gz') as tf:
-              members = tf.getmembers()
-              if len([m for m in members if m.isfile()]) != 27:
-                  raise SystemExit('payload must contain exactly 27 files')
+          out=Path('/tmp/rc18-restore'); out.mkdir(parents=True, exist_ok=True)
+          with tarfile.open(archive,'r:gz') as tf:
+              members=tf.getmembers()
+              if len([m for m in members if m.isfile()]) != 27: raise SystemExit('payload file count != 27')
               for m in members:
-                  target = (out / m.name).resolve()
-                  if not str(target).startswith(str(out.resolve())):
-                      raise SystemExit(f'unsafe path: {m.name}')
+                  if not str((out/m.name).resolve()).startswith(str(out.resolve())): raise SystemExit(f'unsafe {m.name}')
               tf.extractall(out)
           for src in out.rglob('*'):
               if src.is_file():
-                  dst = root / src.relative_to(out)
-                  dst.parent.mkdir(parents=True, exist_ok=True)
-                  shutil.copyfile(src, dst)
+                  dst=root/src.relative_to(out); dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(src,dst)
           PY
-      - name: Verify all 57 canonical Git blobs
+      - name: Verify and persist result
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           import hashlib
-          lines = [x.strip() for x in Path('.syncfull/manifest.txt').read_text(encoding='utf-8').splitlines() if x.strip()]
-          if len(lines) != 57:
-              raise SystemExit(f'manifest count={len(lines)}, expected 57')
-          bad = []
+          lines=[x.strip() for x in Path('.syncfull/manifest.txt').read_text(encoding='utf-8').splitlines() if x.strip()]
+          if len(lines)!=57: raise SystemExit(f'manifest count={len(lines)}')
+          bad=[]
           for line in lines:
-              expected, path = line.split(None, 1)
-              p = Path(path)
-              if not p.is_file():
-                  bad.append(f'MISSING {path}')
-                  continue
-              data = p.read_bytes()
-              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-              if actual != expected:
-                  bad.append(f'MISMATCH {path} expected={expected} actual={actual}')
-          if bad:
-              raise SystemExit('\n'.join(bad))
-          print('RC18 canonical verification: 57/57 OK')
+              expected,path=line.split(None,1); p=Path(path)
+              if not p.is_file(): bad.append(f'MISSING {path}'); continue
+              data=p.read_bytes(); actual=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              if actual!=expected: bad.append(f'MISMATCH {path} expected={expected} actual={actual}')
+          Path('.syncfull/verification.txt').write_text(('\n'.join(bad) if bad else 'OK 57/57')+'\n',encoding='utf-8')
+          print(Path('.syncfull/verification.txt').read_text())
           PY
           python -m compileall -q telegram_autopilot app_v2.py
-      - name: Commit canonical RC18 and remove transport files
+      - name: Commit result or canonical source
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf .syncfull .verify
-          rm -f .github/workflows/verify-canonical-rc18.yml
-          rm -f .github/workflows/sync-canonical-rc18.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! grep -qx 'OK 57/57' .syncfull/verification.txt; then
+            git add .syncfull/verification.txt
+            git commit -m 'Record RC18 canonical verification mismatches'
+            git push origin HEAD:main
+            exit 0
+          fi
+          rm -rf .syncfull .verify
+          rm -f .github/workflows/verify-canonical-rc18.yml .github/workflows/sync-canonical-rc18.yml
           git add -A
           git commit -m 'Sync canonical Telegram Autopilot v2.0.0-rc18 source'
           git push origin HEAD:main
