@@ -86,7 +86,7 @@ jobs:
           python $env:RUNNER_TEMP\v2_clean.py
           if ($LASTEXITCODE -ne 0) { throw 'clean V2 gate failed' }
 
-      - name: Build slim signed V2 portable runtime
+      - name: Build compact signed V2 portable runtime
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -117,7 +117,7 @@ jobs:
             Remove-Item (Join-Path $stage $junk) -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-          python -m pip install --disable-pip-version-check --no-compile --target $sp -r requirements.txt pip
+          python -m pip install --disable-pip-version-check --no-compile --target $sp 'cryptography>=42,<47' 'Telethon>=1.36,<2' 'Pillow>=11.3,<13' pip
           if ($LASTEXITCODE -ne 0) { throw 'portable runtime dependency install failed' }
 
           Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
@@ -131,28 +131,121 @@ jobs:
           Copy-Item $pythonwExe (Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe') -Force
           @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content (Join-Path $stage '_runtime_console._pth') -Encoding ascii
           @('.', 'DLLs', 'Lib', 'Lib\site-packages', 'import site') | Set-Content (Join-Path $stage 'UA_FREE_Telegram_Autopilot._pth') -Encoding ascii
+
           @'
+          import json
           import os
+          import shutil
+          import subprocess
           import sys
+          import threading
+          import time
+          import uuid
+          from pathlib import Path
+
+          def _codex_present():
+              try:
+                  from telegram_autopilot.codex_engine import inspect_codex
+                  return bool(inspect_codex().installed)
+              except Exception:
+                  return False
+
+          def _data_root():
+              raw = os.environ.get('UA_FREE_TELEGRAM_AUTOPILOT_DATA', '').strip()
+              if raw:
+                  return Path(raw)
+              return Path(__file__).resolve().parent / 'Data'
+
+          def _bootstrap_codex():
+              if _codex_present():
+                  return True, ''
+              root = _data_root() / 'ai_runtime'
+              versions = root / 'codex_versions'
+              versions.mkdir(parents=True, exist_ok=True)
+              unique = f"codex-0.147.0-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+              staging = versions / ('.' + unique + '.tmp')
+              target = versions / unique
+              staging.mkdir(parents=True, exist_ok=False)
+              runtime = Path(__file__).resolve().parent / '_runtime_console.exe'
+              command = [str(runtime), '-I', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--target', str(staging), 'openai-codex==0.147.0']
+              env = dict(os.environ)
+              env['PYTHONUTF8'] = '1'
+              env['UA_FREE_CODEX_BOOTSTRAP'] = '0'
+              try:
+                  done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', timeout=600, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                  if done.returncode != 0 or not (staging / 'openai_codex').exists():
+                      tail='\n'.join(done.stdout.splitlines()[-12:])
+                      raise RuntimeError(tail or f'pip exit {done.returncode}')
+                  staging.rename(target)
+                  pointer = root / 'codex_active.json'
+                  temp = root / 'codex_active.tmp'
+                  temp.write_text(json.dumps({'directory': target.relative_to(root).as_posix(), 'package': 'openai-codex==0.147.0', 'updated_at': int(time.time())}, ensure_ascii=False, indent=2), encoding='utf-8')
+                  os.replace(temp, pointer)
+                  return True, ''
+              except Exception as exc:
+                  shutil.rmtree(staging, ignore_errors=True)
+                  return False, str(exc)
+
+          def _first_run_setup():
+              if os.environ.get('UA_FREE_CODEX_BOOTSTRAP', '1') == '0' or _codex_present():
+                  return True
+              if os.environ.get('UA_FREE_CODEX_BOOTSTRAP_ONLY', '') == '1':
+                  ok, error = _bootstrap_codex()
+                  os._exit(0 if ok else 2)
+              try:
+                  import tkinter as tk
+                  from tkinter import messagebox, ttk
+                  root = tk.Tk()
+                  root.title('UA FREE Telegram Autopilot · AI runtime')
+                  root.geometry('520x175')
+                  root.resizable(False, False)
+                  ttk.Label(root, text='Перший запуск: встановлюю Codex AI runtime', font=('Segoe UI', 11, 'bold')).pack(pady=(22, 8))
+                  ttk.Label(root, text='Це одноразове завантаження. Основна програма залишається компактною.').pack(pady=(0, 12))
+                  bar = ttk.Progressbar(root, mode='indeterminate', length=430)
+                  bar.pack(pady=4)
+                  bar.start(10)
+                  result = {'done': False, 'ok': False, 'error': ''}
+                  def work():
+                      ok, error = _bootstrap_codex()
+                      result.update(done=True, ok=ok, error=error)
+                  threading.Thread(target=work, daemon=True, name='Codex-FirstRun-Bootstrap').start()
+                  def poll():
+                      if not result['done']:
+                          root.after(250, poll)
+                          return
+                      bar.stop()
+                      if not result['ok']:
+                          messagebox.showwarning('Codex не встановлено', 'Не вдалося завантажити AI runtime. Програма відкриється без Codex; повторіть запуск при стабільному інтернеті.\n\n' + result['error'][-1200:], parent=root)
+                      root.destroy()
+                  root.after(250, poll)
+                  root.mainloop()
+                  return bool(result['ok'])
+              except Exception:
+                  return False
+
           if os.path.basename(sys.executable).casefold() == 'ua_free_telegram_autopilot.exe':
+              _first_run_setup()
               from telegram_autopilot.v2.main import main
               os._exit(int(main() or 0))
           '@ | Set-Content (Join-Path $stage 'sitecustomize.py') -Encoding utf8
+
           @"
           UA FREE Telegram Autopilot V2 $env:VERSION
           Розпакуйте у нову папку та запустіть UA_FREE_Telegram_Autopilot.exe.
           V2 database: Data\telegram_autopilot_v2.sqlite3
           Логи: Data\logs\v2
-          Codex 0.147.0 входить до portable runtime; авторизація використовує ChatGPT account.
-          Збірка містить тільки потрібний runtime, а не повний Python GitHub runner.
+          Codex 0.147.0 НЕ роздуває базовий portable: при першому запуску він автоматично встановлюється окремо у Data\ai_runtime.
+          Для першого встановлення Codex потрібен інтернет; системний Python не потрібен.
           "@ | Set-Content (Join-Path $stage 'README_V2.txt') -Encoding utf8
           New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
 
           $rc=@(Get-ChildItem (Join-Path $stage 'telegram_autopilot') -File -Filter 'rc*.py' -ErrorAction SilentlyContinue)
           if ($rc.Count -ne 0) { throw "RC modules remain in portable: $($rc.Name -join ', ')" }
+          if(Test-Path (Join-Path $sp 'openai_codex')) { throw 'Codex was accidentally bundled into the compact portable' }
 
           $total=(Get-ChildItem $stage -File -Recurse | Measure-Object Length -Sum).Sum
           Write-Host "PORTABLE_EXTRACTED_BYTES=$total"
+          if ($total -gt 188743680) { throw "Extracted portable is bloated: $total bytes exceeds 180 MiB guard" }
           Get-ChildItem $stage -Directory | ForEach-Object {
             $sum=(Get-ChildItem $_.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
             Write-Host ("PORTABLE_DIR {0} {1}" -f $_.Name,$sum)
@@ -160,15 +253,38 @@ jobs:
           "PORTABLE_STAGE=$stage" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "PORTABLE_NAME=$portableName" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Validate packaged Codex and clean imports
+      - name: Validate compact base runtime
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
           Push-Location $env:PORTABLE_STAGE
           try {
-            & .\_runtime_console.exe -I -c "import openai_codex; from telegram_autopilot import __version__; from telegram_autopilot.v2 import V2_VERSION; from telegram_autopilot.codex_engine import inspect_codex; from telegram_autopilot.v2.storage import V2Store; from telegram_autopilot.v2.runtime import RuntimeEngine; from telegram_autopilot.v2.ui import MainWindow; s=inspect_codex(); assert __version__ == V2_VERSION == '$env:VERSION'; assert s.installed, s; print('V2_PACKAGED_CODEX_OK', getattr(openai_codex,'__version__','unknown'), s.version)"
-            if ($LASTEXITCODE -ne 0) { throw 'Packaged Codex/import gate failed' }
+            & .\_runtime_console.exe -I -c "import importlib.util; from telegram_autopilot import __version__; from telegram_autopilot.v2 import V2_VERSION; from telegram_autopilot.codex_engine import inspect_codex; from telegram_autopilot.v2.storage import V2Store; from telegram_autopilot.v2.runtime import RuntimeEngine; from telegram_autopilot.v2.ui import MainWindow; assert __version__ == V2_VERSION == '$env:VERSION'; assert importlib.util.find_spec('openai_codex') is None; s=inspect_codex(); assert not s.installed; print('V2_COMPACT_BASE_RUNTIME_OK')"
+            if ($LASTEXITCODE -ne 0) { throw 'Compact base runtime gate failed' }
           } finally { Pop-Location }
+
+      - name: Validate real first-run Codex bootstrap
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stage=$env:PORTABLE_STAGE
+          $target=Join-Path $env:RUNNER_TEMP 'v2-codex-bootstrap-data'
+          Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+          $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA=$target
+          $env:UA_FREE_CODEX_BOOTSTRAP_ONLY='1'
+          $launcher=Join-Path $stage 'UA_FREE_Telegram_Autopilot.exe'
+          $p=Start-Process -FilePath $launcher -WorkingDirectory $stage -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Codex first-run bootstrap failed: $($p.ExitCode)" }
+          Remove-Item Env:UA_FREE_CODEX_BOOTSTRAP_ONLY -ErrorAction SilentlyContinue
+          Push-Location $stage
+          try {
+            & .\_runtime_console.exe -I -c "from telegram_autopilot.codex_engine import inspect_codex; s=inspect_codex(); assert s.installed, s; assert s.version == '0.147.0', s; print('V2_CODEX_FIRST_RUN_BOOTSTRAP_PASS', s.version)"
+            if ($LASTEXITCODE -ne 0) { throw 'Installed Codex bootstrap validation failed' }
+          } finally {
+            Pop-Location
+            Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
+            Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Native Windows credential-pair migration smoke
         shell: pwsh
@@ -205,12 +321,14 @@ jobs:
           $smoke=Join-Path $env:RUNNER_TEMP 'autopilot-v2-gui-smoke'
           Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA=$smoke
+          $env:UA_FREE_CODEX_BOOTSTRAP='0'
           $p=Start-Process -FilePath $launcher -WorkingDirectory $stage -PassThru
           Start-Sleep -Seconds 8
           $p.Refresh()
           if ($p.HasExited) { throw "Packaged V2 EXE exited: $($p.ExitCode)" }
           if (-not (Test-Path (Join-Path $smoke 'telegram_autopilot_v2.sqlite3'))) { throw 'V2 DB not initialized' }
           & taskkill.exe /PID $p.Id /T /F | Out-Null
+          Remove-Item Env:UA_FREE_CODEX_BOOTSTRAP -ErrorAction SilentlyContinue
           Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
           Write-Host 'V2_NATIVE_GUI_SMOKE_PASS'
 
@@ -236,7 +354,7 @@ jobs:
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $portableZip -CompressionLevel Optimal -Force
           $portableBytes=(Get-Item $portableZip).Length
           Write-Host "PORTABLE_ZIP_BYTES=$portableBytes"
-          if ($portableBytes -gt 204472320) { throw "Portable ZIP is bloated: $portableBytes bytes exceeds 195 MiB guard" }
+          if ($portableBytes -gt 83886080) { throw "Portable ZIP is bloated: $portableBytes bytes exceeds 80 MiB guard" }
 
           $sourceName="UA_FREE_Telegram_Autopilot_v$env:VERSION`_Source"
           $sourceStage=Join-Path $dist $sourceName
@@ -249,7 +367,6 @@ jobs:
           Get-ChildItem $sourceStage -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           Get-ChildItem $sourceStage -File -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
           Remove-Item (Join-Path $sourceStage '.verify') -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item (Join-Path $sourceStage '_branch_marker') -Force -ErrorAction SilentlyContinue
           $sourceZip=Join-Path $dist "$sourceName.zip"
           Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $sourceZip -CompressionLevel Optimal -Force
 
