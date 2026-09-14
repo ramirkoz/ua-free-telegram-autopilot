@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .advanced_supervisor import AdvancedSupervisorService
+from .agent_feed import AgentFeed
+from .fileio import atomic_copy, atomic_write_json
 from .supervisor import SupervisorConfig
+from .update_protocol import UpdateProtocol
 
 
 LIVE_FEED_NAMES = (
@@ -15,16 +18,89 @@ LIVE_FEED_NAMES = (
 )
 
 
+class _ProductionAgentFeed(AgentFeed):
+    """Agent feed using unique temp files and lock-tolerant atomic replacement."""
+
+    @staticmethod
+    def _atomic(path: Path, value: dict[str, Any]) -> None:
+        atomic_write_json(path, value)
+
+    def _mirror(self, path: Path) -> None:
+        raw = str(getattr(self.config_getter(), "mirror_dir", "") or "").strip()
+        if not raw:
+            return
+        try:
+            root = Path(raw).expanduser()
+            root.mkdir(parents=True, exist_ok=True)
+            atomic_copy(path, root / path.name)
+        except OSError:
+            pass
+
+
+class _ProductionUpdateProtocol(UpdateProtocol):
+    """Update status writer hardened for Windows and synced folders."""
+
+    @staticmethod
+    def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+        atomic_write_json(path, payload)
+
+    def mirror_status(self, mirror_dir: str) -> None:
+        raw = str(mirror_dir or "").strip()
+        if not raw:
+            return
+        root = Path(raw)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            for source, name in (
+                (self.state_path, "update_status.json"),
+                (self.result_path, "update_result.json"),
+                (self.ready_path, "update_ready.json"),
+            ):
+                if source.is_file():
+                    atomic_copy(source, root / name)
+        except Exception:
+            # Remote mirror failure must never take down the local runtime.
+            return
+
+
 class ProductionSupervisorService(AdvancedSupervisorService):
-    """RC23 supervisor with one unambiguous Google Drive transport target."""
+    """Production supervisor with one LIVE feed and Windows-safe status writes."""
 
     def __init__(self, store, runtime, logs_dir):
         super().__init__(store, runtime, logs_dir)
+
+        # AdvancedSupervisor constructs these before its worker thread starts.
+        # Replace them now so all production writes use the hardened primitives.
+        self.update_protocol = _ProductionUpdateProtocol()
+        self.agent = _ProductionAgentFeed(
+            root=self.root,
+            store=self.store,
+            config_getter=lambda: self.config,
+        )
+
         live = self._discover_live_mirror_dir()
         if live and str(self.config.mirror_dir or "").strip() != live:
             cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": live}).normalized()
             self.save_config(cfg)
         self._status_sequence = 0
+
+    @staticmethod
+    def _atomic_json(path: Path, value: Any) -> None:
+        atomic_write_json(path, value)
+
+    def _mirror_file(self, source: Path, name: str) -> None:
+        raw = self.config.mirror_dir.strip()
+        if not raw:
+            return
+        try:
+            target_dir = Path(raw).expanduser()
+            target_dir.mkdir(parents=True, exist_ok=True)
+            atomic_copy(source, target_dir / name)
+            from .storage import now_iso
+            self._mirror_last_ok_at = now_iso()
+            self._mirror_last_error = ""
+        except Exception as exc:
+            self._mirror_last_error = f"{type(exc).__name__}: {exc}"[:800]
 
     @staticmethod
     def _discover_live_mirror_dir() -> str:
