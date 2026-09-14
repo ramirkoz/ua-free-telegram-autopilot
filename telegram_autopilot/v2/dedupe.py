@@ -91,6 +91,13 @@ def _same_event(current: Any, candidate: Any) -> tuple[bool,str]:
         return True,"shared strong event code plus title/body anchors"
     if shared_title>=3 and title_ratio>=0.82:
         return True,f"high title anchors ratio={title_ratio:.2f}"
+    # RC31: long headlines from different publishers often add lots of context to
+    # the same event. The Waymo/ghost-gun duplicate shared six distinctive title
+    # anchors but missed the old 0.76 containment threshold by 0.01. Five or more
+    # shared non-generic anchors at >=0.68 containment is still conservative while
+    # catching this common cross-source headline expansion pattern.
+    if shared_title>=5 and title_containment>=0.68:
+        return True,f"strong cross-source title anchors={shared_title} containment={title_containment:.2f}"
     if shared_title>=4 and title_containment>=0.76:
         return True,f"high title containment={title_containment:.2f}"
     if shared_title>=2 and shared_body>=12 and body_containment>=0.72:
@@ -126,12 +133,47 @@ class DedupeResult:
 class DedupeEngine:
     def __init__(self,store: V2Store): self.store=store
 
+    def _candidate_rows(self, channel_id: int, article_id: int, hours: int) -> list[Any]:
+        """Keep editorially committed stories visible even under a large ingest burst.
+
+        The old newest-140 scan could evict a READY/PUBLISHED story from the dedupe
+        window after a busy source crawl. A later article about the same event then
+        looked unique even though the earlier story was already committed to publish.
+        RC31 combines a committed lane with the normal newest-item lane and de-dupes
+        their IDs before semantic comparison.
+        """
+        age=f"-{max(1,int(hours))} hours"
+        with self.store.connect() as con:
+            committed=con.execute(
+                """SELECT a.*,s.name AS source_name FROM articles a JOIN sources s ON s.id=a.source_id
+                   WHERE a.channel_id=? AND a.id<>? AND datetime(a.discovered_at)>=datetime('now',?)
+                     AND a.stage<>'ARCHIVED' AND a.decision<>'DUPLICATE'
+                     AND (a.stage IN ('READY','PUBLISHED') OR a.decision='PUBLISH')
+                   ORDER BY CASE WHEN a.stage='PUBLISHED' THEN 0 ELSE 1 END,
+                            datetime(CASE WHEN a.published_at<>'' THEN a.published_at ELSE a.discovered_at END) DESC,
+                            a.id DESC LIMIT 220""",
+                (int(channel_id),int(article_id),age),
+            ).fetchall()
+            recent=con.execute(
+                """SELECT a.*,s.name AS source_name FROM articles a JOIN sources s ON s.id=a.source_id
+                   WHERE a.channel_id=? AND a.id<>? AND datetime(a.discovered_at)>=datetime('now',?)
+                     AND a.stage<>'ARCHIVED' AND a.decision<>'DUPLICATE'
+                   ORDER BY a.id DESC LIMIT 180""",
+                (int(channel_id),int(article_id),age),
+            ).fetchall()
+        out=[]; seen=set()
+        for row in [*committed,*recent]:
+            rid=int(row["id"])
+            if rid in seen: continue
+            seen.add(rid); out.append(row)
+        return out
+
     def evaluate(self,article_id: int) -> DedupeResult:
         current=self.store.get_article(article_id)
         if current is None: raise KeyError(article_id)
         channel=self.store.get_channel(int(current["channel_id"]))
         hours=channel.dedupe_window_hours if channel else 72
-        candidates=self.store.recent_candidates(int(current["channel_id"]),article_id=article_id,hours=hours,limit=140)
+        candidates=self._candidate_rows(int(current["channel_id"]),article_id,hours)
         for candidate in candidates:
             # Never let an already-known duplicate bridge unrelated stories.
             if str(candidate["decision"])==str(Decision.DUPLICATE):
