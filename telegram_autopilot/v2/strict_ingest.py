@@ -8,21 +8,46 @@ from typing import Callable
 
 from .. import collector
 from ..database import content_hash
+from ..media import encode_media, media_identity
 from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
 
 
 class StrictTelegramParser(base.TelegramParser):
-    """RC22 Telegram parser: exact message ownership + aggressive chrome rejection.
+    """Exact Telegram message ownership without throwing away real post media.
 
-    The positive wrapper allowlist used in RC19-RC21 was too brittle: Telegram can
-    change or omit wrapper class names while the media still belongs to the exact
-    ``data-post`` widget. The parser already creates ``current`` only inside that
-    widget, so the widget itself is the positive ownership boundary. RC22 accepts
-    media anywhere inside that exact widget unless the element/ancestor classes
-    identify known Telegram chrome, previews, avatars, reactions or promotional UI.
+    Telegram has changed its public ``t.me/s`` wrappers several times.  RC27 treated
+    ``link_preview``/``webpage`` ancestors as an unconditional rejection.  In the
+    current public HTML those wrapper classes can also surround a genuine
+    ``tgme_widget_message_photo_wrap`` / grouped-media item.  That made every image
+    candidate look like chrome and starved required-media monitoring channels.
+
+    One concrete ``data-post`` widget is still the ownership boundary.  Hard chrome
+    (avatar/reaction/reply/logo/promo) stays rejected.  Soft preview wrappers are
+    ignored only when the candidate is positively inside Telegram's direct
+    photo/video/grouped-media wrappers.
     """
+
+    _DIRECT_CONTENT_MEDIA_MARKERS = {
+        "tgme_widget_message_photo_wrap",
+        "tgme_widget_message_photo",
+        "tgme_widget_message_video_player",
+        "tgme_widget_message_video",
+        "tgme_widget_message_grouped_wrap",
+        "tgme_widget_message_grouped_layer",
+        "grouped_media_wrap",
+        "grouped_media_layer",
+        "js-message_photo",
+        "js-message_video",
+    }
+    _SOFT_PREVIEW_MARKERS = {
+        "tgme_widget_message_link_preview",
+        "tgme_widget_message_webpage",
+        "link_preview_image",
+        "link_preview",
+        "webpage_preview",
+    }
 
     _NON_CONTENT_MEDIA_MARKERS = base.TelegramParser._NON_CONTENT_MEDIA_MARKERS | {
         "tgme_widget_message_owner_photo",
@@ -56,11 +81,34 @@ class StrictTelegramParser(base.TelegramParser):
     def _add_media(self, kind: str, url: str, classes: set[str]) -> None:
         if self.current is None:
             return
-        # ``self.current`` is opened only by one concrete Telegram data-post.
-        # Do not require Telegram's unstable content-wrapper class names here.
-        # The base implementation still applies the expanded ancestor blacklist,
-        # video-poster rejection and duplicate identity filter.
-        super()._add_media(kind, url, classes)
+        self.current["raw_media_candidates"] = int(self.current.get("raw_media_candidates") or 0) + 1
+
+        if str(kind).casefold() == "image" and self._contains_marker(classes, self._VIDEO_THUMB_MARKERS):
+            self.current["discarded_video_thumb"] = int(self.current.get("discarded_video_thumb") or 0) + 1
+            return
+
+        direct_content = self._contains_marker(classes, self._DIRECT_CONTENT_MEDIA_MARKERS)
+        hard_markers = set(self._NON_CONTENT_MEDIA_MARKERS) - set(self._SOFT_PREVIEW_MARKERS)
+        if self._contains_marker(classes, hard_markers):
+            self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
+            return
+        if not direct_content and self._contains_marker(classes, self._SOFT_PREVIEW_MARKERS):
+            self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
+            return
+
+        value = str(url or "").strip()
+        if not value:
+            return
+        key = media_identity(kind, value)
+        keys = self.current.setdefault("media_keys", set())
+        assert isinstance(keys, set)
+        if key in keys:
+            self.current["discarded_duplicate"] = int(self.current.get("discarded_duplicate") or 0) + 1
+            return
+        keys.add(key)
+        media = self.current.setdefault("media", [])
+        assert isinstance(media, list)
+        media.append(encode_media(kind, value)[:3020])
 
 
 def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
