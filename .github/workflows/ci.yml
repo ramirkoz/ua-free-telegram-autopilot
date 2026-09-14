@@ -169,3 +169,47 @@ jobs:
           '@ | Set-Content -Path $env:RUNNER_TEMP\v2_source_live_gate.py -Encoding utf8
           python $env:RUNNER_TEMP\v2_source_live_gate.py
           if ($LASTEXITCODE -ne 0) { throw 'V2 live supported-source collection gate failed' }
+      - name: Live Telegram exact-post media extraction gate
+        if: matrix.python-version == '3.12'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PYTHONPATH = $PWD.Path
+          $env:PYTHONUTF8 = '1'
+          $env:PYTHONIOENCODING = 'utf-8'
+          @'
+          import json
+          from telegram_autopilot.models import Source
+          from telegram_autopilot.v2.strict_ingest import collect_telegram_strict
+
+          checks=[
+              ('Zaporizhzhia City Council','https://t.me/zaporizhzhiacitycouncil'),
+              ('Zaporizhzhia OVA','https://t.me/zoda_gov_ua'),
+              ('Ivan Fedorov ZP','https://t.me/ivan_fedorov_zp'),
+          ]
+          successes=[]; failures=[]
+          for index,(name,url) in enumerate(checks,start=1):
+              try:
+                  source=Source(id=index,channel_id=3,kind='telegram',name=name,url=url,enabled=True,initialized=False,last_checked_at=None,last_error=None,priority=100)
+                  items=collect_telegram_strict(source)
+                  with_media=[item for item in items if list(item.media_urls or [])]
+                  if not with_media:
+                      stats=[]
+                      for item in items[-10:]:
+                          try:
+                              layout=json.loads(item.article_layout_json or '{}')
+                              stats.append(layout.get('telegram',{}).get('media_filter',{}))
+                          except Exception:
+                              pass
+                      raise RuntimeError('zero media-bearing exact-post items; filters='+repr(stats[-5:]))
+                  successes.append((name,len(items),len(with_media)))
+                  print('V2_LIVE_TELEGRAM_MEDIA_OK',name,'items',len(items),'with_media',len(with_media),with_media[-1].url)
+              except Exception as exc:
+                  detail=str(exc).encode('ascii','backslashreplace').decode('ascii')
+                  failures.append((name,detail))
+                  print('V2_LIVE_TELEGRAM_MEDIA_WARNING',name,detail[:1200])
+          assert successes, 'All live Telegram media checks failed: '+repr(failures)
+          print('V2_LIVE_TELEGRAM_MEDIA_GATE_PASS',successes)
+          '@ | Set-Content -Path $env:RUNNER_TEMP\v2_telegram_media_live_gate.py -Encoding utf8
+          python $env:RUNNER_TEMP\v2_telegram_media_live_gate.py
+          if ($LASTEXITCODE -ne 0) { throw 'V2 live Telegram media extraction gate failed' }
