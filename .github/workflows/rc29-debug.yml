@@ -1,0 +1,39 @@
+name: RC29 Telegram markup debug
+
+on:
+  push:
+    branches:
+      - fix/rc29-telegram-entities-media
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect live Telegram media markup
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re, urllib.request
+          url='https://t.me/s/zaporizhzhiacitycouncil'
+          req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+          html=urllib.request.urlopen(req,timeout=30).read().decode('utf-8','replace')
+          print('HTML_BYTES',len(html))
+          pats=['background-image','<img','<video','<source']
+          count=0
+          for m in re.finditer(r'<[^>]+(?:background-image|<img|<video|<source)[^>]*>', html, re.I):
+              tag=m.group(0)
+              lo=max(0,m.start()-500); hi=min(len(html),m.end()+200)
+              ctx=html[lo:hi].replace('\n',' ')
+              print('MEDIA_TAG',tag[:1200])
+              print('CTX',ctx[-1800:])
+              count+=1
+              if count>=30: break
+          print('COUNT',count)
+          PY
