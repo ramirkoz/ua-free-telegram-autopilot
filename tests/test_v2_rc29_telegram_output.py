@@ -93,3 +93,25 @@ def test_semantic_media_class_drift_is_accepted_inside_exact_widget() -> None:
     layout = json.loads(article.article_layout_json)
     assert layout["telegram"]["media_filter_version"] == 5
     assert layout["telegram"]["media_filter"]["content_media"] == 1
+
+
+def test_persistent_user_photo_ancestor_does_not_poison_real_post_photo() -> None:
+    # Current t.me/s markup can leave the user-photo wrapper structurally open
+    # around the bubble. Classification must use the candidate-local path, not
+    # the union of every message ancestor.
+    html = """
+    <div class="tgme_widget_message" data-post="community/203">
+      <a class="tgme_widget_message_user_photo bgcolor6" style="background-image:url('https://cdn.example/avatar.jpg')">
+        <div class="tgme_widget_message_bubble">
+          <a class="tgme_widget_message_photo_wrap js-message_photo" style="background-image:url('https://cdn.example/real.jpg')"></a>
+          <div class="tgme_widget_message_text">Фото громади</div>
+          <time datetime="2026-09-14T10:03:00+00:00"></time>
+        </div>
+      </a>
+    </div>
+    """
+    parser = StrictTelegramParser("community")
+    parser.feed(html)
+    parser.close()
+    assert len(parser.entries) == 1
+    assert _urls(parser.entries[0]) == ["https://cdn.example/real.jpg"]
