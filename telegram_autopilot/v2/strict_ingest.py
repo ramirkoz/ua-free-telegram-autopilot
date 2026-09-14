@@ -48,6 +48,13 @@ class StrictTelegramParser(base.TelegramParser):
         "link_preview",
         "webpage_preview",
     }
+    # Telegram changes CSS class names far more often than anyone sensible would
+    # choose for a public transport contract. These semantic fragments let exact
+    # same-message photo/video wrappers survive class drift without opening the
+    # door to avatars/reactions/replies, which are still hard-rejected below.
+    _GENERIC_DIRECT_MEDIA_HINTS = (
+        "photo", "video", "media", "album", "grouped", "attachment", "gallery",
+    )
 
     _NON_CONTENT_MEDIA_MARKERS = base.TelegramParser._NON_CONTENT_MEDIA_MARKERS | {
         "tgme_widget_message_owner_photo",
@@ -78,21 +85,83 @@ class StrictTelegramParser(base.TelegramParser):
         "follow_button",
     }
 
+    def _generic_direct_content(self, classes: set[str]) -> bool:
+        # Only inspect the path local to the media candidate. Telegram's public
+        # HTML keeps the channel/user-photo wrapper open around the whole message,
+        # so using every ancestor makes every real attachment inherit
+        # ``user_photo`` and look like chrome.
+        folded = {str(item or "").casefold() for item in classes}
+        safe_hints = ("grouped", "attachment", "gallery")
+        return any(hint in cls for cls in folded for hint in safe_hints)
+
+    def _handle_start(self, tag: str, attrs, *, self_closing: bool = False) -> None:
+        # ``base.TelegramParser`` passes the union of *all* ancestor classes to
+        # ``_add_media``. Current t.me/s markup has a persistent
+        # ``tgme_widget_message_user_photo`` ancestor that wraps the message
+        # bubble too, so that global union cannot be used for classification.
+        # Keep only the media element plus its closest ancestor as the
+        # candidate-local structural context. This still catches avatars,
+        # replies, reactions and video thumbnails while avoiding unrelated
+        # message-header chrome.
+        values = {str(k).casefold(): str(v or "") for k, v in attrs}
+        local = self._classes(values)
+        path_local = set(local)
+        for _, ancestor_classes in self.stack[-1:]:
+            path_local.update(ancestor_classes)
+        self._strict_candidate_classes = path_local
+        try:
+            super()._handle_start(tag, attrs, self_closing=self_closing)
+        finally:
+            self._strict_candidate_classes = set()
+
+    def _remember_preview_fallback(self, kind: str, url: str) -> None:
+        """Keep one exact-post preview candidate as a last-resort image.
+
+        Municipal Telegram channels often publish a link card instead of attaching a
+        separate photo. RC28 treated every link-preview image as chrome, which left
+        required-media channels permanently empty. The preview still belongs to the
+        exact ``data-post`` widget, so using it *only when no direct media exists* is
+        safer than borrowing media from a neighbouring Telegram message.
+        """
+        if self.current is None or str(kind).casefold() != "image":
+            return
+        value = str(url or "").strip()
+        if not value:
+            return
+        key = media_identity("image", value)
+        keys = self.current.setdefault("preview_media_keys", set())
+        assert isinstance(keys, set)
+        if key in keys:
+            return
+        keys.add(key)
+        candidates = self.current.setdefault("preview_media_candidates", [])
+        assert isinstance(candidates, list)
+        candidates.append(encode_media("image", value)[:3020])
+
     def _add_media(self, kind: str, url: str, classes: set[str]) -> None:
         if self.current is None:
             return
         self.current["raw_media_candidates"] = int(self.current.get("raw_media_candidates") or 0) + 1
 
-        if str(kind).casefold() == "image" and self._contains_marker(classes, self._VIDEO_THUMB_MARKERS):
+        local_classes = set(getattr(self, "_strict_candidate_classes", set()) or set())
+        candidate_classes = local_classes or set(classes)
+
+        if str(kind).casefold() == "image" and self._contains_marker(candidate_classes, self._VIDEO_THUMB_MARKERS):
             self.current["discarded_video_thumb"] = int(self.current.get("discarded_video_thumb") or 0) + 1
             return
 
-        direct_content = self._contains_marker(classes, self._DIRECT_CONTENT_MEDIA_MARKERS)
         hard_markers = set(self._NON_CONTENT_MEDIA_MARKERS) - set(self._SOFT_PREVIEW_MARKERS)
-        if self._contains_marker(classes, hard_markers):
+        if self._contains_marker(candidate_classes, hard_markers):
             self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
             return
-        if not direct_content and self._contains_marker(classes, self._SOFT_PREVIEW_MARKERS):
+
+        direct_content = (
+            self._contains_marker(candidate_classes, self._DIRECT_CONTENT_MEDIA_MARKERS)
+            or self._generic_direct_content(candidate_classes)
+        )
+        soft_preview = self._contains_marker(candidate_classes, self._SOFT_PREVIEW_MARKERS)
+        if not direct_content and soft_preview:
+            self._remember_preview_fallback(kind, url)
             self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
             return
 
@@ -110,6 +179,19 @@ class StrictTelegramParser(base.TelegramParser):
         assert isinstance(media, list)
         media.append(encode_media(kind, value)[:3020])
 
+    def _finish(self) -> None:
+        # Direct source media always wins. If the exact Telegram widget contains no
+        # direct attachment, allow a single exact-post link-preview image. Never
+        # stitch from a neighbouring data-post, so the ownership boundary remains
+        # deterministic.
+        if self.current is not None:
+            media = self.current.setdefault("media", [])
+            previews = self.current.get("preview_media_candidates")
+            if isinstance(media, list) and not media and isinstance(previews, list) and previews:
+                media.append(str(previews[0]))
+                self.current["preview_fallback_used"] = 1
+        super()._finish()
+
 
 def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
     article = base._to_article(username, entry, [])
@@ -123,7 +205,7 @@ def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
     if not isinstance(tg, dict):
         tg = {}
         layout["telegram"] = tg
-    tg["media_filter_version"] = 4
+    tg["media_filter_version"] = 5
     tg["stitched"] = False
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article

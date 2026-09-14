@@ -145,31 +145,92 @@ def _utf16_units(value: str) -> int:
     return len(str(value or "").encode("utf-16-le")) // 2
 
 
-def _source_link_entities(
+_TECHNICAL_TOKEN_PATTERNS = (
+    # Telegram occasionally misclassifies the numeric tail of CVE identifiers as a
+    # phone number.  A real Bot API ``code`` entity wins over that heuristic without
+    # changing the actual text or inserting invisible characters.
+    re.compile(r"(?<![A-Za-z0-9_-])CVE-\d{4}-\d{4,7}(?![A-Za-z0-9_-])", re.I),
+    re.compile(r"(?<![A-Za-z0-9_])v?\d{1,4}(?:\.\d{1,6}){2,5}(?![A-Za-z0-9_])", re.I),
+)
+
+
+def _technical_code_entities(text: str) -> list[dict[str, object]]:
+    value = str(text or "")
+    spans: list[tuple[int, int]] = []
+    for pattern in _TECHNICAL_TOKEN_PATTERNS:
+        for match in pattern.finditer(value):
+            start, end = match.span()
+            # Do not cut an entity out of an explicit URL. Source URLs are rendered
+            # as a separate ``Джерело`` link, but this guard keeps generic callers safe.
+            token_start = max(value.rfind(" ", 0, start), value.rfind("\n", 0, start), value.rfind("\t", 0, start)) + 1
+            token_end_candidates = [pos for pos in (value.find(" ", end), value.find("\n", end), value.find("\t", end)) if pos >= 0]
+            token_end = min(token_end_candidates) if token_end_candidates else len(value)
+            if "://" in value[token_start:token_end]:
+                continue
+            if any(start < existing_end and existing_start < end for existing_start, existing_end in spans):
+                continue
+            spans.append((start, end))
+    spans.sort()
+    return [
+        {
+            "type": "code",
+            "offset": _utf16_units(value[:start]),
+            "length": _utf16_units(value[start:end]),
+        }
+        for start, end in spans
+    ]
+
+
+def _source_link_entity_items(
     text: str,
     source_url: str = "",
     source_urls: list[str] | tuple[str, ...] | None = None,
-) -> str:
-    """Return Bot API JSON for clickable source labels at the very bottom."""
+) -> list[dict[str, object]]:
     urls = _normalize_source_urls(source_url, source_urls)
     value = str(text or "")
     if not urls:
-        return ""
+        return []
     labels = ["Джерело"] if len(urls) == 1 else [f"Джерело {i}" for i in range(1, len(urls) + 1)]
-    entities = []
+    entities: list[dict[str, object]] = []
     for label, url in zip(labels, urls):
         # Attribution labels are deliberately at the bottom. rfind avoids
         # accidentally hyperlinking the word "Джерело" if it occurs in body text.
         start = value.rfind(label)
         if start < 0:
-            return ""
+            return []
         entities.append({
             "type": "text_link",
             "offset": _utf16_units(value[:start]),
             "length": _utf16_units(label),
             "url": url,
         })
-    return json.dumps(entities, ensure_ascii=False, separators=(",", ":"))
+    return entities
+
+
+def _source_link_entities(
+    text: str,
+    source_url: str = "",
+    source_urls: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Return Bot API JSON for clickable source labels at the very bottom."""
+    entities = _source_link_entity_items(text, source_url, source_urls)
+    return json.dumps(entities, ensure_ascii=False, separators=(",", ":")) if entities else ""
+
+
+def _safe_text_entities(
+    text: str,
+    source_url: str = "",
+    source_urls: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Return explicit entities that suppress Telegram's false phone autolinks.
+
+    We deliberately protect only unambiguous technical identifiers (CVE IDs and
+    dotted software/build versions). Real phone numbers remain plain text and keep
+    Telegram's normal phone behaviour.
+    """
+    entities = [*_technical_code_entities(text), *_source_link_entity_items(text, source_url, source_urls)]
+    entities.sort(key=lambda item: (int(item.get("offset") or 0), int(item.get("length") or 0)))
+    return json.dumps(entities, ensure_ascii=False, separators=(",", ":")) if entities else ""
 
 
 def _request(token: str, method: str, fields: dict[str, str], *, timeout: float = 45.0, media_write: bool = False) -> object:
@@ -222,7 +283,7 @@ def send_text(token: str, chat_id: str, text: str, *, source_url: str = "", sour
     if len(text) > 4096:
         raise TelegramError("Telegram текст перевищує 4096 символів.", retryable=False)
     fields = {"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}
-    entities = _source_link_entities(text, source_url, source_urls)
+    entities = _safe_text_entities(text, source_url, source_urls)
     if entities:
         fields["entities"] = entities
     result = _request(token, "sendMessage", fields, timeout=timeout)
@@ -277,7 +338,7 @@ def send_media_group(token: str, chat_id: str, media_urls: list[str] | tuple[str
     if caption and len(caption) > 1024:
         raise TelegramError("Telegram caption media group перевищує 1024 символи.", retryable=False)
     media: list[dict[str, object]] = []
-    entities = _source_link_entities(caption, source_url, source_urls) if caption else ""
+    entities = _safe_text_entities(caption, source_url, source_urls) if caption else ""
     for idx, (kind, url) in enumerate(items):
         row: dict[str, object] = {"type": "video" if kind == "video" else "photo", "media": url}
         if idx == 0 and caption:
@@ -316,7 +377,7 @@ def send_publication(token: str, chat_id: str, caption: str, media_urls: list[st
             "chat_id": chat_id, field: url, "caption": caption,
             # Telegram's default is caption below the media. Keep the <=900-char
             # text and source attribution attached to this media post.
-            **({"caption_entities": _source_link_entities(caption, source_url, source_urls)} if _source_link_entities(caption, source_url, source_urls) else {}),
+            **({"caption_entities": _safe_text_entities(caption, source_url, source_urls)} if _safe_text_entities(caption, source_url, source_urls) else {}),
         },
         timeout=timeout, media_write=True,
     )
@@ -496,7 +557,7 @@ def send_prepared_publication(
     method = "sendVideo" if media.kind == "video" else "sendPhoto"
     field = "video" if media.kind == "video" else "photo"
     fields = {"chat_id": chat_id, "caption": caption}
-    entities = _source_link_entities(caption, source_url, source_urls)
+    entities = _safe_text_entities(caption, source_url, source_urls)
     if entities:
         fields["caption_entities"] = entities
     result = _request_files(
@@ -540,7 +601,7 @@ def send_prepared_media_group(
         raise TelegramError("Для media group потрібно 2..10 медіа.", retryable=False, media_rejected=True)
     if caption and len(caption) > 900:
         raise TelegramError("Telegram caption media group перевищує 900 символів.", retryable=False)
-    entities = _source_link_entities(caption, source_url, source_urls) if caption else ""
+    entities = _safe_text_entities(caption, source_url, source_urls) if caption else ""
     media_json: list[dict[str, object]] = []
     files: list[tuple[str, str, str, bytes]] = []
     for idx, item in enumerate(items):
@@ -661,7 +722,7 @@ def send_video_url(
     if len(caption) > 1024:
         raise TelegramError("Telegram caption перевищує 1024 символи.", retryable=False)
     fields = {"chat_id": chat_id, "video": parsed[1], "caption": caption, "show_caption_above_media": "true"}
-    entities = _source_link_entities(caption, source_url)
+    entities = _safe_text_entities(caption, source_url)
     if entities:
         fields["caption_entities"] = entities
     result = _request(token, "sendVideo", fields, timeout=timeout, media_write=True)
@@ -698,7 +759,7 @@ def send_prepared_photo(
         "sendPhoto",
         {
             "chat_id": chat_id, "caption": caption, "show_caption_above_media": "true",
-            **({"caption_entities": _source_link_entities(caption, source_url)} if _source_link_entities(caption, source_url) else {}),
+            **({"caption_entities": _safe_text_entities(caption, source_url)} if _safe_text_entities(caption, source_url) else {}),
         },
         file_field="photo",
         filename=filename,
