@@ -35,6 +35,8 @@ jobs:
           )
           rest = json.loads(Path('tools/rc29_payload_rest.json').read_text(encoding='utf-8'))
           for name, payload in rest.items():
+              if name == '.github/workflows/ci.yml':
+                  continue
               path = Path(name)
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_bytes(unpack(payload))
@@ -61,16 +63,14 @@ jobs:
           PY
       - name: Compile changed runtime
         run: python -m compileall -q telegram_autopilot tests app_v2.py
-      - name: Remove staging transport
-        shell: bash
-        run: |
-          git rm -f tools/rc29_payload_telegram.txt tools/rc29_payload_rest.json .github/workflows/rc29-apply.yml
-      - name: Commit RC29
+      - name: Commit RC29 source files
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add VERSION.txt PUBLIC_VERSION.txt V2_VERSION.txt RELEASE_NOTES_v2.0.0-rc29.md \
+            telegram_autopilot/__init__.py telegram_autopilot/telegram.py telegram_autopilot/v2/__init__.py \
+            telegram_autopilot/v2/strict_ingest.py tests/test_v2_rc19_media_update.py tests/test_v2_rc29_telegram_output.py
           git status --short
           git commit -m 'RC29: fix Telegram false phone links and live media extraction'
           git push origin HEAD:fix/rc29-telegram-entities-media
