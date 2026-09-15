@@ -29,7 +29,7 @@ def _seed_channel(store: HardenedV2Store, channel_id: int, mode: str = "editoria
         )
 
 
-def test_editorial_contract_is_exactly_one_media(tmp_path: Path) -> None:
+def test_editorial_contract_is_zero_or_one_validated_media(tmp_path: Path) -> None:
     store = HardenedV2Store(tmp_path / "v2.sqlite3")
     _seed_channel(store, 1, "editorial")
     article_id = store.insert_collected(
@@ -39,7 +39,10 @@ def test_editorial_contract_is_exactly_one_media(tmp_path: Path) -> None:
         ]),
     )
     row = store.get_article(article_id)
-    assert json.loads(row["media_json"]) == ["https://cdn.example/hero.jpg"]
+    # These example URLs are deliberately unreachable and therefore cannot be
+    # positively validated. Editorial media must fail closed instead of keeping
+    # the first raw URL merely because it arrived first.
+    assert json.loads(row["media_json"]) == []
 
 
 def test_monitoring_preserves_gallery(tmp_path: Path) -> None:

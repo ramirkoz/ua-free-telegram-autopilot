@@ -129,6 +129,11 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
     layout blocks independently. When their first items differed, the publisher
     merged them back into a two-image post. RC20 selects one candidate once, at the
     publication boundary, and all downstream code receives that one-item bundle.
+
+    RC36 fails closed for editorial media. If the semantic/rubbish validator cannot
+    positively select a candidate, publication receives no media instead of falling
+    back to an unvalidated first URL. This prevents promo/follow/CTA banners whose
+    URL itself looks innocent from bypassing the mature media filter.
     """
     raw = build_media_bundle(article)
     if channel.mode != ChannelMode.EDITORIAL or not raw.items:
@@ -155,21 +160,9 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
         # but unrelated visual; required-media channels will be held by the gate.
         chosen = None
 
-    if chosen is None:
-        # Migrated/very simple rows may have only media_json and no structured
-        # metadata to score. Preserve one conservative fallback instead of silently
-        # deleting all media. Real extracted web pages normally have featured/blocks.
-        try:
-            layout = json.loads(str(_v(article, "article_layout_json", "{}") or "{}"))
-        except Exception:
-            layout = {}
-        has_structured = bool(isinstance(layout, dict) and (layout.get("featured") or layout.get("featured_video") or layout.get("blocks")))
-        if not has_structured and raw.items:
-            low = raw.items[0].url.casefold()
-            blocked = ("banner", "subscribe", "follow", "avatar", "logo", "sponsor", "affiliate", "promo")
-            if not any(term in low for term in blocked):
-                chosen = raw.items[0]
-
+    # Deliberately no raw first-item fallback here. The previous fallback bypassed
+    # semantic validation whenever layout metadata was missing or probing failed,
+    # which is exactly how generic follow/subscribe banners could leak into CTRL+UA.
     items = (chosen,) if chosen is not None else ()
     return MediaBundle(
         items=items,
