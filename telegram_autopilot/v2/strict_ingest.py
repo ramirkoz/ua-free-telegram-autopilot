@@ -27,6 +27,10 @@ class StrictTelegramParser(base.TelegramParser):
     (avatar/reaction/reply/logo/promo) stays rejected.  Soft preview wrappers are
     ignored only when the candidate is positively inside Telegram's direct
     photo/video/grouped-media wrappers.
+
+    RC33 also preserves ``href`` targets that Telegram hides behind visible anchor
+    text inside the message body.  Operational links such as registration/application
+    forms must survive ingest so editorial QA can require them in the rewritten post.
     """
 
     _DIRECT_CONTENT_MEDIA_MARKERS = {
@@ -109,6 +113,27 @@ class StrictTelegramParser(base.TelegramParser):
         for _, ancestor_classes in self.stack[-1:]:
             path_local.update(ancestor_classes)
         self._strict_candidate_classes = path_local
+
+        # Telegram frequently renders operational links as ``<a href=...>посиланням</a>``.
+        # The base parser keeps only visible text, which silently destroys the target.
+        # Preserve the exact href inline while we are inside the real message text.
+        # This is deliberately limited to http(s) anchors inside tgme_widget_message_text;
+        # page chrome, author links and preview wrappers are outside that boundary.
+        depth = len(self.stack) + 1
+        href = values.get("href", "").strip()
+        if (
+            self.current is not None
+            and tag.casefold() == "a"
+            and self.text_depth is not None
+            and depth >= self.text_depth
+            and href.startswith(("http://", "https://"))
+        ):
+            parts = self.current.setdefault("text", [])
+            assert isinstance(parts, list)
+            current_text = "".join(str(part) for part in parts)
+            if href not in current_text:
+                parts.append(f" {href} ")
+
         try:
             super()._handle_start(tag, attrs, self_closing=self_closing)
         finally:

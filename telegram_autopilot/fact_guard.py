@@ -56,6 +56,14 @@ _CLAIM_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
 )
 
 _LATIN_TOKEN_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9.+_/-]{2,}\b")
+_URL_RE = re.compile(r"https?://[^\s<>()\]\[{}\"']+", re.I)
+_ACTIONABLE_LINK_CUES = (
+    "реєстрац", "зареєстр", "заявк", "подати", "подач", "анкета", "анкету", "форма", "форму",
+    "заповн", "посилан", "квитк", "броню", "бронюван", "оплат", "донат", "детал", "довідк",
+    "графік", "розклад", "дедлайн", "прийом", "запис", "приєдна", "register", "registration",
+    "apply", "application", "sign up", "signup", "form", "ticket", "booking", "payment", "details",
+    "deadline", "schedule",
+)
 
 
 def _row_text(article: Row, key: str) -> str:
@@ -82,6 +90,31 @@ def _protected_latin_tokens(value: str) -> set[str]:
     return result
 
 
+def _actionable_source_urls(source: str) -> list[str]:
+    """Return exact source URLs that carry an operational call to action.
+
+    A generic attribution link is not actionable.  Registration/application/forms,
+    tickets, booking, payment, schedules and similar reader tasks are.  The URL must
+    stay in the rewritten body so a reader is never forced to open the source merely
+    to recover the action target.
+    """
+    text = str(source or "")
+    folded = text.casefold()
+    result: list[str] = []
+    for match in _URL_RE.finditer(text):
+        url = match.group(0).rstrip(".,;:!?")
+        if not url:
+            continue
+        left = max(0, match.start() - 220)
+        right = min(len(text), match.end() + 220)
+        context = folded[left:right]
+        if not any(cue in context for cue in _ACTIONABLE_LINK_CUES):
+            continue
+        if url not in result:
+            result.append(url)
+    return result[:12]
+
+
 def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     source = " ".join((_row_text(article, "title"), _row_text(article, "raw_text")))
     source_low = f" {source.casefold()} "
@@ -92,6 +125,15 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     invented = sorted(output_tokens - source_tokens)
     if invented:
         raise FactGuardError("AI додав назву/модель, якої немає у джерелі: " + ", ".join(invented[:8]))
+
+    # Reader-action links are protected facts too.  A canonical source footer does
+    # not satisfy this contract because it forces the reader to hunt for the actual
+    # registration/form/payment target in somebody else's post.
+    missing_action_urls = [url for url in _actionable_source_urls(source) if url not in output_text]
+    if missing_action_urls:
+        raise FactGuardError(
+            "AI прибрав практичне посилання з джерела: " + ", ".join(missing_action_urls[:4])
+        )
 
     # Conservative relation-strengthening guards for failure modes seen live.
     # They do not try to understand every fact; they only block transformations
