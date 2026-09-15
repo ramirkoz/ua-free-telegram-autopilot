@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
 
+from telegram_autopilot.v2.advanced_supervisor import AdvancedSupervisorService
 from telegram_autopilot.v2.local_reporter import LocalTelegramReporter
 from telegram_autopilot.v2.local_supervisor import (
     LocalOnlyProductionSupervisorService,
@@ -34,6 +34,15 @@ def test_local_report_is_built_from_local_snapshot_only() -> None:
     text = LocalTelegramReporter.format_message(report)
     assert "Autopilot · локальний звіт" in text
     assert "workers 3/3" in text
+
+
+def test_local_only_class_disables_agent_construction() -> None:
+    assert LocalOnlyProductionSupervisorService.REMOTE_AGENT_ENABLED is False
+    local_init = inspect.getsource(LocalOnlyProductionSupervisorService.__init__)
+    advanced_init = inspect.getsource(AdvancedSupervisorService.__init__)
+    assert "AdvancedSupervisorService.__init__" in local_init
+    assert "REMOTE_AGENT_ENABLED" in advanced_init
+    assert "if self.REMOTE_AGENT_ENABLED" in advanced_init
 
 
 def test_local_only_loop_cannot_execute_remote_agent_feed() -> None:
