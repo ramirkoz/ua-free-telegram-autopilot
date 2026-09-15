@@ -291,9 +291,21 @@ class AIGateway:
             return str(legacy_ai._openai(slot, cfg, prompt, max_output_tokens=max_output_tokens, timeout_seconds=timeout_seconds)).strip(), slot.model, slot.label
         if slot.provider == "local":
             try:
+                # Production notebook: 24 GB RAM, CPU-only. A cold 4B Ollama model
+                # already needs ~30 s for a tiny probe, so cloud-sized 18-30 s
+                # deadlines make a healthy local fallback look dead. Keep the local
+                # work bounded, but give it realistic CPU time and output budgets.
+                local_budget = max(48, min(768, int(max_output_tokens)))
+                prompt_chars = len(str(prompt or ""))
+                if local_budget <= 128 and prompt_chars <= 1500:
+                    local_timeout = 90
+                elif local_budget <= 420 and prompt_chars <= 7000:
+                    local_timeout = 180
+                else:
+                    local_timeout = 300
                 text, target = generate_local_text(
                     preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model,
-                    prompt=prompt, max_output_tokens=max_output_tokens, temperature=0.0, timeout_seconds=max(8, timeout_seconds),
+                    prompt=prompt, max_output_tokens=local_budget, temperature=0.0, timeout_seconds=local_timeout,
                 )
                 return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label)
             except LocalAIRuntimeError as exc:
@@ -330,7 +342,14 @@ class AIGateway:
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
-            acquired = lock.acquire(timeout=min(2.0, max(0.25, float(timeout_seconds) * 0.08)))
+            # The local fallback is intentionally single-file on the CPU-only laptop.
+            # Waiting here is better than having the other channel workers declare
+            # AI_DOWN every two seconds while Ollama is legitimately generating.
+            if provider == "local":
+                lock.acquire()
+                acquired = True
+            else:
+                acquired = lock.acquire(timeout=min(2.0, max(0.25, float(timeout_seconds) * 0.08)))
             if not acquired:
                 failures.append(f"{slot.label}: provider busy")
                 event("ai", "provider busy; trying next route", provider=provider, model=slot.model)
@@ -402,8 +421,10 @@ class AIGateway:
                 try:
                     # 32 tokens is too small for some reasoning models which can
                     # consume the entire budget before emitting visible text.
+                    probe_timeout = 90 if provider == "local" else 18
+                    probe_budget = 48 if provider == "local" else 128
                     text, runtime_model, _label = self._call_slot(
-                        slot, cfg, "Reply with OK only.", max_output_tokens=128, timeout_seconds=18
+                        slot, cfg, "Reply with OK only.", max_output_tokens=probe_budget, timeout_seconds=probe_timeout
                     )
                 finally:
                     lock.release()
