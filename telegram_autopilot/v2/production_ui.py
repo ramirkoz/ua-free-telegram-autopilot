@@ -2,18 +2,15 @@ from __future__ import annotations
 
 from . import ui as base_ui
 from .responsive_ui import ResponsiveMainWindow
-from .telemetry_supervisor import TelemetryProductionSupervisorService as ProductionSupervisorService
+from .local_supervisor import LocalOnlyProductionSupervisorService as ProductionSupervisorService
 
 
 class ProductionMainWindow(ResponsiveMainWindow):
-    """Production UI with exactly one supervisor generation from first paint."""
+    """Production UI with exactly one local-only supervisor from first paint."""
 
     def __init__(self, store, runtime, logs_dir):
-        # ResponsiveMainWindow used to start Base -> stop -> Advanced -> stop ->
-        # Production. On Windows/Google Drive that supervisor churn races atomic
-        # status writes and can trip WinError 32. Initialise the responsive shell
-        # fields here, then let the base UI create ProductionSupervisorService
-        # directly and start it exactly once.
+        # Initialise the responsive shell fields here, then let the base UI create
+        # the RC40 local-only production supervisor directly and start it once.
         self._rc20_closing = False
         self._rc20_runtime_action = False
         self._rc20_last_refresh: dict[str, float] = {}
