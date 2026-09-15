@@ -10,6 +10,11 @@ class ChannelMode(StrEnum):
     MONITORING = "monitoring"
 
 
+class SourceAttributionMode(StrEnum):
+    STANDARD = "standard"
+    NAMED_SOURCE = "named_source"
+
+
 class Stage(StrEnum):
     COLLECTED = "COLLECTED"
     EXTRACTED = "EXTRACTED"
@@ -93,6 +98,7 @@ class ChannelConfig:
     editorial_profile: str = ""
     include_source_link: bool = True
     source_link_required: bool = True
+    source_attribution_mode: SourceAttributionMode = SourceAttributionMode.STANDARD
     poll_interval_minutes: int = 5
     poll_immediate: bool = False
     min_publish_interval_minutes: int = 10

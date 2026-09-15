@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
 from ..secrets_store import load_secrets
-from .domain import ChannelConfig, ChannelMode, ChannelPolicy
+from .domain import ChannelConfig, ChannelMode, ChannelPolicy, SourceAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
 from .migration_service import MigrationManager
@@ -56,6 +56,12 @@ PROVIDER_UA = {
     "MODEL_UNSUPPORTED": "Модель недоступна",
     "CONFIG_ERROR": "Не налаштовано",
 }
+
+ATTRIBUTION_MODE_LABELS = {
+    SourceAttributionMode.STANDARD: "Стандартне — Джерело",
+    SourceAttributionMode.NAMED_SOURCE: "Іменоване — Читати у «назва джерела»",
+}
+ATTRIBUTION_MODE_VALUES = {label: mode for mode, label in ATTRIBUTION_MODE_LABELS.items()}
 
 
 class ChannelDialog(tk.Toplevel):
@@ -127,7 +133,17 @@ class ChannelDialog(tk.Toplevel):
         self._combo(p, 14, "Медіа-збагачення", cfg.media_enrichment_mode, ["auto", "off"])
         self._check(p, 15, "Дозволити media-first", cfg.media_first_allowed)
         self._entry(p, 16, "Media-first поріг тексту", cfg.media_min_text_chars)
-        ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=17, column=0, columnspan=2, sticky="w", padx=6, pady=10)
+        self._combo(
+            p, 17, "Формат посилання на джерело",
+            ATTRIBUTION_MODE_LABELS.get(cfg.source_attribution_mode, ATTRIBUTION_MODE_LABELS[SourceAttributionMode.STANDARD]),
+            list(ATTRIBUTION_MODE_VALUES),
+        )
+        ttk.Label(
+            p,
+            text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела»; назва джерела також зберігається як обов'язковий контекст рерайту.",
+            wraplength=760, foreground="#444",
+        ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
 
     def _text(self, parent, row, label, value, height=6):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="nw", padx=6, pady=5)
@@ -195,6 +211,7 @@ class ChannelDialog(tk.Toplevel):
                 editorial_profile=old.editorial_profile,
                 include_source_link=True,
                 source_link_required=True,
+                source_attribution_mode=ATTRIBUTION_MODE_VALUES.get(self._get("Формат посилання на джерело"), SourceAttributionMode.STANDARD),
                 poll_interval_minutes=int(self._get("Опитування, хв")),
                 poll_immediate=old.poll_immediate,
                 min_publish_interval_minutes=int(self._get("Мін. інтервал публікацій, хв")),

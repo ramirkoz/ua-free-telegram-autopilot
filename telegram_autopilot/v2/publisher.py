@@ -10,7 +10,7 @@ from ..telegram import (
     prepare_telegram_media_list,
     send_prepared_media_only,
 )
-from .community_context import attribution_for_article
+from .source_attribution import attribution_for_article
 from .domain import BlockedBy
 from .loghub import event
 from .media_pipeline import build_media_bundle, media_bundle_complete

@@ -12,7 +12,7 @@ from typing import Any, Iterator, Mapping
 
 from . import V2_SCHEMA_VERSION
 from ..media import encode_media, media_identity, valid_public_media
-from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, ProviderHealth, ProviderState, Stage
+from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, ProviderHealth, ProviderState, SourceAttributionMode, Stage
 from .urlnorm import normalize_url
 
 
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
  id INTEGER PRIMARY KEY,name TEXT NOT NULL,telegram_chat_id TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 1,
  channel_mode TEXT NOT NULL DEFAULT 'editorial',editorial_profile TEXT NOT NULL DEFAULT '',include_source_link INTEGER NOT NULL DEFAULT 1,
- source_link_required INTEGER NOT NULL DEFAULT 1,poll_interval_minutes INTEGER NOT NULL DEFAULT 5,poll_immediate INTEGER NOT NULL DEFAULT 0,
+ source_link_required INTEGER NOT NULL DEFAULT 1,source_attribution_mode TEXT NOT NULL DEFAULT 'standard',poll_interval_minutes INTEGER NOT NULL DEFAULT 5,poll_immediate INTEGER NOT NULL DEFAULT 0,
  min_publish_interval_minutes INTEGER NOT NULL DEFAULT 10,dedupe_window_hours INTEGER NOT NULL DEFAULT 72,max_age_hours INTEGER NOT NULL DEFAULT 24,
  max_posts_per_cycle INTEGER NOT NULL DEFAULT 3,publish_24h INTEGER NOT NULL DEFAULT 0,publish_start TEXT NOT NULL DEFAULT '07:00',
  publish_end TEXT NOT NULL DEFAULT '00:00',publish_immediately INTEGER NOT NULL DEFAULT 0,topic_balance_enabled INTEGER NOT NULL DEFAULT 1,
@@ -265,7 +265,36 @@ class V2Store:
     def initialize(self) -> None:
         with self._init_lock:
             with self.connect() as con:
-                con.executescript(SCHEMA); con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
+                con.executescript(SCHEMA)
+                self._ensure_source_attribution_mode(con)
+                con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
+
+    @staticmethod
+    def _ensure_source_attribution_mode(con: sqlite3.Connection) -> None:
+        """Add RC35 channel setting and preserve RC34 behavior once for existing channels.
+
+        The name check exists only in this one-time compatibility migration. Runtime
+        behavior never derives attribution from a channel name; future channels default
+        to ``standard`` until the operator changes the visible channel setting.
+        """
+        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
+        if "source_attribution_mode" not in columns:
+            con.execute("ALTER TABLE channels ADD COLUMN source_attribution_mode TEXT NOT NULL DEFAULT 'standard'")
+        key = "rc35_explicit_source_attribution_mode_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        con.execute(
+            """UPDATE channels SET source_attribution_mode=?
+               WHERE channel_mode='monitoring'
+                 AND source_attribution_mode='standard'
+                 AND instr(lower(name),'громад')>0""",
+            (str(SourceAttributionMode.NAMED_SOURCE),),
+        )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
 
     def run_startup_maintenance(self) -> dict[str, int]:
         """Run potentially expensive one-time maintenance outside the Tk/UI thread.
@@ -449,9 +478,14 @@ class V2Store:
             media_policy=str(_row_get(p,"media_policy","required") or "required"),target_min_chars=int(_row_get(p,"target_min_chars",300) or 300),target_max_chars=int(_row_get(p,"target_max_chars",750) or 750),
         )
         mode=ChannelMode.MONITORING if str(row["channel_mode"]).casefold()=="monitoring" else ChannelMode.EDITORIAL
+        try:
+            source_attribution_mode=SourceAttributionMode(str(_row_get(row,"source_attribution_mode","standard") or "standard"))
+        except Exception:
+            source_attribution_mode=SourceAttributionMode.STANDARD
         return ChannelConfig(
             id=int(row["id"]),name=str(row["name"]),telegram_chat_id=str(row["telegram_chat_id"] or ""),enabled=_bool(row["enabled"],True),mode=mode,
             editorial_profile=str(row["editorial_profile"] or ""),include_source_link=_bool(row["include_source_link"],True),source_link_required=_bool(row["source_link_required"],True),
+            source_attribution_mode=source_attribution_mode,
             poll_interval_minutes=int(row["poll_interval_minutes"] or 5),poll_immediate=_bool(row["poll_immediate"],False),min_publish_interval_minutes=int(row["min_publish_interval_minutes"] or 10),
             dedupe_window_hours=int(row["dedupe_window_hours"] or 72),max_age_hours=int(row["max_age_hours"] or 24),max_posts_per_cycle=int(row["max_posts_per_cycle"] or 3),
             publish_24h=_bool(row["publish_24h"],False),publish_start=str(row["publish_start"] or "07:00"),publish_end=str(row["publish_end"] or "00:00"),publish_immediately=_bool(row["publish_immediately"],False),
@@ -465,8 +499,8 @@ class V2Store:
         with self.transaction() as con:
             try:
                 con.execute("BEGIN IMMEDIATE")
-                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,include_source_link=?,source_link_required=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,updated_at=? WHERE id=?""",
-                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,int(cfg.include_source_link),int(cfg.source_link_required),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),stamp,int(cfg.id)))
+                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,updated_at=? WHERE id=?""",
+                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),stamp,int(cfg.id)))
                 p=cfg.policy
                 con.execute("""INSERT INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,media_policy,target_min_chars,target_max_chars,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled,purpose=excluded.purpose,audience=excluded.audience,selection_rules=excluded.selection_rules,rejection_rules=excluded.rejection_rules,writing_rules=excluded.writing_rules,style_rules=excluded.style_rules,positive_examples=excluded.positive_examples,negative_examples=excluded.negative_examples,extra_instructions=excluded.extra_instructions,selector_extra_prompt=excluded.selector_extra_prompt,writer_extra_prompt=excluded.writer_extra_prompt,media_policy=excluded.media_policy,target_min_chars=excluded.target_min_chars,target_max_chars=excluded.target_max_chars,updated_at=excluded.updated_at""",
                     (cfg.id,int(p.enabled),p.purpose,p.audience,p.selection_rules,p.rejection_rules,p.writing_rules,p.style_rules,p.positive_examples,p.negative_examples,p.extra_instructions,p.selector_extra_prompt,p.writer_extra_prompt,p.media_policy,int(p.target_min_chars),int(p.target_max_chars),stamp))
