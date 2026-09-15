@@ -1,0 +1,38 @@
+name: RC35 one-time channel attribution patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/rc35_apply.py
+      - .github/workflows/rc35-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply RC35 patch
+        run: python tools/rc35_apply.py
+      - name: Compile changed source
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
+      - name: Commit RC35 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'RC35: explicit per-channel source attribution'
+          git push origin HEAD:main
