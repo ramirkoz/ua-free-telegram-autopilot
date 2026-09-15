@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 from typing import Any
 
+from .advanced_supervisor import AdvancedSupervisorService
 from .local_reporter import LocalTelegramReporter
 from .loghub import event
+from .production_supervisor import _ProductionUpdateProtocol
 from .supervisor import Incident, SupervisorConfig, SupervisorService
 from .telemetry_supervisor import TelemetryProductionSupervisorService
 
@@ -17,27 +20,41 @@ _REMOTE_ONLY_INCIDENTS = {
 
 
 class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService):
-    """KONTUR-style local-only supervisor.
+    """KONTUR-style local-only supervisor with no agent object at all.
 
     Keep local health checks, media/runtime diagnostics, local Telegram status and
-    the signed updater channel. Disable the remote maintenance AgentFeed, remote
-    review requests, agent journals/hourly feeds, agent Telegram bridge and passive
-    Drive status/incident publishing.
+    the signed updater channel. The remote maintenance AgentFeed is not constructed,
+    so review requests, journals/hourly feeds and the agent Telegram bridge cannot
+    run accidentally.
     """
 
+    REMOTE_AGENT_ENABLED = False
+
     def __init__(self, store, runtime, logs_dir):
-        super().__init__(store, runtime, logs_dir)
-        # The inherited constructor creates the historical feed object. It performs
-        # no work unless called by the inherited tick; clear the reference so RC40
-        # cannot accidentally revive the remote maintenance path.
-        self.agent = None
+        # Intentionally bypass ProductionSupervisorService.__init__ because that
+        # historical constructor creates _ProductionAgentFeed. AdvancedSupervisor
+        # now honours REMOTE_AGENT_ENABLED=False and therefore creates no AgentFeed.
+        AdvancedSupervisorService.__init__(self, store, runtime, logs_dir)
+        self.update_protocol = _ProductionUpdateProtocol()
+
+        live = self._discover_live_mirror_dir()
+        if live and str(self.config.mirror_dir or "").strip() != live:
+            cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": live}).normalized()
+            self.save_config(cfg)
+        self._status_sequence = 0
+
+        # Fields normally initialised by TelemetryProductionSupervisorService.
+        self._telemetry_last_discovery_epoch = 0.0
+        self._telemetry_last_discovery_error = ""
+        self._telemetry_last_repair_at = ""
+        self._telemetry_repair_count = 0
+
         self.local_reporter = LocalTelegramReporter(root=self.root)
         self._local_report_result: dict[str, Any] = {"status": "starting"}
 
     def _mirror_file(self, source, name: str) -> None:
-        # The LIVE folder remains discoverable/configured for the narrow signed
-        # updater protocol. Supervisor status, incidents and agent artefacts are
-        # local-only from RC40 onward.
+        # The LIVE folder remains configured only for the narrow signed updater
+        # protocol. Supervisor status/incidents and all agent artefacts stay local.
         return
 
     def build_snapshot(self) -> dict[str, Any]:
@@ -46,6 +63,7 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         snapshot["supervision"] = {
             "mode": "local_only",
             "remote_agent": False,
+            "agent_object_constructed": False,
             "remote_commands": False,
             "remote_agent_telegram_bridge": False,
             "drive_status_mirror": False,
@@ -107,6 +125,7 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         value["supervision"] = {
             "mode": "local_only",
             "remote_agent": False,
+            "agent_object_constructed": False,
             "remote_commands": False,
             "remote_agent_telegram_bridge": False,
             "drive_status_mirror": False,

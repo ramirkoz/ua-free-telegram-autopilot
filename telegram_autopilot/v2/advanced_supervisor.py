@@ -17,7 +17,9 @@ from .update_protocol import UpdateProtocol
 
 
 class AdvancedSupervisorService(SupervisorService):
-    """RC21 KONTUR-style durable supervisor + agent bridge."""
+    """RC21 KONTUR-style durable supervisor + optional agent bridge."""
+
+    REMOTE_AGENT_ENABLED = True
 
     def __init__(self, store, runtime, logs_dir):
         super().__init__(store, runtime, logs_dir)
@@ -33,7 +35,11 @@ class AdvancedSupervisorService(SupervisorService):
                 cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": found}).normalized()
                 self.save_config(cfg)
         self.update_protocol = UpdateProtocol()
-        self.agent = AgentFeed(root=self.root, store=self.store, config_getter=lambda: self.config)
+        self.agent = (
+            AgentFeed(root=self.root, store=self.store, config_getter=lambda: self.config)
+            if self.REMOTE_AGENT_ENABLED
+            else None
+        )
         # Base RC19 synchronously built a full SQLite/media/log snapshot from
         # set_expected_running(), which is called by Tk Start/Stop callbacks. Keep
         # the wakeup primitive entirely in the advanced service so RC21 does not
@@ -144,10 +150,11 @@ class AdvancedSupervisorService(SupervisorService):
                     snapshot = self.write_snapshot()
                     incidents = self.evaluate(snapshot, cfg)
                     self._handle_incidents(snapshot, incidents, cfg)
-                    try:
-                        self.agent.observe(snapshot, incidents, self.update_protocol.status())
-                    except Exception as exc:
-                        event("supervisor", "agent feed tick failed", level=30, detail=str(exc)[:800])
+                    if self.agent is not None:
+                        try:
+                            self.agent.observe(snapshot, incidents, self.update_protocol.status())
+                        except Exception as exc:
+                            event("supervisor", "agent feed tick failed", level=30, detail=str(exc)[:800])
             except Exception as exc:
                 event("supervisor", "supervisor tick failed", level=40, detail=str(exc)[:1200])
             elapsed = time.monotonic() - started
@@ -257,8 +264,13 @@ class AdvancedSupervisorService(SupervisorService):
 
     def summary(self) -> dict[str, Any]:
         value = super().summary()
-        value["agent"] = {
-            "journal": str(self.agent.journal_path), "hourly": str(self.agent.hourly_path), "request": str(self.agent.request_path),
-        }
+        if self.agent is not None:
+            value["agent"] = {
+                "journal": str(self.agent.journal_path),
+                "hourly": str(self.agent.hourly_path),
+                "request": str(self.agent.request_path),
+            }
+        else:
+            value["agent"] = {"enabled": False}
         value["update"] = self.update_protocol.status()
         return value
