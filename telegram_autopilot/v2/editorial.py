@@ -10,6 +10,7 @@ from ..fact_guard import validate_fact_guard
 from ..language import looks_ukrainian
 from ..ukrainian_quality import apply_safe_ukrainian_fixes, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
+from .community_context import community_body_hard_limit, community_source_name, require_community_context
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, Stage
 from .loghub import event
 from .learning import LearningEngine
@@ -136,7 +137,15 @@ def _number_tokens(text: str) -> set[str]:
 TELEGRAM_BODY_SAFE_MAX = 880
 
 
-def validate_writer_output(article: Any, text: str, *, min_chars: int, max_chars: int, hard_max_chars: int | None = None) -> str:
+def validate_writer_output(
+    article: Any,
+    text: str,
+    *,
+    min_chars: int,
+    max_chars: int,
+    hard_max_chars: int | None = None,
+    required_context: str = "",
+) -> str:
     value = apply_safe_ukrainian_fixes(str(text or "")).strip()
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
@@ -146,8 +155,13 @@ def validate_writer_output(article: Any, text: str, *, min_chars: int, max_chars
         raise ValueError("Непридатна довжина Telegram-тексту: надто довго")
     if not looks_ukrainian(value):
         raise ValueError("AI не повернув природний український текст")
+    require_community_context(value, required_context)
     validate_fact_guard(article, value)
-    source = str(_v(article, "title", "")) + "\n" + str(_v(article, "raw_text", ""))
+    source = "\n".join((
+        str(_v(article, "source_name", "")),
+        str(_v(article, "title", "")),
+        str(_v(article, "raw_text", "")),
+    ))
     invented = sorted(_number_tokens(value) - _number_tokens(source))
     if invented:
         raise ValueError("AI додав число, якого немає у джерелі: " + ", ".join(invented[:10]))
@@ -283,19 +297,30 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 
     def write(self, channel: ChannelConfig, article: Any, selection: EditorialOutcome) -> EditorialOutcome:
         p = channel.policy
-        effective_max = max(120, min(int(p.target_max_chars), TELEGRAM_BODY_SAFE_MAX))
+        community_name = community_source_name(channel, article)
+        body_hard_max = community_body_hard_limit(
+            channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
+        )
+        effective_max = max(120, min(int(p.target_max_chars), body_hard_max))
         effective_min = max(80, min(int(p.target_min_chars), effective_max))
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
         style_memory = self.learning.style_memory_block(channel.id, article)
-        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
+        community_instruction = (
+            f'COMMUNITY CONTEXT: {community_name}\n'
+            f'ОБОВ\'ЯЗКОВО: у першому абзаці природно вживи точну назву «{community_name}» хоча б один раз. '
+            'Не замінюй її лише безликими словами «громада» або «мешканці громади».\n'
+            if community_name else ""
+        )
+        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
 EXTRA: {p.writer_extra_prompt}
 {style_memory}
 ANGLE: {selection.angle}
-Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {TELEGRAM_BODY_SAFE_MAX} символів, бо система додає окремий footer джерела.
+{community_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
+Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {body_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
@@ -304,25 +329,46 @@ SOURCE:
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def validator(raw: str) -> None:
-            validate_writer_output(article, raw, min_chars=effective_min, max_chars=effective_max, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
+            validate_writer_output(
+                article, raw, min_chars=effective_min, max_chars=effective_max,
+                hard_max_chars=body_hard_max, required_context=community_name,
+            )
 
         result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
-        draft = validate_writer_output(article, result.text, min_chars=effective_min, max_chars=effective_max, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
+        draft = validate_writer_output(
+            article, result.text, min_chars=effective_min, max_chars=effective_max,
+            hard_max_chars=body_hard_max, required_context=community_name,
+        )
         final = self._final_edit(channel, article, draft, min_chars=effective_min, max_chars=effective_max)
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
     def _final_edit(self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int) -> str:
         p = channel.policy
+        community_name = community_source_name(channel, article)
+        body_hard_max = community_body_hard_limit(
+            channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
+        )
         style_memory = self.learning.style_memory_block(channel.id, article)
+        community_instruction = (
+            f'COMMUNITY CONTEXT: {community_name}\n'
+            f'Не прибирай і не змінюй точну назву «{community_name}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
+            if community_name else ""
+        )
         prompt = f"""Ти фінальний редактор. Виправ ТІЛЬКИ мову, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Якщо текст уже добрий, поверни його без змін.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{community_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def validator(raw: str) -> None:
-            validate_writer_output(article, raw, min_chars=min_chars, max_chars=max_chars, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
+            validate_writer_output(
+                article, raw, min_chars=min_chars, max_chars=max_chars,
+                hard_max_chars=body_hard_max, required_context=community_name,
+            )
 
         try:
             result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28)
-            return validate_writer_output(article, result.text, min_chars=min_chars, max_chars=max_chars, hard_max_chars=TELEGRAM_BODY_SAFE_MAX)
+            return validate_writer_output(
+                article, result.text, min_chars=min_chars, max_chars=max_chars,
+                hard_max_chars=body_hard_max, required_context=community_name,
+            )
         except GatewayExhausted:
             return draft
 

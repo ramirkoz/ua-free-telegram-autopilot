@@ -7,17 +7,20 @@ from typing import Any, Callable
 from ..secrets_store import load_secrets
 from ..telegram import (
     TelegramError,
-    build_post_text,
     prepare_telegram_media_list,
-    send_prepared_media_group,
     send_prepared_media_only,
-    send_prepared_publication,
-    send_text,
 )
+from .community_context import attribution_for_article
 from .domain import BlockedBy
 from .loghub import event
 from .media_pipeline import build_media_bundle, media_bundle_complete
 from .storage import V2Store
+from .telegram_attribution import (
+    build_attributed_post_text,
+    send_prepared_media_group_attributed,
+    send_prepared_publication_attributed,
+    send_text_attributed,
+)
 from .urlnorm import normalize_url
 
 
@@ -152,10 +155,23 @@ class Publisher:
         if not source_url.startswith(("http://", "https://")):
             self.store.block_article(article_id, blocked_by=BlockedBy.SOURCE, error_code="SOURCE_MISSING", detail="Немає canonical source URL")
             return "SOURCE_MISSING"
+        attribution_urls, attribution_labels = attribution_for_article(
+            channel,
+            article,
+            source_url=source_url,
+            source_urls=source_urls,
+        )
 
         text = str(article["final_text"] or "").strip()
         try:
-            post_text = build_post_text(text, source_url=source_url, source_urls=source_urls, include_source_link=True, hard_limit=900)
+            post_text = build_attributed_post_text(
+                text,
+                source_url=source_url,
+                source_urls=attribution_urls,
+                source_labels=attribution_labels,
+                include_source_link=True,
+                hard_limit=900,
+            )
         except TelegramError as exc:
             detail = str(exc)
             if "перевищує ліміт" in detail.casefold():
@@ -203,7 +219,15 @@ class Publisher:
         # Media policy (required/preferred/optional) is configured by the operator.
         if not bundle.count:
             try:
-                text_result = send_text(token, channel.telegram_chat_id, post_text, source_url=source_url, source_urls=source_urls, timeout=45.0)
+                text_result = send_text_attributed(
+                    token,
+                    channel.telegram_chat_id,
+                    post_text,
+                    source_url=source_url,
+                    source_urls=attribution_urls,
+                    source_labels=attribution_labels,
+                    timeout=45.0,
+                )
             except TelegramError as exc:
                 return self._telegram_failure(article_id, channel_id, exc)
             self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
@@ -248,7 +272,15 @@ class Publisher:
             # Preferred/optional may intentionally degrade to text when media cannot
             # be fetched. Required was handled above and can never reach this branch.
             try:
-                text_result = send_text(token, channel.telegram_chat_id, post_text, source_url=source_url, source_urls=source_urls, timeout=45.0)
+                text_result = send_text_attributed(
+                    token,
+                    channel.telegram_chat_id,
+                    post_text,
+                    source_url=source_url,
+                    source_urls=attribution_urls,
+                    source_labels=attribution_labels,
+                    timeout=45.0,
+                )
             except TelegramError as exc:
                 return self._telegram_failure(article_id, channel_id, exc)
             self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
@@ -293,18 +325,27 @@ class Publisher:
             try:
                 if len(chunk) == 1:
                     if is_final_chunk:
-                        media_result = send_prepared_publication(
-                            token, channel.telegram_chat_id, post_text, chunk[0],
-                            source_url=source_url, source_urls=source_urls, timeout=75.0,
+                        media_result = send_prepared_publication_attributed(
+                            token,
+                            channel.telegram_chat_id,
+                            post_text,
+                            chunk[0],
+                            source_url=source_url,
+                            source_urls=attribution_urls,
+                            source_labels=attribution_labels,
+                            timeout=75.0,
                         )
                     else:
                         media_result = send_prepared_media_only(token, channel.telegram_chat_id, chunk[0], timeout=75.0)
                 else:
-                    media_result = send_prepared_media_group(
-                        token, channel.telegram_chat_id, chunk,
+                    media_result = send_prepared_media_group_attributed(
+                        token,
+                        channel.telegram_chat_id,
+                        chunk,
                         caption=post_text if is_final_chunk else "",
                         source_url=source_url if is_final_chunk else "",
-                        source_urls=source_urls if is_final_chunk else None,
+                        source_urls=attribution_urls if is_final_chunk else None,
+                        source_labels=attribution_labels if is_final_chunk else None,
                         timeout=90.0,
                     )
             except TelegramError as exc:
@@ -317,7 +358,15 @@ class Publisher:
                 )
                 if exc.media_rejected and policy in {"preferred", "optional"} and not media_ids:
                     try:
-                        text_result = send_text(token, channel.telegram_chat_id, post_text, source_url=source_url, source_urls=source_urls, timeout=45.0)
+                        text_result = send_text_attributed(
+                            token,
+                            channel.telegram_chat_id,
+                            post_text,
+                            source_url=source_url,
+                            source_urls=attribution_urls,
+                            source_labels=attribution_labels,
+                            timeout=45.0,
+                        )
                     except TelegramError as text_exc:
                         return self._telegram_failure(article_id, channel_id, text_exc)
                     self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
