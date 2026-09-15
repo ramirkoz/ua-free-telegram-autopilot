@@ -12,7 +12,7 @@ RC35 removes the RC34 runtime heuristic that inferred community behavior from an
 - Named-source mode also makes the configured source name mandatory rewrite context, so context is preserved outside the donor channel.
 - Runtime behavior no longer checks whether a channel name contains `громад` or any other keyword.
 - Future monitoring channels default to `standard`; they do not inherit community semantics.
-- Existing RC34 databases receive a one-time compatibility migration: monitoring channels that previously matched the RC34 `громад` heuristic are stored as `named_source`. After that migration, the database setting is authoritative and editable in the channel UI.
+- Existing RC34 databases receive a one-time compatibility migration: monitoring channels that previously matched the RC34 `громад` heuristic are stored as `named_source`. The compatibility match is Unicode-safe and runs only during migration. After that migration, the database setting is authoritative and editable in the channel UI.
 - Actionable registration/form/payment/schedule URLs remain protected independently and stay in the post body.
 
 ### Compatibility
