@@ -93,8 +93,8 @@ def _protected_latin_tokens(value: str) -> set[str]:
 def _actionable_source_urls(source: str) -> list[str]:
     """Return exact source URLs that carry an operational call to action.
 
-    A generic attribution link is not actionable.  Registration/application/forms,
-    tickets, booking, payment, schedules and similar reader tasks are.  The URL must
+    A generic attribution link is not actionable. Registration/application/forms,
+    tickets, booking, payment, schedules and similar reader tasks are. The URL must
     stay in the rewritten body so a reader is never forced to open the source merely
     to recover the action target.
     """
@@ -116,7 +116,9 @@ def _actionable_source_urls(source: str) -> list[str]:
 
 
 def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
-    source = " ".join((_row_text(article, "title"), _row_text(article, "raw_text")))
+    # The operator-configured donor name is source evidence too. In the communities
+    # lane it is deliberately the canonical community name that must survive rewrite.
+    source = " ".join((_row_text(article, "source_name"), _row_text(article, "title"), _row_text(article, "raw_text")))
     source_low = f" {source.casefold()} "
     output_text = str(output or "")
 
@@ -126,7 +128,7 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     if invented:
         raise FactGuardError("AI додав назву/модель, якої немає у джерелі: " + ", ".join(invented[:8]))
 
-    # Reader-action links are protected facts too.  A canonical source footer does
+    # Reader-action links are protected facts too. A canonical source footer does
     # not satisfy this contract because it forces the reader to hunt for the actual
     # registration/form/payment target in somebody else's post.
     missing_action_urls = [url for url in _actionable_source_urls(source) if url not in output_text]
