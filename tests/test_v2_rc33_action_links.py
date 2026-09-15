@@ -66,16 +66,17 @@ def test_generic_source_link_is_not_forced_into_body() -> None:
     )
 
 
-def test_source_footer_cannot_replace_distinct_action_url() -> None:
+def test_source_footer_label_cannot_replace_distinct_action_url() -> None:
     action = "https://forms.example.org/register"
-    source_post = "https://t.me/zaporizhzhia_test/12345"
     article = {
         "title": "Реєстрація на програму",
         "raw_text": f"Реєстрація учасників доступна за посиланням {action}",
     }
 
+    # The canonical `Джерело` footer is appended later by Publisher. At writer/final
+    # QA time it cannot satisfy a different registration target from the source.
     with pytest.raises(FactGuardError, match="практичне посилання"):
         validate_fact_guard(
             article,
-            f"Реєстрація триває. Джерело: {source_post}",
+            "Реєстрація триває. Деталі дивіться у джерелі.",
         )
