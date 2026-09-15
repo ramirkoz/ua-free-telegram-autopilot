@@ -12,6 +12,7 @@ from ..secrets_store import load_secrets
 from ..telegram import TelegramError, _request, send_text
 from .advanced_supervisor import AdvancedSupervisorService
 from .agent_feed import AgentFeed
+from .agent_report_format import format_agent_report
 from .fileio import atomic_copy, atomic_write_json
 from .loghub import event
 from .supervisor import SupervisorConfig
@@ -27,9 +28,10 @@ LIVE_FEED_NAMES = (
 class _ProductionAgentFeed(AgentFeed):
     """Agent feed using unique temp files and lock-tolerant atomic replacement.
 
-    RC30 also consumes one Drive-side ``agent_telegram_report.json`` at a time and
-    forwards the compact status to Telegram. Delivery is replay-safe: the local
-    state and ``agent_telegram_ack.json`` both key off ``report_id``.
+    RC37 consumes one Drive-side ``agent_telegram_report.json`` at a time and
+    forwards a compact Ukrainian status to Telegram. Delivery is replay-safe: the
+    local state and ``agent_telegram_ack.json`` both key off ``report_id``. Reports
+    may carry a legacy preformatted ``message`` or the structured agent contract.
     """
 
     REPORT_NAME = "agent_telegram_report.json"
@@ -166,6 +168,8 @@ class _ProductionAgentFeed(AgentFeed):
         report = self._read_json(report_path)
         report_id = str(report.get("report_id") or "").strip()
         message = str(report.get("message") or "").strip()
+        if not message and report_id:
+            message = format_agent_report(report).strip()
         if not report_id or not message:
             return "INVALID_REPORT"
         if len(message) > 3900:
