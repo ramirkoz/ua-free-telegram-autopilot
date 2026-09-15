@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from . import ui as base_ui
-from .media_supervisor import MediaAwareProductionSupervisorService as ProductionSupervisorService
 from .responsive_ui import ResponsiveMainWindow
+from .telemetry_supervisor import TelemetryProductionSupervisorService as ProductionSupervisorService
 
 
 class ProductionMainWindow(ResponsiveMainWindow):

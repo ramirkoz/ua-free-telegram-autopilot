@@ -63,7 +63,7 @@ def test_remote_update_workflow_exports_manifest_and_agent_bundle() -> None:
     assert "$env:UPDATE_MANIFEST" in text
 
 
-def test_manifest_waits_for_drive_artifact_and_hash(tmp_path: Path) -> None:
+def test_manifest_allows_github_fallback_and_rejects_bad_drive_hash(tmp_path: Path) -> None:
     import hashlib
     import json
     from telegram_autopilot.v2.advanced_update_coordinator import AdvancedUpdateCoordinator
@@ -86,7 +86,11 @@ def test_manifest_waits_for_drive_artifact_and_hash(tmp_path: Path) -> None:
     coordinator = object.__new__(AdvancedUpdateCoordinator)
     coordinator.supervisor = SimpleNamespace(config=SimpleNamespace(mirror_dir=str(mirror)))
     coordinator.protocol = UpdateProtocol(tmp_path / "updates")
-    assert coordinator._manifest_request() is None
+
+    request = coordinator._manifest_request()
+    assert request is not None
+    assert request.target_version == "2.0.0-rc22"
+    assert request.source == "drive-release-manifest-github-fallback"
 
     (mirror / manifest["artifact_filename"]).write_bytes(b"wrong")
     assert coordinator._manifest_request() is None
@@ -94,4 +98,6 @@ def test_manifest_waits_for_drive_artifact_and_hash(tmp_path: Path) -> None:
     (mirror / manifest["artifact_filename"]).write_bytes(payload)
     request = coordinator._manifest_request()
     assert request is not None
-    assert request.target_version == "2.0.0-rc22"
+    # The already accepted request keeps its original provenance. The detached
+    # SHA-aware helper still prefers the now-complete Drive ZIP at execution time.
+    assert request.source == "drive-release-manifest-github-fallback"

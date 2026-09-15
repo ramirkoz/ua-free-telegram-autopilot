@@ -4,13 +4,27 @@ import json
 from pathlib import Path
 
 from .loghub import event
+from .safe_update_protocol import SafeUpdateProtocol
 from .update_coordinator import UpdateCoordinator
 
 
 class AdvancedUpdateCoordinator(UpdateCoordinator):
-    """RC21 coordinator that also understands KONTUR-style Drive release manifests."""
+    """Production coordinator for approved Drive manifests and deterministic updates."""
+
+    def __init__(self, app, store, runtime) -> None:
+        super().__init__(app, store, runtime)
+        self.protocol = SafeUpdateProtocol()
+
+    def _refresh_mirror(self) -> None:
+        ensure = getattr(self.supervisor, "ensure_live_mirror", None)
+        if callable(ensure):
+            try:
+                ensure(force=False)
+            except Exception as exc:
+                event("update", "telemetry mirror refresh before update poll failed", level=30, detail=str(exc)[:800])
 
     def _manifest_request(self):
+        self._refresh_mirror()
         raw = str(self.supervisor.config.mirror_dir or "").strip()
         if not raw:
             return None
@@ -35,22 +49,27 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             raise ValueError("UPDATE_MANIFEST_ASSET_INVALID")
         expected_sha = str(data.get("sha256") or "").strip().casefold()
         artifact = Path(raw) / expected_asset
-        # Never stop the live application until the Drive-synced artifact itself is
-        # present and matches the manifest. The manifest can arrive a few seconds
-        # before a large ZIP through Drive for Desktop.
-        if not artifact.is_file():
-            return None
-        try:
-            if self.protocol.sha256(artifact).casefold() != expected_sha:
+
+        # The small signed/approved manifest is sufficient to request an update.
+        # The detached helper always constructs the GitHub URL from the fixed repo
+        # and verifies this SHA. If Drive has already synced the exact overlay we use
+        # it; otherwise the helper safely downloads the same release from GitHub.
+        source = "drive-release-manifest-github-fallback"
+        if artifact.is_file():
+            try:
+                if self.protocol.sha256(artifact).casefold() != expected_sha:
+                    # A partially synced Drive ZIP must never win the helper race.
+                    return None
+                source = "drive-release-manifest"
+            except OSError:
                 return None
-        except OSError:
-            return None
+
         request = self.protocol.validate_request({
             "request_id": str(data.get("request_id") or f"manifest-{target.replace('.', '-')}")[:96],
             "target_version": target,
             "sha256": str(data.get("sha256") or "").strip(),
             "created_at": str(data.get("created_at") or ""),
-            "source": "drive-release-manifest",
+            "source": source,
         })
         if self.protocol.request_already_terminal(request):
             return None
@@ -65,6 +84,10 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             "source": request.source,
         })
         self.protocol.write_state("REQUESTED", request=request, detail="approved Drive release_manifest.json")
+        event(
+            "update", "approved release manifest accepted",
+            target_version=request.target_version, request_id=request.request_id, source=request.source,
+        )
         return request
 
     def poll(self) -> None:
@@ -72,6 +95,7 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
         if self._closed or self._inflight:
             return
         try:
+            self._refresh_mirror()
             request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
             if request is None:
                 request = self._manifest_request()

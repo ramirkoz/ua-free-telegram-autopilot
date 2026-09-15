@@ -9,7 +9,7 @@ from ..instance_lock import AlreadyRunning, InstanceLock
 from ..paths import data_dir
 from . import V2_VERSION
 from .loghub import LogHub, event
-from .media_recovery import MediaRecoveryRuntimeEngine as RuntimeEngine
+from .guarded_runtime import GuardedRuntimeEngine as RuntimeEngine
 from .media_recovery import MediaRecoveryStore as HardenedV2Store
 from .strict_ingest import StrictIngestService
 from .production_ui import ProductionMainWindow as MainWindow
