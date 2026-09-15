@@ -110,25 +110,66 @@ class UpdateProtocol:
             and str(previous.get("state") or "") in {"HEALTHY", "ROLLBACK_OK", "REJECTED", "FAILED"}
         )
 
+    def _mirror_request_candidates(self, mirror: Path) -> list[tuple[UpdateRequest, Path, float]]:
+        """Read every synced request variant and keep only valid non-terminal ones.
+
+        Google Drive can preserve two cloud files with the same display name and the
+        desktop client may materialize one of them as ``update_request (1).json`` or
+        another suffix.  The updater must not depend on whichever duplicate wins the
+        filename lottery.  Validation still applies to every candidate.
+        """
+        candidates: list[tuple[UpdateRequest, Path, float]] = []
+        try:
+            paths = sorted(mirror.glob("update_request*.json"), key=lambda item: item.name.casefold())
+        except OSError:
+            return candidates
+        for source in paths:
+            if not source.is_file():
+                continue
+            try:
+                request = self.load_request(source)
+            except ValueError as exc:
+                event("update", "ignored invalid mirror update request", level=30, path=str(source), detail=str(exc)[:500])
+                continue
+            if request is None or self.request_already_terminal(request):
+                continue
+            try:
+                mtime = float(source.stat().st_mtime)
+            except OSError:
+                mtime = 0.0
+            candidates.append((request, source, mtime))
+        return candidates
+
     def accept_mirror_request(self, mirror_dir: str) -> UpdateRequest | None:
         raw = str(mirror_dir or "").strip()
         if not raw:
             return None
         mirror = Path(raw)
-        source = mirror / "update_request.json"
-        if not source.is_file():
+        candidates = self._mirror_request_candidates(mirror)
+        if not candidates:
             return None
-        request = self.load_request(source)
-        if request is None:
-            return None
+
+        # Highest target version wins.  For equal targets prefer the newest
+        # created_at/mtime, then the canonical filename.  Thus a stale RC34 exact
+        # file can never hide a newer RC39 duplicate synced under another suffix.
+        request, source, _mtime = max(
+            candidates,
+            key=lambda item: (
+                _rc_number(item[0].target_version),
+                str(item[0].created_at or ""),
+                float(item[2]),
+                1 if item[1].name.casefold() == "update_request.json" else 0,
+            ),
+        )
         with self._lock:
             current = self.load_request()
             if current and current.request_id == request.request_id:
                 return current
-            if self.request_already_terminal(request):
-                return None
             self._atomic_json(self.request_path, asdict(request))
-            self.write_state("REQUESTED", request=request)
+            detail = f"mirror={source.name}"
+            self.write_state("REQUESTED", request=request, detail=detail)
+            if source.name.casefold() != "update_request.json":
+                event("update", "accepted noncanonical Drive request duplicate", target_version=request.target_version, path=str(source))
         return request
 
     def mirror_status(self, mirror_dir: str) -> None:
