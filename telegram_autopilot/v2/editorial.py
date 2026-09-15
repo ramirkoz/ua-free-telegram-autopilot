@@ -243,7 +243,8 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 5600)}
-Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."]}}"""
+Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
+Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false}}"""
 
         def parse_fit(raw: str):
             obj = _parse_json(raw)
@@ -264,7 +265,14 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             )
         if fit["decision"] == "reject":
             return EditorialOutcome(Decision.REJECT, reason=_clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
-        value = self._value_gate(article)
+        value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
+        if fit_result.provider == "local" and all(key in fit for key in value_keys):
+            value = {key: max(0, min(100, int(float(fit.get(key, 0) or 0)))) for key in value_keys}
+            value["curiosity_only"] = bool(fit.get("curiosity_only", False))
+            value["reason"] = _clean(fit.get("reason"), 420)
+            event("ai", "CPU local fit/value combined", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
+        else:
+            value = self._value_gate(article)
         allowed, code, value_score = self._value_allowed(value, score)
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -339,7 +347,13 @@ SOURCE:
             article, result.text, min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=body_hard_max, required_context=source_context,
         )
-        final = self._final_edit(channel, article, draft, min_chars=effective_min, max_chars=effective_max)
+        if result.provider == "local":
+            # On the CPU-only fallback the validated writer draft is already safe.
+            # A second 4B local rewrite doubles latency for little editorial gain.
+            final = draft
+            event("ai", "CPU local final-edit pass skipped", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
+        else:
+            final = self._final_edit(channel, article, draft, min_chars=effective_min, max_chars=effective_max)
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
     def _final_edit(self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int) -> str:
