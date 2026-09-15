@@ -4,11 +4,16 @@ import json
 from pathlib import Path
 
 from .loghub import event
+from .safe_update_protocol import SafeUpdateProtocol
 from .update_coordinator import UpdateCoordinator
 
 
 class AdvancedUpdateCoordinator(UpdateCoordinator):
     """Production coordinator for approved Drive manifests and deterministic updates."""
+
+    def __init__(self, app, store, runtime) -> None:
+        super().__init__(app, store, runtime)
+        self.protocol = SafeUpdateProtocol()
 
     def _refresh_mirror(self) -> None:
         ensure = getattr(self.supervisor, "ensure_live_mirror", None)
