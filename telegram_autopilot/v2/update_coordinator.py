@@ -9,11 +9,13 @@ from .update_protocol import UpdateProtocol, UpdateRequest, checkpoint_database
 
 
 class UpdateCoordinator:
-    """Bridge the agent file protocol to a graceful V2 shutdown.
+    """Bridge a validated remote request to the detached update transaction.
 
-    The coordinator deliberately contains no download/install logic. It only watches
-    for a validated request, quiesces the live application, flushes and backs up the
-    database, starts the detached deterministic updater, then closes the GUI.
+    The live application deliberately does *not* wait for workers/collectors to
+    quiesce before launching the updater.  A blocked HTTP request must never be
+    able to veto an approved release.  The coordinator creates a consistent DB
+    backup while the application is still healthy, starts the detached helper,
+    and leaves ownership of shutdown/apply/verify/rollback to that helper.
     """
 
     def __init__(self, app: Any, store: Any, runtime: Any) -> None:
@@ -87,62 +89,76 @@ class UpdateCoordinator:
         if self._inflight:
             return
         self._inflight = True
-        was_running = bool(getattr(self.app, "_running", False))
         try:
-            self.app.status.set(f"Готую безпечне оновлення до {request.target_version}…")
+            self.app.status.set(f"Перевіряю та готую оновлення до {request.target_version}…")
         except Exception:
             pass
-        event("update", "graceful update requested", target_version=request.target_version, request_id=request.request_id)
+        event(
+            "update", "external update transaction requested",
+            target_version=request.target_version, request_id=request.request_id,
+        )
 
         def work() -> None:
-            helper_started = False
+            helper = None
             try:
-                self.supervisor.set_expected_running(False)
-                self.protocol.write_state("QUIESCING", request=request)
-                self.protocol.mirror_status(self.supervisor.config.mirror_dir)
-                self.feedback_runtime.stop()
-                if was_running:
-                    self.runtime.stop(timeout=180.0)
-                    self.app._running = False
-                health = self.runtime.health_snapshot()
-                if int(health.get("live_workers") or 0) or int(health.get("live_collectors") or 0):
-                    raise RuntimeError("UPDATE_QUIESCE_TIMEOUT")
-                checkpoint = checkpoint_database(self.store)
+                # SQLite backup() is a consistent snapshot even while the runtime is
+                # processing jobs.  WAL checkpoint is useful housekeeping but must
+                # not become another way for a busy worker to block an update.
+                checkpoint = "wal_checkpoint=not_required"
+                try:
+                    checkpoint = checkpoint_database(self.store)
+                except Exception as exc:
+                    checkpoint = f"wal_checkpoint_warning={type(exc).__name__}: {exc}"
+
+                self.protocol.write_state("PREPARING_TRANSACTION", request=request, detail=checkpoint)
                 db_backup = self.protocol.backup_database(self.store, request)
                 self.protocol.write_ready(
                     request,
                     pid=os.getpid(),
-                    detail=f"{checkpoint}; db_backup={db_backup}",
+                    detail=f"{checkpoint}; db_backup={db_backup}; detached_runner_owns_shutdown=true",
                 )
                 self.protocol.clear_health_marker()
                 self.protocol.mirror_status(self.supervisor.config.mirror_dir)
-                self.protocol.launch_helper(request, parent_pid=os.getpid())
-                helper_started = True
-                event("update", "external updater launched", target_version=request.target_version, request_id=request.request_id)
-                self.app.after(0, self._close_for_update)
+
+                # Start the updater while this process is still known-good.  The
+                # helper performs download/SHA/stage validation first.  Only then
+                # may it terminate this parent process, and it never kills its own
+                # detached process tree.
+                helper = self.protocol.launch_helper(request, parent_pid=os.getpid())
+                event(
+                    "update", "detached transaction runner launched",
+                    target_version=request.target_version,
+                    request_id=request.request_id,
+                    helper_pid=int(getattr(helper, "pid", 0) or 0),
+                )
+
+                # Do not close the GUI here.  If preflight fails the current RC must
+                # keep running.  On a valid package the helper itself terminates this
+                # exact parent PID and owns the rest of the transaction.
+                exit_code = helper.wait()
+                self.protocol.mirror_status(self.supervisor.config.mirror_dir)
+                # Reaching this line means the parent survived the helper.  A
+                # successful installation would have terminated this process.
+                raise RuntimeError(f"UPDATE_RUNNER_EXITED_WITH_PARENT_ALIVE code={exit_code}")
             except Exception as exc:
                 event(
-                    "update", "graceful update preparation failed", level=40,
+                    "update", "detached update preparation/runner failed", level=40,
                     target_version=request.target_version, detail=str(exc)[:1200],
                 )
-                self.protocol.write_result(
-                    "FAILED", request=request,
-                    detail=f"PREPARE_FAILED: {type(exc).__name__}: {exc}",
-                )
+                # The helper writes the authoritative failure/rollback result when
+                # it started successfully.  Only synthesize PREPARE_FAILED if there
+                # is no terminal helper result yet.
+                terminal = False
+                try:
+                    terminal = self.protocol.request_already_terminal(request)
+                except Exception:
+                    terminal = False
+                if not terminal:
+                    self.protocol.write_result(
+                        "FAILED", request=request,
+                        detail=f"PREPARE_FAILED: {type(exc).__name__}: {exc}",
+                    )
                 self.protocol.mirror_status(self.supervisor.config.mirror_dir)
-                if not helper_started:
-                    try:
-                        if was_running:
-                            self.runtime.start()
-                            self.app._running = True
-                            self.supervisor.set_expected_running(True)
-                        if bool(getattr(self.app, "_feedback_ready", False)):
-                            self.feedback_runtime.start()
-                    except Exception as restart_exc:
-                        event(
-                            "update", "runtime restart after failed update preparation failed",
-                            level=40, detail=str(restart_exc)[:1000],
-                        )
                 self._inflight = False
                 message = f"Оновлення не застосовано: {exc}"
                 try:
@@ -150,7 +166,7 @@ class UpdateCoordinator:
                 except Exception:
                     pass
 
-        threading.Thread(target=work, daemon=True, name="V2-Graceful-Updater").start()
+        threading.Thread(target=work, daemon=True, name="V2-Update-Transaction-Handoff").start()
 
     def _show_failure(self, message: str) -> None:
         try:
@@ -160,6 +176,11 @@ class UpdateCoordinator:
         self._schedule(10000)
 
     def _close_for_update(self) -> None:
+        """Compatibility hook retained for older callers.
+
+        RC37 does not call this from the coordinator.  Shutdown is owned by the
+        detached updater after package preflight succeeds.
+        """
         self.stop()
         try:
             refresh_id = getattr(self.app, "_refresh_after_id", None)
