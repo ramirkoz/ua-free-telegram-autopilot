@@ -284,13 +284,22 @@ class V2Store:
         done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         if done and str(done[0] or "") == "1":
             return
-        con.execute(
-            """UPDATE channels SET source_attribution_mode=?
-               WHERE channel_mode='monitoring'
-                 AND source_attribution_mode='standard'
-                 AND instr(lower(name),'громад')>0""",
-            (str(SourceAttributionMode.NAMED_SOURCE),),
-        )
+        # SQLite lower() is ASCII-only by default, so do the one-time legacy
+        # channel-name match in Python where Unicode casefolding is deterministic.
+        rows = con.execute(
+            "SELECT id,name,channel_mode,source_attribution_mode FROM channels"
+        ).fetchall()
+        for row in rows:
+            if str(row["channel_mode"] or "").casefold() != "monitoring":
+                continue
+            if str(row["source_attribution_mode"] or "standard") != str(SourceAttributionMode.STANDARD):
+                continue
+            if "громад" not in str(row["name"] or "").casefold():
+                continue
+            con.execute(
+                "UPDATE channels SET source_attribution_mode=? WHERE id=?",
+                (str(SourceAttributionMode.NAMED_SOURCE), int(row["id"])),
+            )
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, "1"),
