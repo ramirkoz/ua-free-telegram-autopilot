@@ -33,11 +33,12 @@ def test_local_call_uses_cpu_safe_writer_budget(monkeypatch) -> None:
     text, model, _label = gateway._call_slot(slot, cfg, "x" * 9000, max_output_tokens=1100, timeout_seconds=30)
     assert text == "готовий текст"
     assert model == "qwen3:4b"
-    assert captured["max_output_tokens"] == 768
-    assert captured["timeout_seconds"] == 300
+    assert captured["max_output_tokens"] == 320
+    assert captured["timeout_seconds"] == 240
+    assert len(captured["prompt"]) <= 5200
 
 
-def test_local_call_uses_180_seconds_for_selection_json(monkeypatch) -> None:
+def test_local_call_caps_selection_json_for_cpu_only_notebook(monkeypatch) -> None:
     gateway = _gateway()
     cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
     slot = SimpleNamespace(provider="local", model="local-model", label="local")
@@ -47,8 +48,9 @@ def test_local_call_uses_180_seconds_for_selection_json(monkeypatch) -> None:
         lambda **kwargs: (captured.update(kwargs) or "{}", SimpleNamespace(model="qwen3:4b", label="qwen3:4b / Ollama")),
     )
     gateway._call_slot(slot, cfg, "x" * 5000, max_output_tokens=340, timeout_seconds=25)
-    assert captured["max_output_tokens"] == 340
-    assert captured["timeout_seconds"] == 180
+    assert captured["max_output_tokens"] == 320
+    assert captured["timeout_seconds"] == 240
+    assert len(captured["prompt"]) <= 5200
 
 
 def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:
