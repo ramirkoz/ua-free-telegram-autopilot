@@ -27,9 +27,9 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
 
     def __init__(self, store, runtime, logs_dir):
         super().__init__(store, runtime, logs_dir)
-        # ProductionSupervisorService creates the legacy AgentFeed during its
-        # constructor. It performs no work until observe() is called, but clear the
-        # reference explicitly so RC40 cannot accidentally revive it.
+        # The inherited constructor creates the historical feed object. It performs
+        # no work unless called by the inherited tick; clear the reference so RC40
+        # cannot accidentally revive the remote maintenance path.
         self.agent = None
         self.local_reporter = LocalTelegramReporter(root=self.root)
         self._local_report_result: dict[str, Any] = {"status": "starting"}
@@ -72,9 +72,8 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         ]
 
     def _loop(self) -> None:
-        # This intentionally bypasses AdvancedSupervisorService._loop(), whose
-        # final step is self.agent.observe(...). That single call is what creates
-        # remote review requests, journals and agent-report Telegram delivery.
+        # Deliberately bypass the inherited remote maintenance tick. This loop only
+        # writes local state, evaluates local health and invokes the local reporter.
         while not self._stop.is_set():
             started = time.monotonic()
             try:
@@ -92,7 +91,6 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
                         }
                         event("supervisor", "local Telegram report failed", level=30, detail=str(exc)[:800])
 
-                    # Persist the local reporter result in the local status file.
                     snapshot["local_telegram_report"] = dict(self._local_report_result)
                     snapshot["supervision"]["telegram"] = self.local_reporter.status()
                     self._atomic_json(self.status_path, snapshot)
