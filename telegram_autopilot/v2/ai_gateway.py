@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,60 @@ def _until(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=int(seconds))).astimezone().isoformat(timespec="seconds")
 
 
+def _codex_retry_after_seconds(message: str) -> int:
+    """Extract the account reset time emitted by the Codex CLI.
+
+    Current Codex quota errors use phrases such as
+    ``try again at Sep 19th, 2026 3:01 PM``.  Treat that timestamp as local time,
+    which is how the CLI renders it for the signed-in Windows user, and add a tiny
+    safety margin so the first retry does not land on the reset boundary.
+    """
+    text = str(message or "")
+    match = re.search(
+        r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
+        r"([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
+        r"(\d{1,2}):(\d{2})\s*(AM|PM)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return 0
+    month, day, year, hour, minute, ampm = match.groups()
+    raw = f"{month} {day} {year} {hour}:{minute} {ampm.upper()}"
+    parsed = None
+    for fmt in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            break
+        except ValueError:
+            continue
+    if parsed is None:
+        return 0
+    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    parsed = parsed.replace(tzinfo=local_tz)
+    delta = int((parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) + 90
+    if delta <= 0:
+        return 0
+    return min(14 * 24 * 3600, delta)
+
+
+def _compact_local_prompt(prompt: str, *, limit: int = 5200) -> str:
+    """Bound local context for the 24 GB CPU-only notebook.
+
+    Cloud prompts can be very large.  Feeding the same context to a 4B model on CPU
+    can spend minutes only evaluating the prompt.  Preserve instructions from the
+    front and evidence/output constraints from the tail while keeping the local
+    fallback inside a ~2k-token working window.
+    """
+    text = str(prompt or "").strip()
+    if len(text) <= limit:
+        return text
+    marker = "\n\n[... локальний CPU-контекст скорочено ...]\n\n"
+    head = 1900
+    tail = max(1200, limit - head - len(marker))
+    return text[:head].rstrip() + marker + text[-tail:].lstrip()
+
+
 def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     """Return (state, cooldown_seconds, scope).
 
@@ -62,9 +117,6 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     - provider: only credentials/configuration that make every model unusable;
     - model: quota/network/timeout/model failures are isolated to one model;
     - task: request size/content-specific failures never poison health.
-
-    This mirrors the working Content Tool router and prevents one dead NVIDIA/Groq
-    model from hiding another healthy model behind a provider-wide cooldown.
     """
     kind = str(getattr(exc, "kind", "") or "").casefold()
     text = str(exc).casefold()
@@ -76,11 +128,11 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     if kind == "request_too_large" or any(x in text for x in ("request too large", "context length", "context_length")):
         return ProviderState.MODEL_UNSUPPORTED, 0, "task"
     if kind == "quota" or any(x in text for x in ("quota", "usage limit", "rate limit", "too many requests", "429", "ліміт", "credits exhausted")):
-        # Account usage limits are long-lived; ordinary 429/rate limits are shorter.
-        # Keep the scope model-level so a sibling model/provider can still work.
         retry_after = int(getattr(exc, "retry_after", 0) or 0)
         if "usage limit" in text or "credits exhausted" in text:
-            return ProviderState.QUOTA, min(24 * 3600, max(6 * 3600, retry_after or 0)), "model"
+            # Codex can return a reset several days away.  Do not wake it every 24h
+            # and burn another pointless account probe before the advertised reset.
+            return ProviderState.QUOTA, min(14 * 24 * 3600, max(6 * 3600, retry_after or 24 * 3600)), "model"
         return ProviderState.QUOTA, min(6 * 3600, max(300, retry_after or 900)), "model"
     if kind in {"gone", "model"} or any(x in text for x in ("model unsupported", "model_not_found", "модель більше недоступна", "end of life", "no longer available")):
         return ProviderState.MODEL_UNSUPPORTED, 6 * 3600, "model"
@@ -94,16 +146,9 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
 
 
 class AIGateway:
-    """V2 AI router with model-level health and model-level cooldowns.
-
-    Runtime routing uses only the reviewed static allow-list from ``ai_router``.
-    Discovery remains a diagnostics concern and never promotes an unreviewed model
-    into unattended publication.
-    """
+    """V2 AI router with model-level health and model-level cooldowns."""
 
     PROVIDER_ORDER = ("codex", "gemini", "nvidia", "groq", "cloudflare", "local")
-    # Shared across gateway instances: three channel workers must not hammer the
-    # same provider simultaneously when it is slow or rate-limited.
     _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}
 
     def __init__(self, store: V2Store):
@@ -137,8 +182,6 @@ class AIGateway:
         return False
 
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
-        # Global reviewed priority is intentional: Codex, Gemini, NVIDIA Ultra,
-        # Groq GPT-OSS, NVIDIA Super, Groq Qwen, Cloudflare..., local.
         slots = list(legacy_ai._runtime_model_slots(cfg))
         return sorted(slots, key=lambda item: int(item.priority))
 
@@ -147,7 +190,6 @@ class AIGateway:
 
     def _provider_blocked(self, provider: str) -> bool:
         current = self._health_map().get(provider)
-        # Old RC11/12 NETWORK_DOWN/QUOTA rows must NOT suppress the whole provider.
         return bool(
             current
             and current.state in {ProviderState.AUTH_ERROR, ProviderState.CONFIG_ERROR}
@@ -170,6 +212,8 @@ class AIGateway:
 
     def _mark_model_failure(self, provider: str, model: str, exc: Exception) -> tuple[ProviderState, str]:
         state, seconds, scope = _failure_meta(exc)
+        if provider == "local" and state == ProviderState.TIMEOUT:
+            seconds = max(seconds, 300)
         if scope == "task":
             event("ai", "model task-specific failure", provider=provider, model=model, state=str(state), detail=str(exc)[:600])
             return state, scope
@@ -212,8 +256,6 @@ class AIGateway:
             return current
 
         current = self._health_map().get(provider, ProviderHealth(provider=provider))
-        # A real provider-wide credential/configuration failure remains authoritative
-        # until its short cooldown expires or a manual/startup probe succeeds.
         if current.state in {ProviderState.AUTH_ERROR, ProviderState.CONFIG_ERROR} and _cooldown_active(current.cooldown_until):
             return current
 
@@ -246,8 +288,8 @@ class AIGateway:
             current.consecutive_failures = sum(item.consecutive_failures for item in rows)
             current.success_count = sum(item.success_count for item in rows)
             current.failure_count = sum(item.failure_count for item in rows)
-            # This is an aggregate display field, NOT a provider-wide runtime block.
-            current.cooldown_until = ""
+            active_cooldowns = [item.cooldown_until for item in rows if _cooldown_active(item.cooldown_until)]
+            current.cooldown_until = min(active_cooldowns) if active_cooldowns else ""
             current.updated_at = now_iso()
             self.store.set_provider_health(current)
             return current
@@ -262,8 +304,6 @@ class AIGateway:
 
     def _mark_success(self, provider: str, slot_model: str, runtime_model: str, detail: str = "") -> None:
         self._mark_model_success(provider, slot_model, detail or f"success via {runtime_model}")
-        # Successful request proves provider accessibility even if an old AUTH/CONFIG
-        # cooldown existed; clear that stale provider-wide block immediately.
         current = self._health_map().get(provider, ProviderHealth(provider=provider))
         restored = current.state != ProviderState.HEALTHY
         current.state = ProviderState.HEALTHY
@@ -284,28 +324,28 @@ class AIGateway:
             except CodexEngineError as exc:
                 low = str(exc).casefold()
                 kind = "quota" if any(x in low for x in ("usage limit", "quota", "rate limit", "429", "credits")) else "temporary"
-                raise legacy_ai.AIModelError(str(exc), kind=kind) from exc
+                retry_after = _codex_retry_after_seconds(str(exc)) if kind == "quota" else 0
+                raise legacy_ai.AIModelError(str(exc), kind=kind, retry_after=retry_after or None) from exc
         if slot.provider == "gemini":
             return str(legacy_ai._gemini(slot, cfg, prompt, max_output_tokens=max_output_tokens, timeout_seconds=timeout_seconds)).strip(), slot.model, slot.label
         if slot.provider in {"nvidia", "groq", "cloudflare"}:
             return str(legacy_ai._openai(slot, cfg, prompt, max_output_tokens=max_output_tokens, timeout_seconds=timeout_seconds)).strip(), slot.model, slot.label
         if slot.provider == "local":
             try:
-                # Production notebook: 24 GB RAM, CPU-only. A cold 4B Ollama model
-                # already needs ~30 s for a tiny probe, so cloud-sized 18-30 s
-                # deadlines make a healthy local fallback look dead. Keep the local
-                # work bounded, but give it realistic CPU time and output budgets.
-                local_budget = max(48, min(768, int(max_output_tokens)))
-                prompt_chars = len(str(prompt or ""))
-                if local_budget <= 128 and prompt_chars <= 1500:
+                local_prompt = _compact_local_prompt(prompt)
+                local_budget = max(48, min(320, int(max_output_tokens)))
+                if local_budget <= 96 and len(local_prompt) <= 1600:
                     local_timeout = 90
-                elif local_budget <= 420 and prompt_chars <= 7000:
-                    local_timeout = 180
                 else:
-                    local_timeout = 300
+                    local_timeout = 240
                 text, target = generate_local_text(
-                    preferred_model=cfg.local_model, manual_base_url=cfg.local_base_url, manual_model=cfg.local_model,
-                    prompt=prompt, max_output_tokens=local_budget, temperature=0.0, timeout_seconds=local_timeout,
+                    preferred_model=cfg.local_model,
+                    manual_base_url=cfg.local_base_url,
+                    manual_model=cfg.local_model,
+                    prompt=local_prompt,
+                    max_output_tokens=local_budget,
+                    temperature=0.0,
+                    timeout_seconds=local_timeout,
                 )
                 return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label)
             except LocalAIRuntimeError as exc:
@@ -342,9 +382,6 @@ class AIGateway:
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
-            # The local fallback is intentionally single-file on the CPU-only laptop.
-            # Waiting here is better than having the other channel workers declare
-            # AI_DOWN every two seconds while Ollama is legitimately generating.
             if provider == "local":
                 lock.acquire()
                 acquired = True
@@ -383,9 +420,6 @@ class AIGateway:
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
                 if scope == "provider":
                     provider_suppressed.add(provider)
-                # Every model-level failure falls through to the next reviewed slot.
-                # Because global priorities are interleaved, Groq can be tried before
-                # NVIDIA's secondary model, and NVIDIA Super still remains reachable.
                 continue
 
         if configured_providers:
@@ -411,6 +445,10 @@ class AIGateway:
         success = False
         provider_scope_failure = False
         for slot in self._provider_slots(provider, cfg):
+            # Respect quota/model cooldowns during startup/manual health checks too.
+            # A probe is still a paid/limited request and must not defeat routing.
+            if self._model_blocked(provider, slot.model):
+                continue
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
             acquired = lock.acquire(timeout=2.0)
@@ -419,8 +457,6 @@ class AIGateway:
                 continue
             try:
                 try:
-                    # 32 tokens is too small for some reasoning models which can
-                    # consume the entire budget before emitting visible text.
                     probe_timeout = 90 if provider == "local" else 18
                     probe_budget = 48 if provider == "local" else 128
                     text, runtime_model, _label = self._call_slot(
@@ -453,12 +489,6 @@ class AIGateway:
         return summary
 
     def probe_all(self) -> list[ProviderHealth]:
-        """Live-probe configured providers concurrently, models sequentially per provider.
-
-        One failed sibling model no longer marks its provider dead. Provider probes run
-        in parallel so startup/manual health checking is bounded by the slowest provider
-        rather than the sum of six provider timeouts.
-        """
         cfg = load_secrets()
         by_provider: dict[str, ProviderHealth] = {}
         with ThreadPoolExecutor(max_workers=len(self.PROVIDER_ORDER), thread_name_prefix="ai-probe") as pool:
