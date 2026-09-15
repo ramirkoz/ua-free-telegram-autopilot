@@ -98,4 +98,6 @@ def test_manifest_allows_github_fallback_and_rejects_bad_drive_hash(tmp_path: Pa
     (mirror / manifest["artifact_filename"]).write_bytes(payload)
     request = coordinator._manifest_request()
     assert request is not None
-    assert request.source == "drive-release-manifest"
+    # The already accepted request keeps its original provenance. The detached
+    # SHA-aware helper still prefers the now-complete Drive ZIP at execution time.
+    assert request.source == "drive-release-manifest-github-fallback"
