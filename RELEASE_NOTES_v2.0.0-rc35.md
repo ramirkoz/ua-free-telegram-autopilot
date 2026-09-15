@@ -20,3 +20,7 @@ RC35 removes the RC34 runtime heuristic that inferred community behavior from an
 - No destructive database migration.
 - Existing articles, sources, publication history, feedback and credentials are preserved.
 - RC34 imports remain import-safe through a compatibility shim, but no name-based runtime detection remains.
+
+### Operator check after update
+
+Open the existing communities channel once and verify `Формат посилання на джерело = Іменоване`. New monitoring channels start with the standard source footer unless this setting is changed explicitly.
