@@ -9,7 +9,7 @@ from telegram_autopilot.v2.media_pipeline import build_publication_media_bundle
 
 def _article_with_three_images() -> dict[str, str]:
     return {
-        "media_json": '["image:https://example.com/a.jpg", "image:https://example.com/b.jpg", "image:https://example.com/c.jpg"]',
+        "media_json": '["https://example.com/a.jpg", "https://example.com/b.jpg", "https://example.com/c.jpg"]',
         "article_layout_json": "{}",
         "title": "Test article",
         "raw_text": "Test raw text",
