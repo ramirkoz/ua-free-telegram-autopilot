@@ -209,7 +209,7 @@ class EditorialEngine:
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:\n{inclusion or 'Не задано: inclusion виконаний.'}\n\nEXCLUSION RULES:\n{exclusion or 'Не задано.'}
 Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; сумнів -> publish.
-SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 5200)}
+SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"included":true,"excluded":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
@@ -242,7 +242,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Перевір лише відповідність SOURCE політиці каналу. Не оцінюй broad appeal або wow.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
-SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 5600)}
+SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
 Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false}}"""
 
@@ -253,7 +253,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
                 raise ValueError("invalid decision")
             return obj
 
-        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=340, timeout_seconds=25)
+        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=210, timeout_seconds=25)
         fit = parse_fit(fit_result.text)
         raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
         score = max(0, min(100, raw_score + int(learning.fit_adjustment)))
@@ -280,7 +280,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
-SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 5800)}
+SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
@@ -289,7 +289,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
                 obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
             return obj
 
-        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=360, timeout_seconds=25).text)
+        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
 
     @staticmethod
     def _value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
@@ -348,8 +348,6 @@ SOURCE:
             hard_max_chars=body_hard_max, required_context=source_context,
         )
         if result.provider == "local":
-            # On the CPU-only fallback the validated writer draft is already safe.
-            # A second 4B local rewrite doubles latency for little editorial gain.
             final = draft
             event("ai", "CPU local final-edit pass skipped", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
         else:
