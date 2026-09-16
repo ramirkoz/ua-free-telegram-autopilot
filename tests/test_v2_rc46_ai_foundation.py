@@ -6,8 +6,10 @@ from telegram_autopilot.v2.ai_gateway import PRODUCTION_SLOTS, _failure_meta
 from telegram_autopilot.v2.domain import ProviderState
 from telegram_autopilot.v2.provider_api import (
     ProviderAPIError,
+    _classify_http,
     _extract_openai_text,
     _request_json,
+    gemini_generate,
     openai_compatible_chat,
 )
 
@@ -71,3 +73,65 @@ def test_network_failure_remains_real_network_failure() -> None:
     assert state == ProviderState.NETWORK_DOWN
     assert cooldown >= 60
     assert scope == "model"
+
+
+def test_bare_429_is_transient_not_hard_quota() -> None:
+    exc = _classify_http(429, '{"error":{"message":"rate limit reached"}}', {"retry-after": "2"})
+    assert exc.kind == "temporary"
+    assert exc.retry_after == 2
+
+
+def test_explicit_daily_exhaustion_is_still_quota() -> None:
+    exc = _classify_http(429, '{"error":{"message":"requests per day quota reached"}}', {})
+    assert exc.kind == "quota"
+
+
+def test_groq_falls_back_to_20b_after_transient_120b_failure(monkeypatch) -> None:
+    attempted = []
+
+    def fake_request(url, **kwargs):
+        attempted.append(kwargs["payload"]["model"])
+        if kwargs["payload"]["model"] == "openai/gpt-oss-120b":
+            raise ProviderAPIError("busy", kind="temporary", status=429, retry_after=2)
+        return 200, {}, {
+            "model": "openai/gpt-oss-20b",
+            "choices": [{"message": {"content": "OK"}}],
+        }
+
+    monkeypatch.setattr("telegram_autopilot.v2.provider_api._request_json", fake_request)
+    reply = openai_compatible_chat(
+        "groq",
+        model="openai/gpt-oss-120b",
+        api_key="secret",
+        prompt="Reply OK",
+        max_output_tokens=96,
+        timeout_seconds=20,
+    )
+    assert attempted == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    assert reply.model == "openai/gpt-oss-20b"
+    assert reply.text == "OK"
+
+
+def test_gemini_falls_back_to_flash_lite_after_transient_failure(monkeypatch) -> None:
+    attempted = []
+
+    def fake_request(url, **kwargs):
+        attempted.append(url)
+        if "gemini-3.5-flash:" in url:
+            raise ProviderAPIError("busy", kind="temporary", status=429, retry_after=2)
+        return 200, {}, {
+            "candidates": [{"content": {"parts": [{"text": "OK"}]}}],
+        }
+
+    monkeypatch.setattr("telegram_autopilot.v2.provider_api._request_json", fake_request)
+    reply = gemini_generate(
+        model="gemini-3.5-flash",
+        api_key="secret",
+        prompt="Reply OK",
+        max_output_tokens=96,
+        timeout_seconds=20,
+    )
+    assert any("gemini-3.5-flash:" in url for url in attempted)
+    assert any("gemini-3.5-flash-lite:" in url for url in attempted)
+    assert reply.model == "gemini-3.5-flash-lite"
+    assert reply.text == "OK"
