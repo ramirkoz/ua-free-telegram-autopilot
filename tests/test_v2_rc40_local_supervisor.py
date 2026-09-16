@@ -6,13 +6,14 @@ from telegram_autopilot.v2.advanced_supervisor import AdvancedSupervisorService
 from telegram_autopilot.v2.local_reporter import LocalTelegramReporter
 from telegram_autopilot.v2.local_supervisor import (
     LocalOnlyProductionSupervisorService,
+    _OUTBOUND_TELEMETRY_FILES,
     _REMOTE_ONLY_INCIDENTS,
 )
 
 
 def test_local_report_is_built_from_local_snapshot_only() -> None:
     snapshot = {
-        "version": "2.0.0-rc40",
+        "version": "2.0.0-rc43",
         "lifecycle_state": "RUNNING",
         "runtime_running": True,
         "live_workers": 3,
@@ -26,7 +27,7 @@ def test_local_report_is_built_from_local_snapshot_only() -> None:
         },
     }
     report = LocalTelegramReporter.build_report(snapshot, [])
-    assert report["version"] == "2.0.0-rc40"
+    assert report["version"] == "2.0.0-rc43"
     assert report["workers_alive"] == 3
     assert report["collectors_alive"] == 3
     assert report["published_60m"] == 3
@@ -49,12 +50,25 @@ def test_local_only_loop_cannot_execute_remote_agent_feed() -> None:
     source = inspect.getsource(LocalOnlyProductionSupervisorService._loop)
     assert "agent.observe" not in source
     assert "local_reporter.observe" in source
+    assert '_mirror_file(self.status_path, "status.json")' in source
 
 
-def test_remote_telemetry_incidents_are_explicitly_suppressed() -> None:
-    assert "SUPERVISOR_MIRROR_MISSING" in _REMOTE_ONLY_INCIDENTS
-    assert "SUPERVISOR_MIRROR_ERROR" in _REMOTE_ONLY_INCIDENTS
-    assert "SUPERVISOR_TELEMETRY_STALE" in _REMOTE_ONLY_INCIDENTS
+def test_rc43_passive_telemetry_allowlist_has_no_agent_or_control_files() -> None:
+    assert _OUTBOUND_TELEMETRY_FILES == frozenset({
+        "status.json",
+        "recent_events.json",
+        "incident.json",
+    })
+    assert not any("agent" in name or "request" in name or "command" in name for name in _OUTBOUND_TELEMETRY_FILES)
+    source = inspect.getsource(LocalOnlyProductionSupervisorService._mirror_file)
+    assert "TelemetryProductionSupervisorService._mirror_file" in source
+    assert "_OUTBOUND_TELEMETRY_FILES" in source
+
+
+def test_passive_telemetry_health_incidents_are_not_suppressed() -> None:
+    assert "SUPERVISOR_MIRROR_MISSING" not in _REMOTE_ONLY_INCIDENTS
+    assert "SUPERVISOR_MIRROR_ERROR" not in _REMOTE_ONLY_INCIDENTS
+    assert "SUPERVISOR_TELEMETRY_STALE" not in _REMOTE_ONLY_INCIDENTS
 
 
 def test_local_reporter_status_declares_no_remote_control(tmp_path) -> None:
