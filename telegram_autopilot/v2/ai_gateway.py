@@ -60,7 +60,7 @@ def _codex_retry_after_seconds(message: str) -> int:
     """Extract the account reset time emitted by the Codex CLI.
 
     Current Codex quota errors use phrases such as
-    ``try again at Sep 19th, 2026 3:01 PM``.  Treat that timestamp as local time,
+    ``try again at Sep 19th, 2026 3:01 PM``. Treat that timestamp as local time,
     which is how the CLI renders it for the signed-in Windows user, and add a tiny
     safety margin so the first retry does not land on the reset boundary.
     """
@@ -96,17 +96,17 @@ def _codex_retry_after_seconds(message: str) -> int:
 def _compact_local_prompt(prompt: str, *, limit: int = 5200) -> str:
     """Bound local context for the 24 GB CPU-only notebook.
 
-    Cloud prompts can be very large.  Feeding the same context to a 4B model on CPU
-    can spend minutes only evaluating the prompt.  Preserve instructions from the
+    Cloud prompts can be very large. Feeding the same context to a 4B model on CPU
+    can spend minutes only evaluating the prompt. Preserve instructions from the
     front and evidence/output constraints from the tail while keeping the local
-    fallback inside a ~2k-token working window.
+    fallback inside a bounded working window.
     """
     text = str(prompt or "").strip()
     if len(text) <= limit:
         return text
     marker = "\n\n[... локальний CPU-контекст скорочено ...]\n\n"
-    head = 1900
-    tail = max(1200, limit - head - len(marker))
+    head = min(1900, max(900, int(limit * 0.58)))
+    tail = max(700, limit - head - len(marker))
     return text[:head].rstrip() + marker + text[-tail:].lstrip()
 
 
@@ -130,8 +130,6 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     if kind == "quota" or any(x in text for x in ("quota", "usage limit", "rate limit", "too many requests", "429", "ліміт", "credits exhausted")):
         retry_after = int(getattr(exc, "retry_after", 0) or 0)
         if "usage limit" in text or "credits exhausted" in text:
-            # Codex can return a reset several days away.  Do not wake it every 24h
-            # and burn another pointless account probe before the advertised reset.
             return ProviderState.QUOTA, min(14 * 24 * 3600, max(6 * 3600, retry_after or 24 * 3600)), "model"
         return ProviderState.QUOTA, min(6 * 3600, max(300, retry_after or 900)), "model"
     if kind in {"gone", "model"} or any(x in text for x in ("model unsupported", "model_not_found", "модель більше недоступна", "end of life", "no longer available")):
@@ -149,6 +147,7 @@ class AIGateway:
     """V2 AI router with model-level health and model-level cooldowns."""
 
     PROVIDER_ORDER = ("codex", "gemini", "nvidia", "groq", "cloudflare", "local")
+    LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}
 
     def __init__(self, store: V2Store):
@@ -212,16 +211,20 @@ class AIGateway:
 
     def _mark_model_failure(self, provider: str, model: str, exc: Exception) -> tuple[ProviderState, str]:
         state, seconds, scope = _failure_meta(exc)
-        if provider == "local" and state == ProviderState.TIMEOUT:
-            seconds = max(seconds, 300)
         if scope == "task":
             event("ai", "model task-specific failure", provider=provider, model=model, state=str(state), detail=str(exc)[:600])
             return state, scope
 
         current = self._model_health_map().get((provider, model), AIModelHealth(provider=provider, model=model))
+        next_failure = int(current.consecutive_failures or 0) + 1
+        if provider == "local" and state == ProviderState.TIMEOUT:
+            seconds = max(seconds, 1800)
+        elif state == ProviderState.NETWORK_DOWN and next_failure >= 2:
+            seconds = max(seconds, min(900, 60 * (2 ** min(4, next_failure - 1))))
+
         current.state = state
         current.detail = str(exc)[:1200]
-        current.consecutive_failures += 1
+        current.consecutive_failures = next_failure
         current.failure_count += 1
         current.cooldown_until = _until(seconds)
         current.updated_at = now_iso()
@@ -243,6 +246,27 @@ class AIGateway:
             detail=str(exc)[:600], cooldown_seconds=seconds,
         )
         return state, scope
+
+    def _mark_local_validation_failure(self, model: str, exc: Exception) -> None:
+        """Circuit-break the CPU fallback after repeated malformed/unsafe answers."""
+        current = self._model_health_map().get(("local", model), AIModelHealth(provider="local", model=model))
+        failures = int(current.consecutive_failures or 0) + 1
+        current.consecutive_failures = failures
+        current.failure_count += 1
+        current.detail = f"local QA rejection: {exc}"[:1200]
+        if failures >= 2:
+            current.state = ProviderState.NETWORK_DOWN
+            current.cooldown_until = _until(1800)
+        else:
+            current.state = ProviderState.HEALTHY
+            current.cooldown_until = ""
+        current.updated_at = now_iso()
+        self.store.set_ai_model_health(current)
+        event(
+            "ai", "CPU local QA circuit breaker", provider="local", model=model,
+            consecutive_failures=failures, cooldown_seconds=1800 if failures >= 2 else 0,
+            detail=str(exc)[:500],
+        )
 
     def _refresh_provider_summary(self, provider: str, cfg) -> ProviderHealth:
         if not self._configured(provider, cfg):
@@ -332,10 +356,13 @@ class AIGateway:
             return str(legacy_ai._openai(slot, cfg, prompt, max_output_tokens=max_output_tokens, timeout_seconds=timeout_seconds)).strip(), slot.model, slot.label
         if slot.provider == "local":
             try:
-                local_prompt = _compact_local_prompt(prompt)
-                local_budget = max(48, min(320, int(max_output_tokens)))
+                requested_budget = int(max_output_tokens)
+                local_prompt = _compact_local_prompt(prompt, limit=3200 if requested_budget <= self.LOCAL_SHORT_TASK_MAX_OUTPUT else 5200)
+                local_budget = max(48, min(320, requested_budget))
                 if local_budget <= 96 and len(local_prompt) <= 1600:
                     local_timeout = 90
+                elif local_budget <= self.LOCAL_SHORT_TASK_MAX_OUTPUT:
+                    local_timeout = 120
                 else:
                     local_timeout = 240
                 text, target = generate_local_text(
@@ -374,6 +401,12 @@ class AIGateway:
             if not self._configured(provider, cfg):
                 continue
             configured_providers.add(provider)
+            if provider == "local" and int(max_output_tokens) > self.LOCAL_SHORT_TASK_MAX_OUTPUT:
+                event(
+                    "ai", "CPU local skipped for long-form task", provider="local", model=slot.model,
+                    requested_output_tokens=int(max_output_tokens), limit=self.LOCAL_SHORT_TASK_MAX_OUTPUT,
+                )
+                continue
             if provider in provider_suppressed or self._provider_blocked(provider):
                 continue
             if self._model_blocked(provider, slot.model):
@@ -406,6 +439,9 @@ class AIGateway:
                     except Exception as exc:
                         validation_failures += 1
                         failures.append(f"{label}: QA: {exc}")
+                        if provider == "local":
+                            self._mark_local_validation_failure(slot.model, exc)
+                            self._refresh_provider_summary(provider, cfg)
                         event("ai", "candidate rejected by QA", provider=provider, model=runtime_model, elapsed=round(time.monotonic() - started, 2), detail=str(exc)[:500])
                         continue
                 self._mark_success(provider, slot.model, runtime_model)
@@ -445,8 +481,6 @@ class AIGateway:
         success = False
         provider_scope_failure = False
         for slot in self._provider_slots(provider, cfg):
-            # Respect quota/model cooldowns during startup/manual health checks too.
-            # A probe is still a paid/limited request and must not defeat routing.
             if self._model_blocked(provider, slot.model):
                 continue
             started = time.monotonic()

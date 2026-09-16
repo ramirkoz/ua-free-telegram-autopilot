@@ -3,7 +3,9 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
-from telegram_autopilot.v2.ai_gateway import AIGateway
+import pytest
+
+from telegram_autopilot.v2.ai_gateway import AIGateway, GatewayExhausted
 from telegram_autopilot.v2.domain import ProviderHealth, ProviderState
 
 
@@ -51,6 +53,46 @@ def test_local_call_caps_selection_json_for_cpu_only_notebook(monkeypatch) -> No
     assert captured["max_output_tokens"] == 320
     assert captured["timeout_seconds"] == 240
     assert len(captured["prompt"]) <= 5200
+
+
+def test_local_short_editorial_gate_is_bounded_to_120_seconds(monkeypatch) -> None:
+    gateway = _gateway()
+    cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
+    slot = SimpleNamespace(provider="local", model="local-model", label="local")
+    captured = {}
+    monkeypatch.setattr(
+        "telegram_autopilot.v2.ai_gateway.generate_local_text",
+        lambda **kwargs: (captured.update(kwargs) or "{}", SimpleNamespace(model="qwen3:4b", label="qwen3:4b / Ollama")),
+    )
+    gateway._call_slot(slot, cfg, "x" * 7000, max_output_tokens=210, timeout_seconds=25)
+    assert captured["max_output_tokens"] == 210
+    assert captured["timeout_seconds"] == 120
+    assert len(captured["prompt"]) <= 3200
+
+
+def test_gateway_does_not_use_local_for_long_form_generation(monkeypatch) -> None:
+    gateway = _gateway()
+    cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
+    slot = SimpleNamespace(provider="local", model="qwen3:4b", label="local", priority=100)
+    monkeypatch.setattr("telegram_autopilot.v2.ai_gateway.load_secrets", lambda: cfg)
+    monkeypatch.setattr(gateway, "_runtime_slots", lambda _cfg: [slot])
+    monkeypatch.setattr(gateway, "_configured", lambda provider, _cfg: provider == "local")
+    monkeypatch.setattr(gateway, "_provider_blocked", lambda provider: False)
+    monkeypatch.setattr(gateway, "_model_blocked", lambda provider, model: False)
+    monkeypatch.setattr(
+        gateway,
+        "_call_slot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("local writer must not be called")),
+    )
+    monkeypatch.setattr(
+        gateway,
+        "_refresh_provider_summary",
+        lambda provider, _cfg: ProviderHealth(provider=provider, state=ProviderState.HEALTHY),
+    )
+    with pytest.raises(GatewayExhausted) as exc:
+        gateway.run("long writer prompt", max_output_tokens=1100, timeout_seconds=30)
+    assert exc.value.provider_outage is True
+    assert exc.value.failures == ()
 
 
 def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:
