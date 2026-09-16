@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from . import ui as base_ui
 from .responsive_ui import ResponsiveMainWindow
-from .local_supervisor import LocalOnlyProductionSupervisorService as ProductionSupervisorService
+from .ready_backlog import ReadyBacklogSupervisor as ProductionSupervisorService
 
 
 class ProductionMainWindow(ResponsiveMainWindow):
@@ -10,7 +10,7 @@ class ProductionMainWindow(ResponsiveMainWindow):
 
     def __init__(self, store, runtime, logs_dir):
         # Initialise the responsive shell fields here, then let the base UI create
-        # the RC40 local-only production supervisor directly and start it once.
+        # the RC44 local-only/outbound-telemetry supervisor directly and start it once.
         self._rc20_closing = False
         self._rc20_runtime_action = False
         self._rc20_last_refresh: dict[str, float] = {}
