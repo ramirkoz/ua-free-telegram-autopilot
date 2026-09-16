@@ -20,6 +20,32 @@ _PHRASE_STOP = {
     "з", "із", "за", "як", "не", "такий", "нова", "новий", "нове",
 }
 
+# RC49: municipal/community sites often republish the same ministry service notice
+# with a different community name, photo and locally rewritten headline. Exact URL,
+# title and phrase matching cannot catch those reliably. The extra lane below removes
+# local-government wrapper vocabulary and compares conservative Ukrainian concept
+# stems. It is deliberately restricted to cross-source community notices.
+_COMMUNITY_MARKERS = (
+    "громад", "міськ", "селищ", "сільськ", "район", "територіальн",
+)
+_COMMUNITY_WRAPPER = {
+    "громад", "громада", "громади", "громаді", "громадою",
+    "міськ", "міська", "міської", "міській", "міською",
+    "селищн", "селищна", "селищної", "сільськ", "сільська", "сільської",
+    "нагад", "нагадує", "розясню", "роз'ясню", "роз’ясню", "повідомл", "повідомляє",
+    "інформ", "інформує", "мешкан", "жител", "уваг", "важлив", "актуальн",
+    "можуть", "можна", "потрібно", "необхідно", "щодо", "порядок", "отриман",
+}
+_UK_SUFFIXES = (
+    "уваннями", "юваннями", "ування", "ювання", "еннями", "аннями", "іннями",
+    "ського", "ському", "ською", "ській", "ських", "ськими", "ський", "ська", "ське", "ські",
+    "ними", "ного", "ному", "ною", "ній", "них", "ний", "на", "не", "ні",
+    "ення", "ання", "іння", "енню", "анню", "інню",
+    "ами", "ями", "ого", "ому", "ими", "ої", "ою", "ові", "еві", "ами", "ями",
+    "ів", "їв", "ах", "ях", "ам", "ям", "ом", "ем", "ою", "ею",
+    "и", "і", "ї", "а", "я", "у", "ю", "е",
+)
+
 
 def _value(row: Any, key: str, default: Any = "") -> Any:
     try:
@@ -54,6 +80,118 @@ def _word_overlap(left: str, right: str) -> tuple[int, float]:
     return len(shared), len(shared) / max(1, min(len(a), len(b)))
 
 
+def _concept_stem(token: str) -> str:
+    value = str(token or "").casefold().strip(".'’-_")
+    if len(value) < 4:
+        return ""
+    for suffix in _UK_SUFFIXES:
+        if value.endswith(suffix) and len(value) - len(suffix) >= 4:
+            value = value[:-len(suffix)]
+            break
+    return value
+
+
+def _concept_sequence(value: str) -> list[str]:
+    out: list[str] = []
+    for token in _phrase_tokens(value):
+        stem = _concept_stem(token)
+        if len(stem) < 4 or stem in _COMMUNITY_WRAPPER:
+            continue
+        if any(stem.startswith(wrapper) and len(wrapper) >= 5 for wrapper in _COMMUNITY_WRAPPER):
+            continue
+        out.append(stem)
+    return out
+
+
+def _concept_overlap(left: str, right: str) -> tuple[int, float]:
+    a = set(_concept_sequence(left))
+    b = set(_concept_sequence(right))
+    if not a or not b:
+        return 0, 0.0
+    shared = a & b
+    return len(shared), len(shared) / max(1, min(len(a), len(b)))
+
+
+def _concept_ngrams(value: str, size: int) -> set[tuple[str, ...]]:
+    tokens = _concept_sequence(value)
+    if len(tokens) < size:
+        return set()
+    return {tuple(tokens[index:index + size]) for index in range(0, len(tokens) - size + 1)}
+
+
+def _looks_like_community_notice(row: Any) -> bool:
+    head = (
+        str(_value(row, "source_name", "")) + "\n" +
+        str(_value(row, "title", ""))
+    ).casefold()
+    return any(marker in head for marker in _COMMUNITY_MARKERS)
+
+
+def _community_notice_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
+    """Catch cross-community rewrites of one public-service/official notice.
+
+    This is intentionally not a generic topic-similarity rule. Both rows must look
+    like municipal/community notices, come from different sources, share the same
+    substantive concept fingerprint, and have body/final-text corroboration.
+    """
+    if not (_looks_like_community_notice(current) and _looks_like_community_notice(candidate)):
+        return False, "not a pair of community notices"
+    if int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1):
+        return False, "same source"
+
+    title_a = str(_value(current, "title", "") or "")
+    title_b = str(_value(candidate, "title", "") or "")
+    title_shared, title_containment = _concept_overlap(title_a, title_b)
+
+    body_a = str(_value(current, "raw_text", "") or "")[:5000]
+    body_b = str(_value(candidate, "raw_text", "") or "")[:5000]
+    body_shared, body_containment = _concept_overlap(body_a, body_b)
+    body_bigrams = len(_concept_ngrams(body_a, 2) & _concept_ngrams(body_b, 2))
+
+    # Different municipalities commonly change the first sentence and photo while
+    # copying/paraphrasing the same ministry instruction. Three topical headline
+    # concepts plus substantial body agreement is strong evidence in this narrow lane.
+    if (
+        title_shared >= 3
+        and title_containment >= 0.38
+        and body_shared >= 8
+        and body_containment >= 0.30
+        and body_bigrams >= 1
+    ):
+        return True, (
+            "cross-community public-service fingerprint "
+            f"title={title_shared}/{title_containment:.2f} "
+            f"body={body_shared}/{body_containment:.2f} bigrams={body_bigrams}"
+        )
+
+    # At READY/PUBLISHED time both rows have normalized Ukrainian copy. This catches
+    # heavier paraphrases where source pages differ structurally but the actual notice
+    # is still the same. Keep the threshold high enough not to merge ordinary local
+    # stories that merely concern the same audience.
+    final_a = str(_value(current, "final_text", "") or "")
+    final_b = str(_value(candidate, "final_text", "") or "")
+    if final_a.strip() and final_b.strip():
+        final_shared, final_containment = _concept_overlap(final_a, final_b)
+        final_bigrams = len(_concept_ngrams(final_a, 2) & _concept_ngrams(final_b, 2))
+        if (
+            final_shared >= 7
+            and final_containment >= 0.38
+            and final_bigrams >= 2
+            and (title_shared >= 2 or body_shared >= 6)
+        ):
+            return True, (
+                "final-text cross-community notice duplicate "
+                f"final={final_shared}/{final_containment:.2f} bigrams={final_bigrams} "
+                f"title={title_shared} body={body_shared}"
+            )
+
+    return False, (
+        "community notices differ "
+        f"title={title_shared}/{title_containment:.2f} "
+        f"body={body_shared}/{body_containment:.2f} bigrams={body_bigrams}"
+    )
+
+
 def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     """High-precision event matching layered on top of the RC31 deterministic guard.
 
@@ -70,6 +208,10 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     same_source = int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1)
     if same_source:
         return False, reason
+
+    community_same, community_reason = _community_notice_same_event(current, candidate)
+    if community_same:
+        return True, community_reason
 
     title_shared = len(_title_words(current) & _title_words(candidate))
     raw_a = str(_value(current, "raw_text", "") or "")
@@ -143,7 +285,7 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
             )
 
     return False, (
-        f"{reason}; semantic phrase overlap title={title_shared} "
+        f"{reason}; {community_reason}; semantic phrase overlap title={title_shared} "
         f"body={body_shared}/{body_containment:.2f} "
         f"bigrams={shared_bigrams} trigrams={shared_trigrams}"
     )
