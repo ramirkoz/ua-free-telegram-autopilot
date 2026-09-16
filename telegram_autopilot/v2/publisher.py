@@ -13,7 +13,7 @@ from ..telegram import (
 from .source_attribution import attribution_for_article
 from .domain import BlockedBy
 from .loghub import event
-from .media_pipeline import build_media_bundle, media_bundle_complete
+from .media_pipeline import build_publication_media_bundle, media_bundle_complete
 from .storage import V2Store
 from .telegram_attribution import (
     build_attributed_post_text,
@@ -181,7 +181,7 @@ class Publisher:
             self.store.block_article(article_id, blocked_by=BlockedBy.QUALITY, error_code="TELEGRAM_TEXT_INVALID", detail=detail)
             return "TELEGRAM_TEXT_INVALID"
 
-        bundle = build_media_bundle(article)
+        bundle = build_publication_media_bundle(channel, article)
         policy = channel.policy.normalized_media_policy()
         source_media_count = int(bundle.source_media_count or bundle.declared_media_count or bundle.count)
         event(
