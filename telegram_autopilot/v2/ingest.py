@@ -36,8 +36,8 @@ class TelegramParser(HTMLParser):
     """Parse public ``t.me/s`` HTML without treating Telegram chrome as post media.
 
     Telegram renders the channel avatar as an ``<img>`` *inside* an ancestor whose
-    class is ``tgme_widget_message_user_photo``.  RC17 checked only the media tag's
-    own class, so that avatar became a real attachment.  Video posters are exposed
+    class is ``tgme_widget_message_user_photo``. RC17 checked only the media tag's
+    own class, so that avatar became a real attachment. Video posters are exposed
     as background images under ``*_video_thumb`` and must never be published as a
     second photo next to the actual video.
     """
@@ -192,8 +192,6 @@ class TelegramParser(HTMLParser):
         if self.current is not None and self.message_depth == depth and tag == "div":
             self._finish()
 
-        # Public Telegram HTML is normally balanced, but tolerate malformed fragments
-        # by removing up to the closest matching open tag.
         for idx in range(len(self.stack) - 1, -1, -1):
             if self.stack[idx][0] == tag:
                 del self.stack[idx:]
@@ -259,8 +257,6 @@ def _held(entry: TelegramEntry) -> bool:
 
 
 def _to_article(username: str, primary: TelegramEntry, attached: list[TelegramEntry]) -> CollectedArticle:
-    # A source can publish media-only and text-only Telegram messages back-to-back.
-    # Treat that pair as one logical article, preserving chronological media order.
     group = [primary, *attached]
     group.sort(key=lambda e: (_post_number(e.post) is None, _post_number(e.post) or 0, e.post))
     media: list[str] = []
@@ -325,8 +321,6 @@ def _to_article(username: str, primary: TelegramEntry, attached: list[TelegramEn
 
 
 def stitch_telegram(username: str, entries: list[TelegramEntry]) -> list[CollectedArticle]:
-    # Public Telegram HTML ordering has changed in the past.  Work chronologically
-    # instead of trusting DOM order so media-only + text-only adjacency is stable.
     ordered = list(entries)
     ordered.sort(key=lambda e: (
         _post_number(e.post) is None,
@@ -345,15 +339,12 @@ def stitch_telegram(username: str, entries: list[TelegramEntry]) -> list[Collect
                 primary = ordered[j]
                 attached = run[:]
                 k = j + 1
-                # Also accept media-only continuation immediately after the text.
                 previous = primary
                 while k < len(ordered) and not ordered[k].text and ordered[k].media and _adjacent(previous, ordered[k]):
                     attached.append(ordered[k]); previous = ordered[k]; k += 1
                 result.append(_to_article(username, primary, attached))
                 i = k
                 continue
-            # Do not publish a media-only orphan as a textless article. It remains
-            # visible on the next public page fetch and can be stitched when text arrives.
             i = j
             continue
         if current.text:
@@ -363,8 +354,6 @@ def stitch_telegram(username: str, entries: list[TelegramEntry]) -> list[Collect
             while j < len(ordered) and not ordered[j].text and ordered[j].media and _adjacent(previous, ordered[j]):
                 attached.append(ordered[j]); previous = ordered[j]; j += 1
             if not current.media and not attached and j >= len(ordered) and _held(current):
-                # Fresh final text-only messages are briefly held so a following
-                # media-only message can arrive and be combined on the next poll.
                 i = j
                 continue
             result.append(_to_article(username, current, attached))
@@ -387,9 +376,6 @@ def collect(source: Source) -> list[CollectedArticle]:
     return collect_telegram(source) if source.kind=="telegram" else collector.collect_source(source)
 
 
-# Three fetches per channel are enough to collapse long sequential collection cycles
-# without turning 126 sources into a denial-of-service against the user's network.
-# The global semaphore caps all channel collectors together at six live source fetches.
 _GLOBAL_SOURCE_FETCH_LIMIT = threading.BoundedSemaphore(6)
 
 
@@ -429,8 +415,6 @@ class IngestService:
                 try:
                     items,duration_ms=future.result(); seen+=len(items)
                     source_added=0
-                    # SQLite writes remain serialized in this collector thread. Only the
-                    # network-bound source fetch is parallelized.
                     for item in items:
                         media_json=json.dumps(list(item.media_urls or []),ensure_ascii=False,separators=(",",":"))
                         before=self._existing(channel_id,source.id,item.external_id,item.url)
@@ -438,7 +422,18 @@ class IngestService:
                         if not before:
                             added+=1; source_added+=1
                         beat()
-                    self.store.record_source_success(source.id,duration_ms)
+                    if duration_ms >= 120000:
+                        failures,cooldown=self.store.record_source_failure(
+                            source.id, duration_ms,
+                            f"SLOW_SOURCE_SUCCESS: fetch completed in {duration_ms/1000:.1f}s",
+                        )
+                        event(
+                            "ingest", "slow source circuit breaker", level=30,
+                            channel_id=channel_id, source_id=source.id, source=source.name,
+                            duration_ms=duration_ms, consecutive_slow=failures, cooldown_until=cooldown,
+                        )
+                    else:
+                        self.store.record_source_success(source.id,duration_ms)
                     with self.store.connect() as con: con.execute("UPDATE sources SET initialized=1,last_checked_at=?,last_error='' WHERE id=?",(datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),source.id))
                     event("ingest","source collected",channel_id=channel_id,source_id=source.id,source=source.name,items=len(items),added=source_added,duration_ms=duration_ms)
                 except Exception as exc:
@@ -455,4 +450,3 @@ class IngestService:
             if con.execute("SELECT 1 FROM articles WHERE source_id=? AND external_id=?",(int(source_id),str(external_id))).fetchone() is not None:
                 return True
         return self.store.find_equivalent_article(int(channel_id),str(url or "")) is not None
-
