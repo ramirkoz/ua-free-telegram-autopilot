@@ -15,6 +15,7 @@ class ProductionMainWindow(ResponsiveMainWindow):
         self._rc20_runtime_action = False
         self._rc20_last_refresh: dict[str, float] = {}
         self._rc20_heartbeat_after = None
+        self._rc20_data_refresh_inflight: set[str] = set()
 
         original = base_ui.SupervisorService
         base_ui.SupervisorService = ProductionSupervisorService
