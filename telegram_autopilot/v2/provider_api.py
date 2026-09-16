@@ -7,10 +7,10 @@ opens untrusted URLs. AI providers are different: every destination is a fixed,
 reviewed HTTPS host. Keeping provider traffic here prevents crawler-network rules
 from masquerading as API outages and gives us provider-aware status/error handling.
 
-RC48 also owns provider pacing/retry. The Autopilot has several channel workers and
-several AI stages per article, so merely serializing calls is not enough to stay under
-provider RPM limits. Fixed-host calls are therefore paced per host and transient
-429/5xx responses are retried before the route is considered unavailable.
+RC48 introduced provider pacing/retry. RC49 hardens Groq structured-output calls:
+small editorial JSON gates get a realistic completion budget, reasoning is disabled
+for those gates, and Groq's ``json_validate_failed`` response is treated as a task
+format failure rather than poisoning model health.
 """
 
 import json
@@ -119,6 +119,8 @@ def _looks_like_hard_quota(detail: str) -> bool:
         "per-day",
         "per day",
         "daily quota",
+        "daily free allocation",
+        "used up your daily",
         "rpd",
         '"quota_limit_value":"0"',
         '"quota_limit_value": "0"',
@@ -126,6 +128,20 @@ def _looks_like_hard_quota(detail: str) -> bool:
         '"limit": 0',
     )
     return any(token in low for token in hard_tokens)
+
+
+def _looks_like_json_generation_failure(detail: str) -> bool:
+    low = str(detail or "").casefold()
+    return any(
+        token in low
+        for token in (
+            "json_validate_failed",
+            "failed to generate json",
+            "failed_generation",
+            "before generating a valid document",
+            "before generating valid json",
+        )
+    )
 
 
 def _classify_http(status: int, detail: str, headers: Mapping[str, str]) -> ProviderAPIError:
@@ -149,6 +165,12 @@ def _classify_http(status: int, detail: str, headers: Mapping[str, str]) -> Prov
             kind="temporary",
             status=status,
             retry_after=retry,
+        )
+    if status in {400, 422} and _looks_like_json_generation_failure(detail):
+        return ProviderAPIError(
+            f"HTTP {status}: provider failed structured JSON generation: {detail[:520]}",
+            kind="validation",
+            status=status,
         )
     if status in {404, 410} or any(token in low for token in ("model_not_found", "no longer available", "end of life", "unknown model")):
         return ProviderAPIError(f"HTTP {status}: model unavailable: {detail[:280]}", kind="model", status=status)
@@ -299,6 +321,23 @@ def _groq_fallback_models(model: str) -> list[str]:
     return list(dict.fromkeys(x for x in out if x))
 
 
+def _groq_messages(prompt: str, *, json_mode: bool, repair: bool = False) -> list[dict[str, str]]:
+    contract = ""
+    if json_mode:
+        contract = (
+            "\n\nSTRICT STRUCTURED OUTPUT CONTRACT:\n"
+            "Return exactly one compact valid JSON object. No markdown fences, no commentary, "
+            "no analysis and no prose outside JSON. Use only keys requested by the task. "
+            "Keep string values concise and finish the closing brace before the token limit."
+        )
+        if repair:
+            contract += (
+                " Previous structured generation failed. Prefer the shortest valid values that "
+                "satisfy the requested schema; never spend tokens explaining the answer."
+            )
+    return [{"role": "user", "content": _SYSTEM_GUARD + contract + "\n\n" + str(prompt)}]
+
+
 def openai_compatible_chat(
     provider: str,
     *,
@@ -326,63 +365,93 @@ def openai_compatible_chat(
         raise ProviderAPIError(f"{provider} API key is missing", kind="configuration")
 
     if name == "groq":
-        messages = [{"role": "user", "content": _SYSTEM_GUARD + "\n\n" + str(prompt)}]
         model_candidates = _groq_fallback_models(model)
     else:
-        messages = [
-            {"role": "system", "content": _SYSTEM_GUARD},
-            {"role": "user", "content": str(prompt)},
-        ]
         model_candidates = [str(model)]
 
     budget = max(64, min(4096, int(max_output_tokens)))
     last_error: ProviderAPIError | None = None
 
     for active_model in model_candidates:
-        payload: dict[str, Any] = {
-            "model": active_model,
-            "messages": messages,
-            "temperature": 0.2,
-            "stream": False,
-        }
-        if name in {"groq", "cloudflare"}:
-            payload["max_completion_tokens"] = budget
-        else:
-            payload["max_tokens"] = budget
+        structured_attempts = 2 if name == "groq" and json_mode else 1
+        for structured_attempt in range(structured_attempts):
+            if name == "groq":
+                messages = _groq_messages(prompt, json_mode=json_mode, repair=structured_attempt > 0)
+            else:
+                messages = [
+                    {"role": "system", "content": _SYSTEM_GUARD},
+                    {"role": "user", "content": str(prompt)},
+                ]
 
-        if name == "groq":
-            if "gpt-oss" in active_model.casefold():
-                payload["reasoning_effort"] = "low"
-                payload["include_reasoning"] = False
-            elif "qwen3.8" in active_model.casefold():
-                payload["reasoning_effort"] = "none"
-            if json_mode:
-                payload["response_format"] = {"type": "json_object"}
-        elif name == "cloudflare":
-            if "glm-4.7-flash" in active_model.casefold():
-                payload["reasoning_effort"] = "low"
-            if json_mode:
-                payload["response_format"] = {"type": "json_object"}
-        elif name == "nvidia":
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
+            active_budget = budget
+            if name == "groq" and json_mode:
+                # The caller intentionally uses tiny budgets for editorial gates, but
+                # Groq reasoning models can consume those tokens before emitting the
+                # JSON document. Give the *completion* enough room while keeping the
+                # prompt/result contract compact and reasoning disabled.
+                active_budget = max(budget, 768 if structured_attempt == 0 else 1536)
 
-        try:
-            _status, _headers, response = _request_json(
-                url,
-                headers={"Authorization": f"Bearer {str(api_key).strip()}"},
-                payload=payload,
-                timeout_seconds=timeout_seconds,
-            )
-            text, runtime_model = _extract_openai_text(response)
-            return ProviderReply(
-                text=text,
-                model=runtime_model or active_model,
-                detail="HTTP completion OK" if active_model == str(model) else f"HTTP completion OK via fallback {active_model}",
-            )
-        except ProviderAPIError as exc:
-            last_error = exc
-            if name != "groq" or exc.kind not in {"temporary", "quota", "model", "timeout"}:
-                raise
+            payload: dict[str, Any] = {
+                "model": active_model,
+                "messages": messages,
+                "temperature": 0.0 if (name == "groq" and json_mode) else 0.2,
+                "stream": False,
+            }
+            if name in {"groq", "cloudflare"}:
+                payload["max_completion_tokens"] = active_budget
+            else:
+                payload["max_tokens"] = active_budget
+
+            if name == "groq":
+                if "gpt-oss" in active_model.casefold():
+                    payload["reasoning_effort"] = "none" if json_mode else "low"
+                    payload["include_reasoning"] = False
+                elif "qwen3.8" in active_model.casefold():
+                    payload["reasoning_effort"] = "none"
+                if json_mode:
+                    payload["response_format"] = {"type": "json_object"}
+            elif name == "cloudflare":
+                if "glm-4.7-flash" in active_model.casefold():
+                    payload["reasoning_effort"] = "low"
+                if json_mode:
+                    payload["response_format"] = {"type": "json_object"}
+            elif name == "nvidia":
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+            try:
+                _status, _headers, response = _request_json(
+                    url,
+                    headers={"Authorization": f"Bearer {str(api_key).strip()}"},
+                    payload=payload,
+                    timeout_seconds=timeout_seconds,
+                )
+                text, runtime_model = _extract_openai_text(response)
+                return ProviderReply(
+                    text=text,
+                    model=runtime_model or active_model,
+                    detail=(
+                        "HTTP structured completion OK after bounded retry"
+                        if structured_attempt > 0
+                        else ("HTTP completion OK" if active_model == str(model) else f"HTTP completion OK via fallback {active_model}")
+                    ),
+                )
+            except ProviderAPIError as exc:
+                last_error = exc
+                if (
+                    name == "groq"
+                    and json_mode
+                    and structured_attempt == 0
+                    and exc.kind in {"validation", "bad_response"}
+                ):
+                    # One same-model repair is cheaper and more accurate than marking
+                    # the provider unavailable and sending the whole article around
+                    # the routing ring again.
+                    continue
+                break
+
+        if last_error is not None:
+            if name != "groq" or last_error.kind not in {"temporary", "quota", "model", "timeout", "validation", "bad_response"}:
+                raise last_error
             continue
 
     if last_error is not None:
