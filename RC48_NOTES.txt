@@ -1,1 +1,0 @@
-Direct provider scope only; OpenRouter configuration is not changed.
