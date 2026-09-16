@@ -131,6 +131,29 @@ class LocalTelegramReporter:
         channel_stats = dict(snapshot.get("channel_stats") or {})
         incident_codes = [str(getattr(item, "code", "UNKNOWN")) for item in incidents]
         published_60m = sum(int(dict(row or {}).get("published_60m") or 0) for row in channel_stats.values())
+        jobs_done_30m = sum(int(dict(row or {}).get("jobs_done_30m") or 0) for row in channel_stats.values())
+        oldest_due_age_seconds = max(
+            [int(dict(row or {}).get("oldest_due_age_seconds") or 0) for row in channel_stats.values()] or [0]
+        )
+        slow_sources: list[dict[str, Any]] = []
+        channel_lines: list[dict[str, Any]] = []
+        for row in channel_stats.values():
+            item = dict(row or {})
+            channel_lines.append({
+                "name": str(item.get("name") or "?"),
+                "due": int(item.get("due_jobs") or 0),
+                "done_30m": int(item.get("jobs_done_30m") or 0),
+                "published_60m": int(item.get("published_60m") or 0),
+            })
+            for source in list(item.get("slow_sources") or []):
+                value = dict(source or {})
+                value["channel"] = str(item.get("name") or "?")
+                slow_sources.append(value)
+        slow_sources.sort(key=lambda item: int(item.get("duration_ms") or 0), reverse=True)
+        provider_states = [
+            f"{str(item.get('provider') or '?')}={str(item.get('state') or '?')}"
+            for item in list(snapshot.get("providers") or [])
+        ]
         return {
             "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
             "version": str(snapshot.get("version") or V2_VERSION),
@@ -143,10 +166,15 @@ class LocalTelegramReporter:
             "ai_healthy": int(ai.get("healthy") or 0),
             "ai_total": int(ai.get("total") or 0),
             "ai_blocked": int(ai.get("blocked_jobs") or 0),
+            "provider_states": provider_states,
             "queue_active": int(queue.get("active") or 0),
             "queue_due": int(queue.get("due") or 0),
+            "oldest_due_age_minutes": oldest_due_age_seconds // 60,
+            "jobs_done_30m": jobs_done_30m,
             "published_today": int(queue.get("published_today") or 0),
             "published_60m": published_60m,
+            "channels": channel_lines,
+            "slow_sources": slow_sources[:3],
             "incidents": incident_codes,
         }
 
@@ -154,15 +182,28 @@ class LocalTelegramReporter:
     def format_message(report: dict[str, Any]) -> str:
         incidents = list(report.get("incidents") or [])
         status = "ПРОБЛЕМА" if incidents else "OK"
+        channels = "; ".join(
+            f"{row.get('name')}: due {row.get('due')}, done/30 {row.get('done_30m')}, pub/60 {row.get('published_60m')}"
+            for row in list(report.get("channels") or [])
+        ) or "немає"
+        slow = ", ".join(
+            f"{item.get('name') or '?'} {int(item.get('duration_ms') or 0)//1000}s"
+            for item in list(report.get("slow_sources") or [])
+            if int(item.get("duration_ms") or 0) >= 30000
+        ) or "0"
+        providers = ", ".join(list(report.get("provider_states") or [])) or "немає"
         return (
             "Autopilot · локальний звіт\n"
             f"Статус: {status} · {report.get('version')}\n"
             f"Runtime: {report.get('lifecycle')}; workers {report.get('workers_alive')}/3; "
             f"collectors {report.get('collectors_alive')}/3; БД={'OK' if report.get('database_ok') else 'ПОМИЛКА'}\n"
             f"AI: {report.get('ai_state')} · {report.get('ai_healthy')}/{report.get('ai_total')} healthy; "
-            f"blocked {report.get('ai_blocked')}\n"
-            f"Черга: active {report.get('queue_active')}; due {report.get('queue_due')}\n"
+            f"blocked {report.get('ai_blocked')} · {providers}\n"
+            f"Черга: active {report.get('queue_active')}; due {report.get('queue_due')}; "
+            f"oldest {report.get('oldest_due_age_minutes')} хв; done/30 {report.get('jobs_done_30m')}\n"
             f"Публікації: сьогодні {report.get('published_today')}; за 60 хв {report.get('published_60m')}\n"
+            f"Канали: {channels}\n"
+            f"Повільні джерела: {slow}\n"
             f"Інциденти: {', '.join(incidents) if incidents else '0'}"
         )[:4096]
 
