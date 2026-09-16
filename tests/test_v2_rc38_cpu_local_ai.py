@@ -3,9 +3,7 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
-import pytest
-
-from telegram_autopilot.v2.ai_gateway import AIGateway, GatewayExhausted
+from telegram_autopilot.v2.ai_gateway import AIGateway
 from telegram_autopilot.v2.domain import ProviderHealth, ProviderState
 
 
@@ -21,7 +19,7 @@ def _gateway() -> AIGateway:
     return gateway
 
 
-def test_local_call_uses_cpu_safe_writer_budget(monkeypatch) -> None:
+def test_local_call_is_real_full_writer_fallback(monkeypatch) -> None:
     gateway = _gateway()
     cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
     slot = SimpleNamespace(provider="local", model="local-model", label="local")
@@ -35,12 +33,12 @@ def test_local_call_uses_cpu_safe_writer_budget(monkeypatch) -> None:
     text, model, _label = gateway._call_slot(slot, cfg, "x" * 9000, max_output_tokens=1100, timeout_seconds=30)
     assert text == "готовий текст"
     assert model == "qwen3:4b"
-    assert captured["max_output_tokens"] == 320
-    assert captured["timeout_seconds"] == 240
-    assert len(captured["prompt"]) <= 5200
+    assert captured["max_output_tokens"] == 720
+    assert captured["timeout_seconds"] == 300
+    assert len(captured["prompt"]) <= 5600
 
 
-def test_local_call_caps_selection_json_for_cpu_only_notebook(monkeypatch) -> None:
+def test_local_medium_task_keeps_requested_budget(monkeypatch) -> None:
     gateway = _gateway()
     cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
     slot = SimpleNamespace(provider="local", model="local-model", label="local")
@@ -50,9 +48,9 @@ def test_local_call_caps_selection_json_for_cpu_only_notebook(monkeypatch) -> No
         lambda **kwargs: (captured.update(kwargs) or "{}", SimpleNamespace(model="qwen3:4b", label="qwen3:4b / Ollama")),
     )
     gateway._call_slot(slot, cfg, "x" * 5000, max_output_tokens=340, timeout_seconds=25)
-    assert captured["max_output_tokens"] == 320
-    assert captured["timeout_seconds"] == 240
-    assert len(captured["prompt"]) <= 5200
+    assert captured["max_output_tokens"] == 340
+    assert captured["timeout_seconds"] == 300
+    assert len(captured["prompt"]) <= 5600
 
 
 def test_local_short_editorial_gate_is_bounded_to_120_seconds(monkeypatch) -> None:
@@ -70,29 +68,25 @@ def test_local_short_editorial_gate_is_bounded_to_120_seconds(monkeypatch) -> No
     assert len(captured["prompt"]) <= 3200
 
 
-def test_gateway_does_not_use_local_for_long_form_generation(monkeypatch) -> None:
+def test_gateway_uses_local_for_long_form_when_cloud_routes_unavailable(monkeypatch) -> None:
     gateway = _gateway()
     cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
-    slot = SimpleNamespace(provider="local", model="qwen3:4b", label="local", priority=100)
+    slot = SimpleNamespace(provider="local", model="local-model", label="local", priority=100)
     monkeypatch.setattr("telegram_autopilot.v2.ai_gateway.load_secrets", lambda: cfg)
     monkeypatch.setattr(gateway, "_runtime_slots", lambda _cfg: [slot])
     monkeypatch.setattr(gateway, "_configured", lambda provider, _cfg: provider == "local")
     monkeypatch.setattr(gateway, "_provider_blocked", lambda provider: False)
     monkeypatch.setattr(gateway, "_model_blocked", lambda provider, model: False)
-    monkeypatch.setattr(
-        gateway,
-        "_call_slot",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("local writer must not be called")),
-    )
+    monkeypatch.setattr(gateway, "_call_slot", lambda *args, **kwargs: ("локальний повний текст", "qwen3:4b", "local"))
+    monkeypatch.setattr(gateway, "_mark_success", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         gateway,
         "_refresh_provider_summary",
         lambda provider, _cfg: ProviderHealth(provider=provider, state=ProviderState.HEALTHY),
     )
-    with pytest.raises(GatewayExhausted) as exc:
-        gateway.run("long writer prompt", max_output_tokens=1100, timeout_seconds=30)
-    assert exc.value.provider_outage is True
-    assert exc.value.failures == ()
+    result = gateway.run("long writer prompt", max_output_tokens=1100, timeout_seconds=30)
+    assert result.provider == "local"
+    assert result.text == "локальний повний текст"
 
 
 def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:
@@ -103,7 +97,7 @@ def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:
     monkeypatch.setattr(gateway, "_provider_call_lock", lambda provider: threading.Lock())
     captured = {}
 
-    def fake_call(slot, _cfg, prompt, *, max_output_tokens, timeout_seconds):
+    def fake_call(slot, _cfg, prompt, *, max_output_tokens, timeout_seconds, json_mode=False):
         captured["budget"] = max_output_tokens
         captured["timeout"] = timeout_seconds
         return "OK", "qwen3:4b", "qwen3:4b / Ollama"
