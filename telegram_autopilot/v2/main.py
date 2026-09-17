@@ -8,11 +8,12 @@ from pathlib import Path
 from ..instance_lock import AlreadyRunning, InstanceLock
 from ..paths import data_dir
 from . import V2_VERSION
-from .loghub import LogHub, event
-from .ready_backlog import ReadyBacklogRuntimeEngine as RuntimeEngine, ReadyBacklogStore as HardenedV2Store
-from .strict_ingest import StrictIngestService
-from .production_ui import ProductionMainWindow as MainWindow
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
+from .loghub import LogHub, event
+from .provider_compat import install_provider_compat
+from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
+from .strict_ingest import StrictIngestService
+from .ui_hardening import FastMainWindow as MainWindow
 from .update_protocol import UpdateProtocol
 
 
@@ -23,6 +24,7 @@ def v2_database_path() -> Path:
 def main() -> int:
     logs = data_dir() / "logs" / "v2"
     LogHub(logs).configure()
+    install_provider_compat()
     event("app", "V2 startup", database=str(v2_database_path()))
     try:
         with InstanceLock():
