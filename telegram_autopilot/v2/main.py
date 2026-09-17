@@ -9,10 +9,10 @@ from ..instance_lock import AlreadyRunning, InstanceLock
 from ..paths import data_dir
 from . import V2_VERSION
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
+from .bounded_ingest import BoundedStrictIngestService
 from .loghub import LogHub, event
 from .provider_compat import install_provider_compat
 from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
-from .strict_ingest import StrictIngestService
 from .ui_hardening import FastMainWindow as MainWindow
 from .update_protocol import UpdateProtocol
 
@@ -30,7 +30,7 @@ def main() -> int:
         with InstanceLock():
             store = HardenedV2Store(v2_database_path())
             runtime = RuntimeEngine(store)
-            runtime.ingest = StrictIngestService(store)
+            runtime.ingest = BoundedStrictIngestService(store)
             app = MainWindow(store, runtime, logs)
             update_coordinator = UpdateCoordinator(app, store, runtime)
 
