@@ -22,22 +22,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          set +e
-          for endpoint in \
-            'https://drive.usercontent.google.com/download?id=1XrV5Ljx_iE3ON27RqveaiLCQWfElTTpo&export=download&confirm=t' \
-            'https://drive.google.com/uc?export=download&id=1XrV5Ljx_iE3ON27RqveaiLCQWfElTTpo&confirm=t'
-          do
-            rm -f /tmp/rc56.candidate
-            curl -fL --retry 2 --connect-timeout 20 "$endpoint" -o /tmp/rc56.candidate
-            code=$?
-            echo "curl=$code bytes=$(wc -c </tmp/rc56.candidate 2>/dev/null || echo 0)"
-            file /tmp/rc56.candidate || true
-            sha256sum /tmp/rc56.candidate || true
-            unzip -tq /tmp/rc56.candidate && cp /tmp/rc56.candidate /tmp/rc56.zip && break
-          done
-          set -e
-          test -s /tmp/rc56.zip
+          python -m pip install --disable-pip-version-check -q gdown
+          gdown --id 1XrV5Ljx_iE3ON27RqveaiLCQWfElTTpo -O /tmp/rc56.zip
+          test "$(wc -c </tmp/rc56.zip)" -eq 370766
           echo '38a826f2a1820e0f3a931551faa366b1b94905d1703252906c3eb9e3dbf8c4ab  /tmp/rc56.zip' | sha256sum -c -
+          unzip -tq /tmp/rc56.zip
       - name: Intake proven live delta and build RC57
         if: hashFiles('tools/rc57_full_sync.py') != ''
         run: python tools/rc57_full_sync.py /tmp/rc56.zip
