@@ -1,0 +1,48 @@
+name: RC57 live overlay intake
+
+on:
+  push:
+    branches: [sync/rc57-full-canonical]
+    paths:
+      - .github/workflows/rc57-live-overlay-intake.yml
+      - tools/rc57_full_sync.py
+
+permissions:
+  contents: write
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch exact live RC56 overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://drive.usercontent.google.com/download?id=1XrV5Ljx_iE3ON27RqveaiLCQWfElTTpo&export=download&confirm=t'
+          curl -fL --retry 3 --connect-timeout 20 "$url" -o /tmp/rc56.zip
+          echo '38a826f2a1820e0f3a931551faa366b1b94905d1703252906c3eb9e3dbf8c4ab  /tmp/rc56.zip' | sha256sum -c -
+          unzip -tq /tmp/rc56.zip
+      - name: Intake proven live delta and build RC57
+        if: hashFiles('tools/rc57_full_sync.py') != ''
+        run: python tools/rc57_full_sync.py /tmp/rc56.zip
+      - name: Validate source
+        if: hashFiles('tools/rc57_full_sync.py') != ''
+        run: |
+          python -m compileall -q telegram_autopilot tests app_v2.py
+          python -m pytest -q
+      - name: Commit synchronized RC57
+        if: hashFiles('tools/rc57_full_sync.py') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/rc57-live-overlay-intake.yml tools/rc57_full_sync.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'RC57: full canonical sync of proven live RC56 plus channel-configurable dedupe'
+          git push origin HEAD:sync/rc57-full-canonical
