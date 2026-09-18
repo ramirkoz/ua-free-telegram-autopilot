@@ -22,8 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -c < .sync/rc57_delta.zip)" -eq 101682
-          echo '1535fd35e6ee19f5a7d50d88775d3f364a1af7fcd74e0b39d633685fe493a24a  .sync/rc57_delta.zip' | sha256sum -c -
+          test "$(wc -c < .sync/rc57_delta.zip)" -eq 104881
+          echo '61dd154c6c30c6f2c8b224efdc49ba3c49a97c52e57ac067ab18aa912b63bf23  .sync/rc57_delta.zip' | sha256sum -c -
           unzip -tq .sync/rc57_delta.zip
       - name: Apply canonical RC57 delta
         shell: bash
@@ -42,15 +42,16 @@ jobs:
         run: python -m compileall -q telegram_autopilot tests app_v2.py
       - name: Full RC57 regression suite
         run: python -m pytest -q
-      - name: Canonical version gate
+      - name: Canonical architecture gate
         shell: bash
         run: |
           set -euo pipefail
           test "$(cat VERSION.txt)" = "2.0.0-rc57"
           test "$(cat V2_VERSION.txt)" = "2.0.0-rc57"
           test "$(cat PUBLIC_VERSION.txt)" = "2.0.0-rc57"
-          ! grep -R --line-number -E 'channel_id[[:space:]]*==[[:space:]]*[123]|_profile\(row\)' telegram_autopilot/v2/event_dedupe_guard.py
+          ! grep -R --line-number -E 'channel_id[[:space:]]*==[[:space:]]*[123]|channel\.id[[:space:]]*==[[:space:]]*[123]' telegram_autopilot/v2
           ! grep -R --line-number -E 'lead_ink|scroll_papyrus|volcanic_archive|wild_cat' telegram_autopilot/v2/event_dedupe_guard.py
+          ! grep -R --line-number -E 'ПРОДАНО|CTRL\+UA' telegram_autopilot/v2 --exclude='storage.py'
       - name: Commit canonical RC57
         shell: bash
         run: |
@@ -59,5 +60,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --quiet && exit 0
-          git commit -m 'RC57: full canonical sync of proven live RC56 plus channel-configurable dedupe'
+          git commit -m 'RC57: full canonical sync of proven live RC56 plus channel-configurable runtime profiles'
           git push origin HEAD:sync/rc57-full-canonical
