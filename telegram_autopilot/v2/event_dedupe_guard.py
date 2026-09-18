@@ -147,12 +147,23 @@ def event_fingerprint_same_event(
 
     if compound_events:
         corroboration = bool(numeric_pairs) or len(rare_shared) >= 3
+        strong_rare_corroboration = len(rare_shared) >= 4
         if (
             title_shared
-            and len(shared) >= 8
-            and containment >= 0.20
-            and len(long_shared) >= 4
-            and corroboration
+            and (
+                (
+                    len(shared) >= 8
+                    and containment >= 0.20
+                    and len(long_shared) >= 4
+                    and corroboration
+                )
+                or (
+                    len(shared) >= 6
+                    and containment >= 0.30
+                    and len(long_shared) >= 4
+                    and strong_rare_corroboration
+                )
+            )
         ):
             return True, (
                 "compound subject+method+mechanism fingerprint "
