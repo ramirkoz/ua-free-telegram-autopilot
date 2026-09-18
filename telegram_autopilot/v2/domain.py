@@ -15,6 +15,11 @@ class SourceAttributionMode(StrEnum):
     NAMED_SOURCE = "named_source"
 
 
+class DedupeProfile(StrEnum):
+    STANDARD = "standard"
+    SCIENTIFIC_NEWS = "scientific_news"
+
+
 class Stage(StrEnum):
     COLLECTED = "COLLECTED"
     EXTRACTED = "EXTRACTED"
@@ -103,6 +108,11 @@ class ChannelConfig:
     poll_immediate: bool = False
     min_publish_interval_minutes: int = 10
     dedupe_window_hours: int = 72
+    dedupe_profile: DedupeProfile = DedupeProfile.STANDARD
+    dedupe_scientific_names: bool = False
+    dedupe_compound_events: bool = False
+    dedupe_rare_terms: bool = False
+    published_dedupe_window_hours: int = 168
     max_age_hours: int = 24
     max_posts_per_cycle: int = 3
     publish_24h: bool = False

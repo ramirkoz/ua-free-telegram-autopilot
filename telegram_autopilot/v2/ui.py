@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
 from ..secrets_store import load_secrets
-from .domain import ChannelConfig, ChannelMode, ChannelPolicy, SourceAttributionMode
+from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, SourceAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
 from .migration_service import MigrationManager
@@ -63,6 +63,12 @@ ATTRIBUTION_MODE_LABELS = {
 }
 ATTRIBUTION_MODE_VALUES = {label: mode for mode, label in ATTRIBUTION_MODE_LABELS.items()}
 
+DEDUPE_PROFILE_LABELS = {
+    DedupeProfile.STANDARD: "Стандартний",
+    DedupeProfile.SCIENTIFIC_NEWS: "Scientific / News",
+}
+DEDUPE_PROFILE_VALUES = {label: mode for mode, label in DEDUPE_PROFILE_LABELS.items()}
+
 
 class ChannelDialog(tk.Toplevel):
     def __init__(self, master, store: V2Store, channel_id: int, on_saved):
@@ -82,11 +88,13 @@ class ChannelDialog(tk.Toplevel):
         self.vars: dict[str, object] = {}
         book = ttk.Notebook(self)
         book.pack(fill="both", expand=True, padx=10, pady=10)
-        basic, policy, editorial = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
+        basic, dedupe, policy, editorial = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
         book.add(basic, text="Основне")
+        book.add(dedupe, text="Дедуплікація")
         book.add(policy, text="Політика")
         book.add(editorial, text="Редакційне")
         self._build_basic(basic, cfg)
+        self._build_dedupe(dedupe, cfg)
         self._build_policy(policy, cfg)
         self._build_editorial(editorial, cfg)
         footer = ttk.Frame(self)
@@ -144,6 +152,25 @@ class ChannelDialog(tk.Toplevel):
             wraplength=760, foreground="#444",
         ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+
+    def _build_dedupe(self, p, cfg):
+        self._combo(
+            p, 0, "Профіль дедуплікації",
+            DEDUPE_PROFILE_LABELS.get(cfg.dedupe_profile, DEDUPE_PROFILE_LABELS[DedupeProfile.STANDARD]),
+            list(DEDUPE_PROFILE_VALUES),
+        )
+        self._check(p, 1, "Scientific-name fingerprint", cfg.dedupe_scientific_names)
+        self._check(p, 2, "Compound event fingerprint: subject + method + mechanism", cfg.dedupe_compound_events)
+        self._check(p, 3, "Підсилення рідкісних термінів", cfg.dedupe_rare_terms)
+        self._entry(p, 4, "Історія опублікованих для фінальної перевірки, год", cfg.published_dedupe_window_hours)
+        ttk.Label(
+            p,
+            text=(
+                "Ці параметри належать конкретному каналу. Ядро лише надає універсальні механізми. "
+                "Назва каналу, окремі види, дослідження чи конкретні новини не зашиваються у runtime."
+            ),
+            wraplength=760, foreground="#444",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=10)
 
     def _text(self, parent, row, label, value, height=6):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="nw", padx=6, pady=5)
@@ -216,6 +243,11 @@ class ChannelDialog(tk.Toplevel):
                 poll_immediate=old.poll_immediate,
                 min_publish_interval_minutes=int(self._get("Мін. інтервал публікацій, хв")),
                 dedupe_window_hours=int(self._get("Вікно дедуплікації, год")),
+                dedupe_profile=DEDUPE_PROFILE_VALUES.get(self._get("Профіль дедуплікації"), DedupeProfile.STANDARD),
+                dedupe_scientific_names=bool(self._get("Scientific-name fingerprint")),
+                dedupe_compound_events=bool(self._get("Compound event fingerprint: subject + method + mechanism")),
+                dedupe_rare_terms=bool(self._get("Підсилення рідкісних термінів")),
+                published_dedupe_window_hours=int(self._get("Історія опублікованих для фінальної перевірки, год")),
                 max_age_hours=int(self._get("Макс. вік матеріалу, год")),
                 max_posts_per_cycle=int(self._get("Макс. постів за цикл")),
                 publish_24h=bool(self._get("Публікація 24/7")),
