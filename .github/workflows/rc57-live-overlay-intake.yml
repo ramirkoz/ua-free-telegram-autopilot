@@ -34,6 +34,8 @@ jobs:
           rm -f .github/workflows/rc57-live-overlay-intake.yml
       - name: Install test dependencies
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m pip install --disable-pip-version-check -r requirements-test.txt
       - name: Compile RC57
