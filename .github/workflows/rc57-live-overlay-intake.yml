@@ -1,46 +1,58 @@
-name: RC57 live overlay intake
+name: RC57 canonical sync apply
 
 on:
   push:
     branches: [sync/rc57-full-canonical]
     paths:
+      - .sync/rc57_delta.zip
       - .github/workflows/rc57-live-overlay-intake.yml
-      - tools/rc57_full_sync.py
 
 permissions:
   contents: write
 
 jobs:
-  intake:
+  apply:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Fetch exact live RC56 overlay
+      - name: Verify exact RC57 delta
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check -q gdown
-          gdown 'https://drive.google.com/uc?id=1XrV5Ljx_iE3ON27RqveaiLCQWfElTTpo' -O /tmp/rc56.zip
-          test "$(wc -c </tmp/rc56.zip)" -eq 370766
-          echo '38a826f2a1820e0f3a931551faa366b1b94905d1703252906c3eb9e3dbf8c4ab  /tmp/rc56.zip' | sha256sum -c -
-          unzip -tq /tmp/rc56.zip
-      - name: Intake proven live delta and build RC57
-        if: hashFiles('tools/rc57_full_sync.py') != ''
-        run: python tools/rc57_full_sync.py /tmp/rc56.zip
-      - name: Validate source
-        if: hashFiles('tools/rc57_full_sync.py') != ''
-        run: |
-          python -m compileall -q telegram_autopilot tests app_v2.py
-          python -m pytest -q
-      - name: Commit synchronized RC57
-        if: hashFiles('tools/rc57_full_sync.py') != ''
+          test "$(wc -c < .sync/rc57_delta.zip)" -eq 101682
+          echo '1535fd35e6ee19f5a7d50d88775d3f364a1af7fcd74e0b39d633685fe493a24a  .sync/rc57_delta.zip' | sha256sum -c -
+          unzip -tq .sync/rc57_delta.zip
+      - name: Apply canonical RC57 delta
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/workflows/rc57-live-overlay-intake.yml tools/rc57_full_sync.py
+          unzip -oq .sync/rc57_delta.zip -d .
+          rm -rf .sync
+          rm -f .github/workflows/rc57-live-overlay-intake.yml
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Compile RC57
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
+      - name: Full RC57 regression suite
+        run: python -m pytest -q
+      - name: Canonical version gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION.txt)" = "2.0.0-rc57"
+          test "$(cat V2_VERSION.txt)" = "2.0.0-rc57"
+          test "$(cat PUBLIC_VERSION.txt)" = "2.0.0-rc57"
+          ! grep -R --line-number -E 'channel_id[[:space:]]*==[[:space:]]*[123]|_profile\(row\)' telegram_autopilot/v2/event_dedupe_guard.py
+          ! grep -R --line-number -E 'lead_ink|scroll_papyrus|volcanic_archive|wild_cat' telegram_autopilot/v2/event_dedupe_guard.py
+      - name: Commit canonical RC57
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
