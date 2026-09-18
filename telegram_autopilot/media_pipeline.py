@@ -113,8 +113,14 @@ class PreparedArticleMedia:
 
 _VIDEO_TITLE_WORDS = (
     "trailer", "teaser", "video", "watch", "featurette", "clip", "footage",
-    "трейлер", "тизер", "відео", "ролик",
+    "spot", "commercial", "campaign film", "brand film", "ad film",
+    "трейлер", "тизер", "відео", "відеоролик", "ролик", "рекламний ролик", "реклама",
 )
+
+
+def _video_story_signal(title: str, article_text: str = "") -> bool:
+    haystack = ((title or "") + "\n" + (article_text or "")[:3500]).casefold()
+    return any(word in haystack for word in _VIDEO_TITLE_WORDS)
 
 
 def _youtube_id(url: str) -> str:
@@ -294,9 +300,8 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
         score = 42.0 if item.featured else 38.0
         if item.position <= 0.20:
             score += 10.0
-        title_low = (title or "").casefold()
-        if any(word in title_low for word in _VIDEO_TITLE_WORDS):
-            score += 24.0
+        if _video_story_signal(title, article_text):
+            score += 30.0
     else:
         score = 10.0 if item.featured else 16.0
     if item.caption:
@@ -484,9 +489,7 @@ def prepare_article_media(
             item.relevance_score = _score(
                 item, title=title, article_text=article_text, marketing_context=marketing_context
             )
-            video_story = item.kind in {"video", "iframe"} and any(
-                word in (title or "").casefold() for word in _VIDEO_TITLE_WORDS
-            )
+            video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
             semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
             if marketing_context and item.position <= 0.20:
                 semantic_ok = True

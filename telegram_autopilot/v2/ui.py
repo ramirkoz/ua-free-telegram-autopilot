@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
 from ..secrets_store import load_secrets
-from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, SourceAttributionMode
+from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
 from .migration_service import MigrationManager
@@ -66,8 +66,14 @@ ATTRIBUTION_MODE_VALUES = {label: mode for mode, label in ATTRIBUTION_MODE_LABEL
 DEDUPE_PROFILE_LABELS = {
     DedupeProfile.STANDARD: "Стандартний",
     DedupeProfile.SCIENTIFIC_NEWS: "Scientific / News",
+    DedupeProfile.COMMERCIAL_EDITORIAL: "Commercial / Editorial",
 }
 DEDUPE_PROFILE_VALUES = {label: mode for mode, label in DEDUPE_PROFILE_LABELS.items()}
+EDITORIAL_RUNTIME_PROFILE_LABELS = {
+    EditorialRuntimeProfile.STANDARD: "Стандартний",
+    EditorialRuntimeProfile.COMMERCIAL_EDITORIAL: "Commercial / Editorial",
+}
+EDITORIAL_RUNTIME_PROFILE_VALUES = {label: mode for mode, label in EDITORIAL_RUNTIME_PROFILE_LABELS.items()}
 
 
 class ChannelDialog(tk.Toplevel):
@@ -196,17 +202,22 @@ class ChannelDialog(tk.Toplevel):
 
     def _build_editorial(self, p, cfg):
         q = cfg.policy
-        self._text(p, 0, "Правила написання", q.writing_rules, 7)
-        self._text(p, 1, "Стиль", q.style_rules, 6)
-        self._text(p, 2, "Позитивні приклади", q.positive_examples, 5)
-        self._text(p, 3, "Негативні приклади", q.negative_examples, 5)
-        self._text(p, 4, "Додаткові інструкції", q.extra_instructions, 4)
-        self._text(p, 5, "Додатковий prompt writer", q.writer_extra_prompt, 4)
-        self._combo(p, 6, "Політика медіа", q.media_policy, ["required", "preferred", "optional"])
-        self._entry(p, 7, "Мін. символів", q.target_min_chars)
-        self._entry(p, 8, "Макс. символів", q.target_max_chars)
-        ttk.Label(p, text="RC18: required/preferred/optional задаєте ви. Telegram-аватари/логотипи та video thumbnails не вважаються медіа поста. 1 реальне медіа публікується з caption до 900 символів; кілька різних реальних медіа — як Telegram-альбом з тим самим caption.", wraplength=760, foreground="#444").grid(row=9, column=0, columnspan=2, sticky="w", padx=6, pady=8)
-        self._text(p, 10, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
+        self._combo(
+            p, 0, "Редакційний runtime-профіль",
+            EDITORIAL_RUNTIME_PROFILE_LABELS.get(cfg.editorial_runtime_profile, EDITORIAL_RUNTIME_PROFILE_LABELS[EditorialRuntimeProfile.STANDARD]),
+            list(EDITORIAL_RUNTIME_PROFILE_VALUES),
+        )
+        self._text(p, 1, "Правила написання", q.writing_rules, 7)
+        self._text(p, 2, "Стиль", q.style_rules, 6)
+        self._text(p, 3, "Позитивні приклади", q.positive_examples, 5)
+        self._text(p, 4, "Негативні приклади", q.negative_examples, 5)
+        self._text(p, 5, "Додаткові інструкції", q.extra_instructions, 4)
+        self._text(p, 6, "Додатковий prompt writer", q.writer_extra_prompt, 4)
+        self._combo(p, 7, "Політика медіа", q.media_policy, ["required", "preferred", "optional"])
+        self._entry(p, 8, "Мін. символів", q.target_min_chars)
+        self._entry(p, 9, "Макс. символів", q.target_max_chars)
+        ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
 
     def _save(self):
         try:
@@ -236,6 +247,7 @@ class ChannelDialog(tk.Toplevel):
                 enabled=bool(self._get("Канал увімкнено")),
                 mode=ChannelMode(self._get("Режим")),
                 editorial_profile=old.editorial_profile,
+                editorial_runtime_profile=EDITORIAL_RUNTIME_PROFILE_VALUES.get(self._get("Редакційний runtime-профіль"), EditorialRuntimeProfile.STANDARD),
                 include_source_link=True,
                 source_link_required=True,
                 source_attribution_mode=ATTRIBUTION_MODE_VALUES.get(self._get("Формат посилання на джерело"), SourceAttributionMode.STANDARD),

@@ -11,7 +11,7 @@ from ..telegram import (
     send_prepared_media_only,
 )
 from .source_attribution import attribution_for_article
-from .domain import BlockedBy
+from .domain import BlockedBy, EditorialRuntimeProfile
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle, media_bundle_complete
 from .storage import V2Store
@@ -54,6 +54,17 @@ def _last_gap_ok(last_iso: str, minutes: int) -> bool:
     except Exception:
         return True
 
+
+
+_VIDEO_EXPECTED_WORDS = (
+    "video", "trailer", "teaser", "clip", "footage", "commercial", "spot", "campaign film",
+    "відео", "відеоролик", "ролик", "трейлер", "тизер", "рекламний ролик",
+)
+
+
+def _video_expected(article: Any) -> bool:
+    text = (str(article["title"] or "") + "\n" + str(article["raw_text"] or "")[:3500] + "\n" + str(article["final_text"] or "")[:1800]).casefold()
+    return any(word in text for word in _VIDEO_EXPECTED_WORDS)
 
 def _source_urls(article: Any) -> list[str]:
     """Return canonical attribution URLs, preserving the primary source first."""
@@ -162,6 +173,28 @@ class Publisher:
             source_urls=source_urls,
         )
 
+        bundle = build_publication_media_bundle(channel, article)
+        # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
+        # remain reachable from the Telegram post even when Telegram receives only a
+        # preview image.  Add the canonical video as a dedicated clickable footer.
+        if bundle.video_link and bundle.video_link not in attribution_urls:
+            if attribution_labels is None:
+                count = len(attribution_urls)
+                attribution_labels = [
+                    "Джерело" if count == 1 else f"Джерело {idx + 1}"
+                    for idx in range(count)
+                ]
+            attribution_urls = [*attribution_urls, bundle.video_link]
+            attribution_labels = [*list(attribution_labels or []), "🎬 Відео"]
+            event("media", "video link attached to publication", channel_id=channel_id, article_id=article_id, video_url=bundle.video_link)
+        else:
+            try:
+                commercial_editorial = EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
+            except Exception:
+                commercial_editorial = False
+            if commercial_editorial and _video_expected(article):
+                event("media", "VIDEO_EXPECTED_BUT_NOT_FOUND", level=30, channel_id=channel_id, article_id=article_id, source_url=source_url)
+
         text = str(article["final_text"] or "").strip()
         try:
             post_text = build_attributed_post_text(
@@ -181,7 +214,6 @@ class Publisher:
             self.store.block_article(article_id, blocked_by=BlockedBy.QUALITY, error_code="TELEGRAM_TEXT_INVALID", detail=detail)
             return "TELEGRAM_TEXT_INVALID"
 
-        bundle = build_publication_media_bundle(channel, article)
         policy = channel.policy.normalized_media_policy()
         source_media_count = int(bundle.source_media_count or bundle.declared_media_count or bundle.count)
         event(

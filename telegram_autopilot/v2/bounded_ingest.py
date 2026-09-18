@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -16,14 +17,32 @@ from .strict_ingest import StrictIngestService, collect_strict
 class BoundedStrictIngestService(StrictIngestService):
     """Keep one slow source from holding the whole monitoring channel hostage.
 
-    Individual collector calls already have transport/enrichment deadlines, but a
-    multi-source channel used to wait for every future because the executor context
-    manager joins all workers on exit. RC52 gives the channel cycle an aggregate
-    budget. Finished sources are committed normally; late sources are put through
-    the existing health/cooldown path and their eventual result is discarded.
+    RC52/RC53 used one aggregate 70-second channel clock after submitting every
+    source behind only three workers. Queued sources were therefore marked failed
+    before they even started. RC54 uses a rolling scheduler and a per-source clock.
+    Finished sources are committed normally; only the source that actually exceeds
+    its own deadline is cooled down and its late result is discarded.
     """
 
-    channel_source_budget_seconds = 70.0
+    source_timeout_seconds = 70.0
+    active_source_slots = 3
+    worker_headroom = 6
+
+    def _repair_legacy_budget_cooldowns(self, channel_id: int) -> int:
+        """Clear only cooldowns created by the broken RC52/RC53 channel-wide timer."""
+        stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        with self.store.connect() as con:
+            cur = con.execute(
+                """UPDATE source_health
+                   SET consecutive_failures=0,cooldown_until='',last_outcome='RECOVERED',last_error='',updated_at=?
+                   WHERE source_id IN (SELECT id FROM sources WHERE channel_id=?)
+                     AND last_error LIKE 'Source collection exceeded the % channel budget; result was isolated and discarded.%'""",
+                (stamp, int(channel_id)),
+            )
+            changed = int(cur.rowcount or 0)
+        if changed:
+            event("ingest", "repaired false RC52/RC53 source cooldowns", level=30, channel_id=channel_id, sources=changed)
+        return changed
 
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
         added = seen = errors = skipped = timed_out = 0
@@ -34,6 +53,8 @@ class BoundedStrictIngestService(StrictIngestService):
                     heartbeat()
                 except Exception:
                     pass
+
+        self._repair_legacy_budget_cooldowns(channel_id)
 
         sources: list[Source] = []
         for row in self.store.sources_for_channel(channel_id, enabled_only=True):
@@ -116,52 +137,74 @@ class BoundedStrictIngestService(StrictIngestService):
                 consecutive_failures=failures, cooldown_until=cooldown,
             )
 
-        max_workers = max(1, min(3, len(sources)))
+        # RC54: never submit the whole channel behind three workers and then time out
+        # queued futures with one channel-wide clock.  Keep only a small rolling set
+        # of actually-started sources.  A timeout applies to that source alone.
+        active_limit = max(1, min(int(self.active_source_slots), len(sources)))
+        max_workers = max(active_limit, min(int(self.worker_headroom), len(sources)))
         pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=f"ingest-{channel_id}")
-        future_map: dict[Future[tuple[list[CollectedArticle], int]], tuple[Source, float]] = {
-            pool.submit(fetch_one, source): (source, time.monotonic()) for source in sources
-        }
-        pending: set[Future[tuple[list[CollectedArticle], int]]] = set(future_map)
-        deadline = time.monotonic() + max(5.0, float(self.channel_source_budget_seconds))
+        waiting_sources = deque(sources)
+        active: dict[Future[tuple[list[CollectedArticle], int]], tuple[Source, float]] = {}
+        abandoned: set[Future[tuple[list[CollectedArticle], int]]] = set()
 
-        try:
-            while pending:
-                beat()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                done, still_pending = wait(
-                    pending,
-                    timeout=min(1.0, remaining),
-                    return_when=FIRST_COMPLETED,
+        def submit_next() -> None:
+            while waiting_sources and len(active) < active_limit:
+                source = waiting_sources.popleft()
+                future = pool.submit(fetch_one, source)
+                active[future] = (source, time.monotonic())
+                event(
+                    "ingest", "source collection started", channel_id=channel_id,
+                    source_id=source.id, source=source.name, active=len(active), queued=len(waiting_sources),
                 )
-                pending = set(still_pending)
-                if not done:
-                    continue
-                for future in done:
-                    source, submitted_at = future_map[future]
+
+        submit_next()
+        try:
+            while active:
+                beat()
+                now = time.monotonic()
+                progressed = False
+
+                for future in list(active):
+                    if not future.done():
+                        continue
+                    progressed = True
+                    source, started_at = active.pop(future)
                     try:
                         items, duration_ms = future.result()
                         commit_success(source, items, duration_ms)
                     except Exception as exc:
-                        duration_ms = int(max(0.0, time.monotonic() - submitted_at) * 1000)
+                        duration_ms = int(max(0.0, now - started_at) * 1000)
                         commit_failure(source, str(exc), duration_ms)
                     finally:
                         beat()
 
-            for future in pending:
-                source, submitted_at = future_map[future]
+                # Only running/submitted active sources can time out. Sources still in
+                # waiting_sources have no clock and therefore cannot be falsely failed.
+                now = time.monotonic()
+                for future, (source, started_at) in list(active.items()):
+                    if now - started_at < max(5.0, float(self.source_timeout_seconds)):
+                        continue
+                    progressed = True
+                    active.pop(future, None)
+                    abandoned.add(future)
+                    future.cancel()
+                    duration_ms = int(max(0.0, now - started_at) * 1000)
+                    detail = (
+                        f"Source collection exceeded its {int(self.source_timeout_seconds)} s per-source timeout; "
+                        "late result was isolated and discarded."
+                    )
+                    commit_failure(source, detail, duration_ms, timeout=True)
+                    beat()
+
+                submit_next()
+                if not progressed:
+                    time.sleep(0.20)
+
+            # Futures that timed out may still be unwinding their own network deadline.
+            # Their result is intentionally ignored and they never block the next source.
+            for future in abandoned:
                 future.cancel()
-                duration_ms = int(max(0.0, time.monotonic() - submitted_at) * 1000)
-                detail = (
-                    f"Source collection exceeded the {int(self.channel_source_budget_seconds)} s "
-                    "channel budget; result was isolated and discarded."
-                )
-                commit_failure(source, detail, duration_ms, timeout=True)
         finally:
-            # Do not join still-running network/enrichment workers here. Their collector
-            # calls are independently bounded and cannot mutate the V2 store; only this
-            # coordinator commits results. Joining them would recreate the old stall.
             pool.shutdown(wait=False, cancel_futures=True)
             beat()
 

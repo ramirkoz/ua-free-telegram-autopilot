@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta
 
 from telegram_autopilot import ai_router as legacy_ai
+from telegram_autopilot.v2 import V2_VERSION
 from telegram_autopilot.v2.ai_gateway import (
     _codex_retry_after_seconds,
     _compact_local_prompt,
@@ -49,16 +50,19 @@ def test_drive_duplicate_request_cannot_hide_newer_release(tmp_path) -> None:
     root = tmp_path / "local"
     mirror = tmp_path / "mirror"
     mirror.mkdir()
+    current_rc = int(V2_VERSION.rsplit("rc", 1)[1])
+    old_version = f"2.0.0-rc{current_rc + 1}"
+    new_version = f"2.0.0-rc{current_rc + 2}"
     old = {
-        "request_id": "release-rc40-old",
-        "target_version": "2.0.0-rc40",
+        "request_id": "release-next-old",
+        "target_version": old_version,
         "sha256": "1" * 64,
         "created_at": "2026-09-15T10:00:00+03:00",
         "source": "test",
     }
     new = {
-        "request_id": "release-rc42-new",
-        "target_version": "2.0.0-rc42",
+        "request_id": "release-next-new",
+        "target_version": new_version,
         "sha256": "2" * 64,
         "created_at": "2026-09-15T11:00:00+03:00",
         "source": "test",
@@ -70,7 +74,7 @@ def test_drive_duplicate_request_cannot_hide_newer_release(tmp_path) -> None:
     request = protocol.accept_mirror_request(str(mirror))
 
     assert request is not None
-    assert request.target_version == "2.0.0-rc42"
-    assert request.request_id == "release-rc42-new"
+    assert request.target_version == new_version
+    assert request.request_id == "release-next-new"
     saved = protocol.load_request()
-    assert saved is not None and saved.target_version == "2.0.0-rc42"
+    assert saved is not None and saved.target_version == new_version

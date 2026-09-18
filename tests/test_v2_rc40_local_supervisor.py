@@ -61,8 +61,11 @@ def test_rc43_passive_telemetry_allowlist_has_no_agent_or_control_files() -> Non
     })
     assert not any("agent" in name or "request" in name or "command" in name for name in _OUTBOUND_TELEMETRY_FILES)
     source = inspect.getsource(LocalOnlyProductionSupervisorService._mirror_file)
-    assert "TelemetryProductionSupervisorService._mirror_file" in source
     assert "_OUTBOUND_TELEMETRY_FILES" in source
+    assert "_rc55_valid_telemetry_source" in source
+    assert "atomic_copy" in source
+    assert "update_request" not in source
+    assert "command" not in source
 
 
 def test_passive_telemetry_health_incidents_are_not_suppressed() -> None:

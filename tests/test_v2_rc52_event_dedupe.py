@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from telegram_autopilot.v2.bounded_ingest import BoundedStrictIngestService
-from telegram_autopilot.v2.domain import DedupeProfile
+from telegram_autopilot.v2.domain import DedupeProfile, EditorialRuntimeProfile
 from telegram_autopilot.v2.event_dedupe_guard import (
     EventFingerprintDedupeEngine,
     _near_numeric_pairs,
@@ -183,13 +183,16 @@ def test_ctrlua_migration_sets_only_that_channel_to_scientific_profile(tmp_path)
     assert ctrl.dedupe_rare_terms is True
     assert ctrl.published_dedupe_window_hours == 720
 
-    assert sold.dedupe_profile == DedupeProfile.STANDARD
+    assert sold.dedupe_profile == DedupeProfile.COMMERCIAL_EDITORIAL
+    assert sold.editorial_runtime_profile == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
     assert sold.dedupe_scientific_names is False
     assert sold.dedupe_compound_events is False
     assert sold.dedupe_rare_terms is False
-    assert sold.published_dedupe_window_hours == 168
+    assert sold.published_dedupe_window_hours == 720
 
 
-def test_final_gate_uses_event_fingerprint_engine_and_bounded_ingest_has_budget() -> None:
+def test_final_gate_uses_event_fingerprint_engine_and_rolling_source_timeout() -> None:
     assert issubclass(EventFingerprintDedupeEngine, object)
-    assert BoundedStrictIngestService.channel_source_budget_seconds <= 70.0
+    assert BoundedStrictIngestService.source_timeout_seconds <= 70.0
+    assert BoundedStrictIngestService.active_source_slots >= 1
+    assert not hasattr(BoundedStrictIngestService, "channel_source_budget_seconds")
