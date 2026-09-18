@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from ..evidence_pack import build_evidence_pack
 from ..fact_guard import validate_fact_guard
 from ..language import looks_ukrainian
@@ -146,8 +147,12 @@ def validate_writer_output(
     max_chars: int,
     hard_max_chars: int | None = None,
     required_context: str = "",
+    slop_profile: str = "",
 ) -> str:
-    value = apply_safe_ukrainian_fixes(str(text or "")).strip()
+    # Gate 1 is deterministic sanitation: strip invisible/bidi junk before any
+    # language or factual validation. This mirrors the upstream anti-ai-slop
+    # architecture but keeps all runtime work local and dependency-free.
+    value = apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip()
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
@@ -173,6 +178,13 @@ def validate_writer_output(
     issues = list(language_quality_issues(value)) + list(human_style_issues(value))
     if len(issues) >= 3:
         raise ValueError("Мовний QA: " + "; ".join(issues[:3]))
+    if slop_profile:
+        slop = assess_ukrainian_slop(value, profile=slop_profile)
+        if not slop.publishable:
+            raise ValueError(
+                f"UA Anti-Slop {slop.score}/{slop.gate}: " + compact_feedback(slop)
+            )
+        value = slop.sanitized_text
     return value
 
 
@@ -181,6 +193,15 @@ def _is_commercial_editorial(channel: ChannelConfig) -> bool:
         return EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
     except Exception:
         return False
+
+
+def _anti_slop_profile(channel: ChannelConfig) -> str:
+    # The gate is configured by channel behaviour, never by channel ID/name.
+    if channel.mode == ChannelMode.MONITORING:
+        return "community"
+    if _is_commercial_editorial(channel):
+        return "commercial"
+    return "news"
 
 
 def _practical_literals(article: Any) -> list[tuple[str, str]]:
@@ -425,16 +446,18 @@ SOURCE:
                 value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
             return value
 
+        slop_profile = _anti_slop_profile(channel)
+
         def validator(raw: str) -> None:
             validate_writer_output(
                 article, prepared_text(raw), min_chars=effective_min, max_chars=effective_max,
-                hard_max_chars=body_hard_max, required_context=source_context,
+                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
         result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
         draft = validate_writer_output(
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
-            hard_max_chars=body_hard_max, required_context=source_context,
+            hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
         if result.provider == "local":
             final = draft
@@ -464,17 +487,19 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                 value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
             return value
 
+        slop_profile = _anti_slop_profile(channel)
+
         def validator(raw: str) -> None:
             validate_writer_output(
                 article, prepared_text(raw), min_chars=min_chars, max_chars=max_chars,
-                hard_max_chars=body_hard_max, required_context=source_context,
+                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
         try:
             result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28)
             return validate_writer_output(
                 article, prepared_text(result.text), min_chars=min_chars, max_chars=max_chars,
-                hard_max_chars=body_hard_max, required_context=source_context,
+                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
         except GatewayExhausted:
             return draft

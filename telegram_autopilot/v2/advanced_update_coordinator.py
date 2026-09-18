@@ -32,7 +32,7 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
         if not path.is_file():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             raise ValueError(f"UPDATE_MANIFEST_JSON_INVALID: {exc}") from exc
         if not isinstance(data, dict):

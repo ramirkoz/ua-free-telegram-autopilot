@@ -90,7 +90,7 @@ class UpdateProtocol:
     def load_request(self, path: Path | None = None) -> UpdateRequest | None:
         target = Path(path or self.request_path)
         try:
-            data = json.loads(target.read_text(encoding="utf-8"))
+            data = json.loads(target.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             return None
         except Exception as exc:
