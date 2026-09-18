@@ -22,8 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -c < .sync/rc57_delta.zip)" -eq 104881
-          echo '61dd154c6c30c6f2c8b224efdc49ba3c49a97c52e57ac067ab18aa912b63bf23  .sync/rc57_delta.zip' | sha256sum -c -
+          test "$(wc -c < .sync/rc57_delta.zip)" -eq 104878
+          echo '10a31aa4bb8dfcd2a89bf75aa7a73376722d5bdfd88311628869af4fcef89e3f  .sync/rc57_delta.zip' | sha256sum -c -
           unzip -tq .sync/rc57_delta.zip
       - name: Apply canonical RC57 delta
         shell: bash
@@ -49,9 +49,9 @@ jobs:
           test "$(cat VERSION.txt)" = "2.0.0-rc57"
           test "$(cat V2_VERSION.txt)" = "2.0.0-rc57"
           test "$(cat PUBLIC_VERSION.txt)" = "2.0.0-rc57"
-          ! grep -R --line-number -E 'channel_id[[:space:]]*==[[:space:]]*[123]|channel\.id[[:space:]]*==[[:space:]]*[123]' telegram_autopilot/v2
-          ! grep -R --line-number -E 'lead_ink|scroll_papyrus|volcanic_archive|wild_cat' telegram_autopilot/v2/event_dedupe_guard.py
-          ! grep -R --line-number -E 'ПРОДАНО|CTRL\+UA' telegram_autopilot/v2 --exclude='storage.py'
+          ! grep -R --exclude-dir='__pycache__' --line-number -E 'channel_id[[:space:]]*==[[:space:]]*[123]|channel\.id[[:space:]]*==[[:space:]]*[123]' telegram_autopilot/v2
+          ! grep -R --exclude-dir='__pycache__' --line-number -E 'lead_ink|scroll_papyrus|volcanic_archive|wild_cat' telegram_autopilot/v2/event_dedupe_guard.py
+          ! grep -R --exclude-dir='__pycache__' --line-number -E 'ПРОДАНО|CTRL\+UA' telegram_autopilot/v2 --exclude='storage.py'
       - name: Commit canonical RC57
         shell: bash
         run: |
