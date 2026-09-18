@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
 import time
+from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
 from .advanced_supervisor import AdvancedSupervisorService
 from .local_reporter import LocalTelegramReporter
 from .loghub import event
-from .production_supervisor import _ProductionUpdateProtocol
+from .production_supervisor import LIVE_FEED_NAMES, _ProductionUpdateProtocol
 from .supervisor import Incident, SupervisorConfig, SupervisorService
+from .fileio import atomic_copy
+from . import V2_VERSION
 from .telemetry_supervisor import TelemetryProductionSupervisorService
 
 
@@ -50,6 +55,8 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": live}).normalized()
             self.save_config(cfg)
         self._status_sequence = 0
+        self._rc55_mirror_targets: list[Path] = []
+        self._rc55_mirror_targets_checked_at = 0.0
 
         # Fields normally initialised by TelemetryProductionSupervisorService.
         self._telemetry_last_discovery_epoch = 0.0
@@ -60,11 +67,118 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         self.local_reporter = LocalTelegramReporter(root=self.root)
         self._local_report_result: dict[str, Any] = {"status": "starting"}
 
+    @staticmethod
+    def _rc55_valid_telemetry_source(source: Path, name: str) -> bool:
+        """Never mirror arbitrary/corrupted JSON into passive telemetry slots."""
+        if name not in _OUTBOUND_TELEMETRY_FILES:
+            return False
+        try:
+            value = json.loads(Path(source).read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(value, dict):
+            return False
+        if name == "status.json":
+            return value.get("schema") == "ua-free-autopilot-supervisor-v2" and str(value.get("version") or "") == V2_VERSION
+        if name == "recent_events.json":
+            return str(value.get("version") or "") == V2_VERSION and isinstance(value.get("events"), list)
+        if name == "incident.json":
+            return str(value.get("version") or "") == V2_VERSION and isinstance(value.get("incidents"), list)
+        return False
+
+    def _rc55_existing_live_targets(self, *, force: bool = False) -> list[Path]:
+        """Return every existing local Drive LIVE folder, not just one winner.
+
+        Duplicate Drive folders/mounts happened in production. Passive telemetry is
+        safe to fan out, and doing so prevents one stale duplicate from making the
+        remote observer blind while another mount is actually being synced.
+        """
+        now = time.monotonic()
+        if not force and self._rc55_mirror_targets and now - self._rc55_mirror_targets_checked_at < 300.0:
+            return list(self._rc55_mirror_targets)
+        candidates: list[Path] = []
+        configured = str(self.config.mirror_dir or "").strip()
+        if configured:
+            candidates.append(Path(configured).expanduser())
+        home = Path.home()
+        roots = [home, home / "Google Drive", home / "GoogleDrive"]
+        if os.name == "nt":
+            roots.extend(Path(f"{letter}:\\") for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ")
+        vault_names = (
+            "UA FREE Telegram Autopilot — Project Vault",
+            "UA FREE Telegram Autopilot - Project Vault",
+            "Project Vault",
+        )
+        for root in roots:
+            try:
+                if not root.exists():
+                    continue
+            except OSError:
+                continue
+            for drive_root in (root, root / "My Drive", root / "Мій диск"):
+                for feed in LIVE_FEED_NAMES:
+                    candidates.append(drive_root / feed)
+                    for vault in vault_names:
+                        candidates.append(drive_root / vault / feed)
+        out: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = os.path.normcase(os.path.abspath(str(path)))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if path.is_dir():
+                    out.append(path)
+                    continue
+                # A configured LIVE path may have been removed/corrupted by a sync
+                # conflict. Re-create it only when its parent is already mounted.
+                if configured and key == os.path.normcase(os.path.abspath(configured)) and path.parent.is_dir():
+                    path.mkdir(parents=True, exist_ok=True)
+                    out.append(path)
+            except OSError:
+                continue
+        self._rc55_mirror_targets = out
+        self._rc55_mirror_targets_checked_at = now
+        return list(out)
+
     def _mirror_file(self, source, name: str) -> None:
-        """Mirror only passive telemetry; never mirror agent/control artefacts."""
-        if str(name or "") not in _OUTBOUND_TELEMETRY_FILES:
+        """Mirror passive telemetry to all known LIVE mounts with schema guard."""
+        name = str(name or "")
+        if name not in _OUTBOUND_TELEMETRY_FILES:
             return
-        TelemetryProductionSupervisorService._mirror_file(self, source, name)
+        source = Path(source)
+        if not self._rc55_valid_telemetry_source(source, name):
+            self._mirror_last_error = f"refused invalid telemetry payload for {name}"
+            event("supervisor", "refused invalid telemetry mirror payload", level=40, file=name, path=str(source))
+            return
+        targets = self._rc55_existing_live_targets(force=False)
+        if not targets:
+            # Retain inherited self-healing discovery as a fallback, then rescan.
+            try:
+                self.ensure_live_mirror(force=True)
+            except Exception:
+                pass
+            targets = self._rc55_existing_live_targets(force=True)
+        if not targets:
+            self._mirror_last_error = "LIVE supervisor mirror not found"
+            return
+        errors: list[str] = []
+        successes = 0
+        for target_dir in targets:
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                atomic_copy(source, target_dir / name)
+                successes += 1
+            except Exception as exc:
+                errors.append(f"{target_dir}: {type(exc).__name__}: {exc}")
+        if successes:
+            from .storage import now_iso
+            self._mirror_last_ok_at = now_iso()
+            self._mirror_last_error = ""
+        else:
+            self._mirror_last_error = "; ".join(errors)[:1200]
+            self._rc55_existing_live_targets(force=True)
 
     def build_snapshot(self) -> dict[str, Any]:
         snapshot = super().build_snapshot()

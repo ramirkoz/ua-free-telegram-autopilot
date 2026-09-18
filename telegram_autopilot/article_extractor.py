@@ -455,6 +455,54 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str, featured_v
     return normalized, media_urls[:24]
 
 
+
+_JSONLD_SCRIPT_RE = re.compile(
+    r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
+    re.I | re.S,
+)
+
+
+def _jsonld_video_candidate(html: str, base_url: str) -> str:
+    """Return a VideoObject embed/content URL when normal markup hides the player.
+
+    Some publisher CMSes render the visible video from JavaScript and leave no iframe
+    in the article HTML.  Their JSON-LD still carries VideoObject.embedUrl/contentUrl.
+    """
+    def walk(node):
+        if isinstance(node, dict):
+            raw_type = node.get("@type")
+            types = raw_type if isinstance(raw_type, list) else [raw_type]
+            if any(str(t or "").casefold() == "videoobject" for t in types):
+                for key in ("contentUrl", "embedUrl", "url"):
+                    value = node.get(key)
+                    if isinstance(value, str) and value.strip():
+                        yield value.strip()
+            for value in node.values():
+                yield from walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from walk(value)
+
+    for raw in _JSONLD_SCRIPT_RE.findall(str(html or "")):
+        try:
+            payload = json.loads(raw.strip())
+        except Exception:
+            continue
+        for candidate in walk(payload):
+            absolute = urljoin(base_url, candidate)
+            low = absolute.casefold()
+            if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")):
+                url = editorial_media_candidate(base_url, absolute, context="jsonld video")
+                if url:
+                    return encode_media("iframe", url)
+            path = urlsplit(absolute).path.casefold()
+            if path.endswith((".mp4", ".m4v", ".mov", ".webm")):
+                url = editorial_media_candidate(base_url, absolute, context="jsonld video")
+                if url:
+                    return encode_media("video", url)
+    return ""
+
+
 def _parse_scope(html: str, base_url: str, *, include_main: bool) -> _ArticleHTMLParser:
     parser = _ArticleHTMLParser(base_url, include_main=include_main)
     parser.feed(html)
@@ -491,6 +539,14 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
 
     if not text:
         text = _clean_text("".join(parser.all_chunks))
+
+    # RC56: recover JS-rendered publisher videos from schema.org VideoObject when no
+    # regular iframe/meta video survived the article parser.
+    if not parser.featured_video:
+        parser.featured_video = _jsonld_video_candidate(html, base_url)
+        if parser.featured_video and parser.featured_video not in media:
+            media.insert(0, parser.featured_video)
+
     title = " ".join(parser.title_chunks or article_parser.title_chunks).strip()
     layout_json = json.dumps({
         "version": 5, "featured": parser.featured_media, "featured_video": parser.featured_video,

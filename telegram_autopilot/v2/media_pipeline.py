@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ..media import encode_media, media_identity, valid_public_media
-from .domain import ChannelConfig, ChannelMode
+from .domain import ChannelConfig, ChannelMode, EditorialRuntimeProfile
 
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -34,6 +34,7 @@ class MediaBundle:
     stitched: bool = False
     declared_media_count: int = 0
     source_media_count: int = 0
+    video_link: str = ""
 
     @property
     def count(self) -> int:
@@ -136,25 +137,32 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
     URL itself looks innocent from bypassing the mature media filter.
     """
     raw = build_media_bundle(article)
-    if channel.mode != ChannelMode.EDITORIAL or not raw.items:
+    if channel.mode != ChannelMode.EDITORIAL:
         return raw
 
     # Reuse the mature semantic/rubbish filter from the pre-V2 extractor. It rejects
     # follow/subscribe/banner/logo/avatar/recommendation chrome, validates the
     # actual image, and scores candidate metadata against the article itself.
     chosen: MediaItem | None = None
+    video_link = ""
     try:
         from ..media_pipeline import prepare_article_media
 
+        try:
+            marketing_context = EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
+        except Exception:
+            marketing_context = False
         prepared = prepare_article_media(
             str(_v(article, "article_layout_json", "{}") or "{}"),
             raw.encoded_items,
             title=str(_v(article, "title", "") or ""),
             article_text=(str(_v(article, "raw_text", "") or "") + "\n" + str(_v(article, "final_text", "") or ""))[:12000],
+            marketing_context=marketing_context,
         )
         hero = prepared.telegram_hero
         if hero is not None and hero.kind in {"image", "video"} and hero.url:
             chosen = MediaItem(hero.kind, hero.url)
+        video_link = str(getattr(prepared, "video_link", "") or "")
     except Exception:
         # Fail closed for editorial media. A text post is preferable to a confident
         # but unrelated visual; required-media channels will be held by the gate.
@@ -162,7 +170,7 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
 
     # Deliberately no raw first-item fallback here. The previous fallback bypassed
     # semantic validation whenever layout metadata was missing or probing failed,
-    # which is exactly how generic follow/subscribe banners could leak into CTRL+UA.
+    # which is exactly how generic follow/subscribe banners could leak into strict editorial channels.
     items = (chosen,) if chosen is not None else ()
     return MediaBundle(
         items=items,
@@ -171,6 +179,7 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
         stitched=False,
         declared_media_count=len(items),
         source_media_count=len(items),
+        video_link=video_link,
     )
 
 

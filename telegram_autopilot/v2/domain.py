@@ -18,6 +18,12 @@ class SourceAttributionMode(StrEnum):
 class DedupeProfile(StrEnum):
     STANDARD = "standard"
     SCIENTIFIC_NEWS = "scientific_news"
+    COMMERCIAL_EDITORIAL = "commercial_editorial"
+
+
+class EditorialRuntimeProfile(StrEnum):
+    STANDARD = "standard"
+    COMMERCIAL_EDITORIAL = "commercial_editorial"
 
 
 class Stage(StrEnum):
@@ -101,6 +107,7 @@ class ChannelConfig:
     enabled: bool = True
     mode: ChannelMode = ChannelMode.EDITORIAL
     editorial_profile: str = ""
+    editorial_runtime_profile: EditorialRuntimeProfile = EditorialRuntimeProfile.STANDARD
     include_source_link: bool = True
     source_link_required: bool = True
     source_attribution_mode: SourceAttributionMode = SourceAttributionMode.STANDARD

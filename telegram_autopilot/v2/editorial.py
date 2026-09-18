@@ -11,10 +11,11 @@ from ..language import looks_ukrainian
 from ..ukrainian_quality import apply_safe_ukrainian_fixes, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
 from .source_attribution import source_body_hard_limit, source_context_name, require_source_context
-from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, Stage
+from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
 from .loghub import event
 from .learning import LearningEngine
 from .storage import V2Store
+from .topic_saturation import topic_saturation_reason
 
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -175,6 +176,49 @@ def validate_writer_output(
     return value
 
 
+def _is_commercial_editorial(channel: ChannelConfig) -> bool:
+    try:
+        return EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
+    except Exception:
+        return False
+
+
+def _practical_literals(article: Any) -> list[tuple[str, str]]:
+    source = str(_v(article, "raw_text", "") or "")
+    canonical = str(_v(article, "canonical_source_url", "") or "").strip().rstrip("/.,;:!?")
+    root = str(_v(article, "source_root_url", "") or "").strip().rstrip("/.,;:!?")
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for url in re.findall(r"https?://[^\s<>()\]\[{}\"']+", source, flags=re.I):
+        value = url.rstrip(".,;:!?")
+        if value.rstrip("/") in {canonical.rstrip("/"), root.rstrip("/")}:
+            continue
+        if value not in seen:
+            seen.add(value); out.append(("Деталі/реєстрація", value))
+    for email in re.findall(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source, flags=re.I):
+        if email not in seen:
+            seen.add(email); out.append(("Email", email))
+    for phone in re.findall(r"(?<!\d)(?:\+?\d[\d\s()\-]{7,}\d)(?!\d)", source):
+        digits = re.sub(r"\D", "", phone)
+        value = " ".join(phone.split())
+        if 8 <= len(digits) <= 15 and value not in seen:
+            seen.add(value); out.append(("Телефон", value))
+    return out[:8]
+
+
+def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) -> str:
+    value = str(text or "").strip()
+    missing = [(label, literal) for label, literal in _practical_literals(article) if literal not in value]
+    if not missing:
+        return value
+    suffix = "\n\n" + "\n".join(f"{label}: {literal}" for label, literal in missing)
+    if len(value) + len(suffix) > int(hard_max_chars):
+        raise ValueError(
+            f"AI прибрав практичні контакти/URL, а відновлення перевищує ліміт {int(hard_max_chars)}"
+        )
+    return value + suffix
+
+
 @dataclass(slots=True)
 class EditorialOutcome:
     decision: Decision
@@ -256,6 +300,12 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=210, timeout_seconds=25)
         fit = parse_fit(fit_result.text)
         raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
+        # RC54: a categorical PUBLISH with fit=9 is internally contradictory. For
+        # channels with the explicit commercial editorial profile, trust the categorical channel-fit decision and let the dedicated
+        # commercial value gate make the second decision instead of killing it here.
+        if _is_commercial_editorial(channel) and fit["decision"] == "publish" and raw_score < 60:
+            event("editorial", "normalized contradictory sold fit score", level=30, channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), raw_fit=raw_score, normalized_fit=60)
+            raw_score = 60
         score = max(0, min(100, raw_score + int(learning.fit_adjustment)))
         if learning.fit_adjustment:
             event(
@@ -266,6 +316,12 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         if fit["decision"] == "reject":
             return EditorialOutcome(Decision.REJECT, reason=_clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
+        if _is_commercial_editorial(channel):
+            value = self._sold_value_gate(article)
+            allowed, code, value_score = self._sold_value_allowed(value, score)
+            if not allowed:
+                return EditorialOutcome(Decision.REJECT, reason=f"SOLD_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
+            return EditorialOutcome(Decision.PUBLISH, reason=f"SOLD_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
         if fit_result.provider == "local" and all(key in fit for key in value_keys):
             value = {key: max(0, min(100, int(float(fit.get(key, 0) or 0)))) for key in value_keys}
             value["curiosity_only"] = bool(fit.get("curiosity_only", False))
@@ -277,6 +333,33 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
         return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
+
+    def _sold_value_gate(self, article: Any) -> dict[str, Any]:
+        prompt = f"""Ти COMMERCIAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit.
+Оціни 0..100 саме комерційну/маркетингову цінність: commercial_mechanism, consumer_behavior, creative_execution, measurable_result, strategic_transferability, why_now.
+Не вимагай універсального wow. Сильний конкретний кейс продукту, бренду, retail, реклами, ціноутворення, дистрибуції, поведінки споживача або продажів має проходити, якщо з нього зрозуміло «що спрацювало/не спрацювало і чому».
+SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
+Поверни ТІЛЬКИ JSON: {{"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"why_now":0,"reason":"коротко"}}"""
+
+        def parse(raw: str):
+            obj = _parse_json(raw)
+            for key in ("commercial_mechanism", "consumer_behavior", "creative_execution", "measurable_result", "strategic_transferability", "why_now"):
+                obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
+            return obj
+
+        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
+
+    @staticmethod
+    def _sold_value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
+        mechanism = int(data.get("commercial_mechanism", 0)); behavior = int(data.get("consumer_behavior", 0)); creative = int(data.get("creative_execution", 0)); result = int(data.get("measurable_result", 0)); transfer = int(data.get("strategic_transferability", 0)); why_now = int(data.get("why_now", 0))
+        score = int(round(mechanism*.24 + behavior*.18 + creative*.16 + result*.18 + transfer*.18 + why_now*.06))
+        if fit >= 60 and score >= 52 and transfer >= 45 and max(mechanism, behavior, result) >= 58:
+            return True, "commercial_case", score
+        if fit >= 65 and score >= 48 and creative >= 68 and max(mechanism, behavior, transfer) >= 52:
+            return True, "creative_commercial_case", score
+        if fit >= 70 and score >= 46 and mechanism >= 65 and transfer >= 50:
+            return True, "mechanism_case", score
+        return False, "below_sold_value", score
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
@@ -336,15 +419,21 @@ SOURCE:
 {_source_pack(article, 6200)}
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
+        def prepared_text(raw: str) -> str:
+            value = str(raw or "").strip()
+            if channel.mode == ChannelMode.MONITORING:
+                value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
+            return value
+
         def validator(raw: str) -> None:
             validate_writer_output(
-                article, raw, min_chars=effective_min, max_chars=effective_max,
+                article, prepared_text(raw), min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=body_hard_max, required_context=source_context,
             )
 
         result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
         draft = validate_writer_output(
-            article, result.text, min_chars=effective_min, max_chars=effective_max,
+            article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=body_hard_max, required_context=source_context,
         )
         if result.provider == "local":
@@ -369,16 +458,22 @@ SOURCE:
         prompt = f"""Ти фінальний редактор. Виправ ТІЛЬКИ мову, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Якщо текст уже добрий, поверни його без змін.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
+        def prepared_text(raw: str) -> str:
+            value = str(raw or "").strip()
+            if channel.mode == ChannelMode.MONITORING:
+                value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
+            return value
+
         def validator(raw: str) -> None:
             validate_writer_output(
-                article, raw, min_chars=min_chars, max_chars=max_chars,
+                article, prepared_text(raw), min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=body_hard_max, required_context=source_context,
             )
 
         try:
             result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28)
             return validate_writer_output(
-                article, result.text, min_chars=min_chars, max_chars=max_chars,
+                article, prepared_text(result.text), min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=body_hard_max, required_context=source_context,
             )
         except GatewayExhausted:
@@ -407,6 +502,12 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if selection.decision == Decision.REJECT:
             self.store.update_article(article_id, decision=str(Decision.REJECT), blocked_by=str(BlockedBy.NONE), reject_reason=selection.reason)
             return selection
+        saturation = topic_saturation_reason(self.store, channel, article)
+        if saturation:
+            blocked = EditorialOutcome(Decision.REJECT, reason=saturation, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, provider=selection.provider, model=selection.model)
+            self.store.update_article(article_id, decision=str(Decision.REJECT), blocked_by=str(BlockedBy.NONE), reject_reason=saturation, status_detail=saturation)
+            event("editorial", "topic saturation blocked", level=30, channel_id=channel.id, article_id=article_id, detail=saturation)
+            return blocked
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass

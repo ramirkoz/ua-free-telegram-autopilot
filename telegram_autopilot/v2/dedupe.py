@@ -18,7 +18,7 @@ _GENERIC = {
     "про","для","та","або","що","цей","ця","це","новий","нова","нове","реклама","кампанія","бренд","маркетинг",
 }
 _WORD_RE = re.compile(r"[A-Za-zА-Яа-яІіЇїЄєҐґ0-9][A-Za-zА-Яа-яІіЇїЄєҐґ0-9'’.-]{2,}")
-_CODE_RE = re.compile(r"\b(?:[A-Za-zА-Яа-яІіЇїЄєҐґ]{1,12}[-_ ]?\d+[A-Za-z0-9-]*|\d+[A-Za-z]{1,8}\d*)\b", re.I)
+_CODE_RE = re.compile(r"\b(?:[A-Za-z]{1,12}[-_ ]?\d+[A-Za-z0-9-]*|[А-Яа-яІіЇїЄєҐґ]{1,12}[-_]?\d+[A-Za-z0-9-]*|\d+[A-Za-z]{1,8}\d*)\b", re.I)
 
 
 def _v(row: Any, key: str, default: Any = "") -> Any:
@@ -46,10 +46,28 @@ def _body_words(row: Any) -> set[str]:
     return _words(str(_v(row,"raw_text","") or _v(row,"event_summary",""))[:5000])
 
 
+_SPACED_CODE_BRANDS = {
+    "iphone", "ipad", "galaxy", "pixel", "windows", "surface", "playstation", "xbox",
+    "geforce", "radeon", "tesla", "model", "gpt", "claude", "gemini", "qwen",
+}
+
+
 def _codes(row: Any) -> set[str]:
     text = f"{_v(row,'title','')} {_v(row,'raw_text','')}"
     out: set[str] = set()
     for token in _CODE_RE.findall(text[:3000]):
+        # A plain English word followed by a number is usually prose ("cortex 90",
+        # "inside 1"), not a product/version code.  Keep spaced codes only for
+        # brand-like CamelCase/acronyms or a small set of established model families.
+        if " " in token:
+            prefix = token.split(" ", 1)[0].strip()
+            brand_like = (
+                any(ch.isupper() for ch in prefix[1:])
+                or prefix.isupper()
+                or prefix.casefold() in _SPACED_CODE_BRANDS
+            )
+            if not brand_like:
+                continue
         normalized = re.sub(r"[\s_-]+", "", token).casefold()
         if len(normalized) >= 3 and not re.fullmatch(r"(?:19|20)\d{2}", normalized):
             out.add(normalized)
@@ -73,7 +91,7 @@ def _same_event(current: Any, candidate: Any) -> tuple[bool,str]:
         return True,"same content hash"
 
     ac,bc=_codes(current),_codes(candidate); shared_codes=ac&bc
-    if shared_codes and (ac-shared_codes) and (bc-shared_codes):
+    if (ac and bc and not shared_codes) or (shared_codes and (ac-shared_codes) and (bc-shared_codes)):
         return False,"conflicting strong event/version/product codes"
 
     at,bt=_title_words(current),_title_words(candidate); shared_title,title_containment=_overlap(at,bt)

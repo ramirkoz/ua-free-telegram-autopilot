@@ -133,6 +133,11 @@ class UpdateProtocol:
                 continue
             if request is None or self.request_already_terminal(request):
                 continue
+            # RC54: stale Drive requests must stay invisible after a newer runtime is
+            # installed. The single result.json only remembers the latest request, so
+            # request_already_terminal() alone cannot suppress older duplicates forever.
+            if _rc_number(request.target_version) <= _rc_number(V2_VERSION):
+                continue
             try:
                 mtime = float(source.stat().st_mtime)
             except OSError:

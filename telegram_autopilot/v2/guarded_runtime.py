@@ -14,14 +14,11 @@ class GuardedRuntimeEngine(MediaRecoveryRuntimeEngine):
         self.publisher = SemanticGuardedPublisher(store, self.dedupe)
 
     def start(self) -> None:
-        # A portable update intentionally preserves Data, including old READY rows.
-        # Reconcile that inherited queue against already-published history before a
-        # worker can send the next post. RC52's final gate sees at least seven days.
         try:
+            ledger_total = self.dedupe.sync_all_published_ledger()
+            event("publish", "published event ledger synchronized", entries=ledger_total)
             blocked = self.dedupe.reconcile_ready_against_published()
-            event("publish", "startup READY event reconciliation complete", blocked=blocked)
+            event("publish", "startup READY event reconciliation complete", blocked=blocked, ledger_entries=ledger_total)
         except Exception as exc:
-            # Do not hide a guard failure. Publishing still has the same pre-send
-            # event check, so startup can continue while the incident is logged.
             event("publish", "startup READY event reconciliation failed", level=40, detail=str(exc)[:1200])
         super().start()
