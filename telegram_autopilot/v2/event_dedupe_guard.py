@@ -19,8 +19,8 @@ from .semantic_dedupe import (
 _NUMBER_RE = re.compile(r"(?<![\\w])\\d+(?:[.,]\\d+)?(?:\\s*%|\\s*відсот(?:ок|ки|ків)?)?", re.I)
 _BINOMIAL_RE = re.compile(r"\\b([A-Z][a-z]{2,})\\s+([a-z][a-z-]{2,})\\b")
 _DISCOVERY_MARKERS = (
-    "discover", "discovered", "discovery", "new species", "species described",
-    "відкрит", "виявил", "новий вид", "нового виду", "описал", "таксон",
+    "new species", "species described", "species discovered", "new taxon", "taxonomic",
+    "новий вид", "нового виду", "описали вид", "відкрили вид", "новий таксон", "таксоном",
 )
 _RARE_STOP = {
     "дослідники", "дослідження", "науковці", "вчені", "результати", "показали",
