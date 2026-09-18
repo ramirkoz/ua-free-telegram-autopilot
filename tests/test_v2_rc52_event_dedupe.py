@@ -77,7 +77,7 @@ def test_scientific_name_fingerprint_is_generic_and_opt_in() -> None:
     enabled, reason = event_fingerprint_same_event(first, second, scientific_names=True)
 
     assert baseline is False
-    assert enabled is True
+    assert enabled is True, reason
     assert "leopardus tilcayo" in reason
 
 
@@ -106,7 +106,7 @@ def test_compound_subject_method_mechanism_fingerprint_is_not_story_specific() -
         rare_terms=True,
     )
 
-    assert same is True
+    assert same is True, reason
     assert "compound" in reason
 
 
