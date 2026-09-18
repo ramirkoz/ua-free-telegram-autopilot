@@ -1,0 +1,74 @@
+name: RC58 canonical sync apply
+
+on:
+  push:
+    branches: [release/rc58-ua-anti-slop]
+    paths:
+      - .sync/rc58_delta.zip
+      - .github/workflows/rc58-canonical-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact RC58 delta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $size=(Get-Item ".sync/rc58_delta.zip").Length
+          if ($size -ne 22945) { throw "Unexpected delta size: $size" }
+          $hash=(Get-FileHash ".sync/rc58_delta.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "e3efcaaa04ea4f0c041c98192c81cf27e59486710d228d1114aeda8433335e92") { throw "Delta SHA mismatch: $hash" }
+      - name: Apply RC58 delta
+        shell: pwsh
+        run: |
+          Expand-Archive ".sync/rc58_delta.zip" -DestinationPath ".rc58_apply" -Force
+          Get-ChildItem ".rc58_apply" -Recurse -File | ForEach-Object {
+            $rel=$_.FullName.Substring((Resolve-Path ".rc58_apply").Path.Length+1)
+            $dest=Join-Path (Resolve-Path ".").Path $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+            Copy-Item $_.FullName $dest -Force
+          }
+          Remove-Item ".rc58_apply" -Recurse -Force
+          Remove-Item ".sync" -Recurse -Force
+          Remove-Item ".github/workflows/rc58-canonical-sync.yml" -Force
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Compile
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
+      - name: Full regression suite
+        run: python -m pytest -q
+      - name: RC58 architecture gate
+        shell: pwsh
+        run: |
+          if ((Get-Content VERSION.txt -Raw).Trim() -ne "2.0.0-rc58") { throw "VERSION mismatch" }
+          if ((Get-Content V2_VERSION.txt -Raw).Trim() -ne "2.0.0-rc58") { throw "V2 mismatch" }
+          if ((Get-Content PUBLIC_VERSION.txt -Raw).Trim() -ne "2.0.0-rc58") { throw "PUBLIC mismatch" }
+          $ed=Get-Content "telegram_autopilot/v2/editorial.py" -Raw
+          $up=Get-Content "telegram_autopilot/v2/update_protocol.py" -Raw
+          $adv=Get-Content "telegram_autopilot/v2/advanced_update_coordinator.py" -Raw
+          if (-not $ed.Contains("assess_ukrainian_slop")) { throw "Anti-Slop not wired into clean V2 editorial path" }
+          if (-not $ed.Contains("_anti_slop_profile")) { throw "Per-channel behavior profile missing" }
+          if (-not $up.Contains('encoding="utf-8-sig"')) { throw "BOM-safe request parser missing" }
+          if (-not $adv.Contains('encoding="utf-8-sig"')) { throw "BOM-safe manifest parser missing" }
+          Write-Host "RC58_ARCHITECTURE_OK"
+      - name: Commit clean canonical RC58
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "RC58: UA Anti-Slop v1 and BOM-safe autonomous updater"
+          git push origin HEAD:release/rc58-ua-anti-slop
