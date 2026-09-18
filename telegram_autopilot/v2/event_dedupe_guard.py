@@ -16,8 +16,8 @@ from .semantic_dedupe import (
 # Advanced fingerprints are generic capabilities. Whether they are enabled is read
 # from the current channel configuration; no channel name or concrete story is used
 # by runtime matching.
-_NUMBER_RE = re.compile(r"(?<![\\w])\\d+(?:[.,]\\d+)?(?:\\s*%|\\s*відсот(?:ок|ки|ків)?)?", re.I)
-_BINOMIAL_RE = re.compile(r"\\b([A-Z][a-z]{2,})\\s+([a-z][a-z-]{2,})\\b")
+_NUMBER_RE = re.compile(r"(?<![\w])\d+(?:[.,]\d+)?(?:\s*%|\s*відсот(?:ок|ки|ків)?)?", re.I)
+_BINOMIAL_RE = re.compile(r"\b([A-Z][a-z]{2,})\s+([a-z][a-z-]{2,})\b")
 _DISCOVERY_MARKERS = (
     "new species", "species described", "species discovered", "new taxon", "taxonomic",
     "новий вид", "нового виду", "описали вид", "відкрили вид", "новий таксон", "таксоном",
