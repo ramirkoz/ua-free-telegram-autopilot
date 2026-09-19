@@ -152,12 +152,15 @@ class ChannelDialog(tk.Toplevel):
             ATTRIBUTION_MODE_LABELS.get(cfg.source_attribution_mode, ATTRIBUTION_MODE_LABELS[SourceAttributionMode.STANDARD]),
             list(ATTRIBUTION_MODE_VALUES),
         )
+        self._check(p, 18, "Контроль відсутності виходу", cfg.output_starvation_enabled)
+        self._entry(p, 19, "Starvation: годин без публікації", cfg.output_starvation_hours)
+        self._entry(p, 20, "Starvation: мін. оброблених матеріалів", cfg.output_starvation_min_processed)
         ttk.Label(
             p,
             text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела»; назва джерела також зберігається як обов'язковий контекст рерайту.",
             wraplength=760, foreground="#444",
-        ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
-        ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+        ).grid(row=21, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=22, column=0, columnspan=2, sticky="w", padx=6, pady=6)
 
     def _build_dedupe(self, p, cfg):
         self._combo(
@@ -169,6 +172,7 @@ class ChannelDialog(tk.Toplevel):
         self._check(p, 2, "Compound event fingerprint: subject + method + mechanism", cfg.dedupe_compound_events)
         self._check(p, 3, "Підсилення рідкісних термінів", cfg.dedupe_rare_terms)
         self._entry(p, 4, "Історія опублікованих для фінальної перевірки, год", cfg.published_dedupe_window_hours)
+        self._text(p, 5, "Dedupe settings JSON", cfg.dedupe_settings_json, 7)
         ttk.Label(
             p,
             text=(
@@ -176,7 +180,7 @@ class ChannelDialog(tk.Toplevel):
                 "Назва каналу, окремі види, дослідження чи конкретні новини не зашиваються у runtime."
             ),
             wraplength=760, foreground="#444",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=10)
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=10)
 
     def _text(self, parent, row, label, value, height=6):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="nw", padx=6, pady=5)
@@ -218,6 +222,7 @@ class ChannelDialog(tk.Toplevel):
         self._entry(p, 9, "Макс. символів", q.target_max_chars)
         ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
+        self._text(p, 12, "Editorial value settings JSON", cfg.editorial_value_settings_json, 7)
 
     def _save(self):
         try:
@@ -259,6 +264,7 @@ class ChannelDialog(tk.Toplevel):
                 dedupe_scientific_names=bool(self._get("Scientific-name fingerprint")),
                 dedupe_compound_events=bool(self._get("Compound event fingerprint: subject + method + mechanism")),
                 dedupe_rare_terms=bool(self._get("Підсилення рідкісних термінів")),
+                dedupe_settings_json=self._get("Dedupe settings JSON") or "{}",
                 published_dedupe_window_hours=int(self._get("Історія опублікованих для фінальної перевірки, год")),
                 max_age_hours=int(self._get("Макс. вік матеріалу, год")),
                 max_posts_per_cycle=int(self._get("Макс. постів за цикл")),
@@ -270,6 +276,10 @@ class ChannelDialog(tk.Toplevel):
                 topic_daily_limit=old.topic_daily_limit,
                 related_spacing_posts=old.related_spacing_posts,
                 editorial_weights_json=self._get("Редакційні ваги JSON") or "[]",
+                editorial_value_settings_json=self._get("Editorial value settings JSON") or "{}",
+                output_starvation_enabled=bool(self._get("Контроль відсутності виходу")),
+                output_starvation_hours=int(self._get("Starvation: годин без публікації")),
+                output_starvation_min_processed=int(self._get("Starvation: мін. оброблених матеріалів")),
                 language_mode=self._get("Мова"),
                 media_enrichment_mode=self._get("Медіа-збагачення"),
                 media_first_allowed=bool(self._get("Дозволити media-first")),
@@ -277,6 +287,12 @@ class ChannelDialog(tk.Toplevel):
                 policy=policy,
             )
             json.loads(cfg.editorial_weights_json)
+            parsed_dedupe = json.loads(cfg.dedupe_settings_json)
+            parsed_editorial = json.loads(cfg.editorial_value_settings_json)
+            if not isinstance(parsed_dedupe, dict) or not isinstance(parsed_editorial, dict):
+                raise ValueError("Dedupe/Editorial settings JSON мають бути JSON object")
+            if cfg.output_starvation_hours < 1 or cfg.output_starvation_min_processed < 1:
+                raise ValueError("Starvation пороги мають бути додатними")
             self.store.save_channel(cfg)
             self.on_saved()
             self.destroy()
