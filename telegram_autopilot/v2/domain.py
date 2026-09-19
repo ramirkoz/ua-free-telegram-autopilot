@@ -120,6 +120,9 @@ class ChannelConfig:
     dedupe_compound_events: bool = False
     dedupe_rare_terms: bool = False
     published_dedupe_window_hours: int = 168
+    output_starvation_enabled: bool = False
+    output_starvation_hours: int = 4
+    output_starvation_min_processed: int = 8
     max_age_hours: int = 24
     max_posts_per_cycle: int = 3
     publish_24h: bool = False
