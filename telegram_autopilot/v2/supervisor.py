@@ -275,7 +275,9 @@ class SupervisorService:
         cut60 = datetime.fromtimestamp(now_ts - 3600, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
         out: dict[str, Any] = {}
         with self.store.connect() as con:
-            for ch in con.execute("SELECT id,name,enabled,max_age_hours FROM channels WHERE enabled=1 ORDER BY id").fetchall():
+            for ch in con.execute("""SELECT id,name,enabled,max_age_hours,publish_24h,publish_start,publish_end,
+                output_starvation_enabled,output_starvation_window_hours,output_starvation_min_processed,output_starvation_min_published
+                FROM channels WHERE enabled=1 ORDER BY id""").fetchall():
                 cid = int(ch["id"])
                 active = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state IN ('QUEUED','WAITING','LEASED')", (cid,)).fetchone()[0] or 0)
                 due = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='QUEUED' AND available_at<=?", (cid, now_value)).fetchone()[0] or 0)
@@ -308,6 +310,14 @@ class SupervisorService:
                 last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE channel_id=? AND stage='PUBLISHED'", (cid,)).fetchone()[0] or "")
                 published_30m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut30)).fetchone()[0] or 0)
                 published_60m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut60)).fetchone()[0] or 0)
+                starvation_hours = max(1, int(ch["output_starvation_window_hours"] or 4))
+                cut_starvation = datetime.fromtimestamp(now_ts - starvation_hours * 3600, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+                published_starvation = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut_starvation)).fetchone()[0] or 0)
+                jobs_done_starvation = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND datetime(updated_at)>=datetime(?)", (cid, cut_starvation)).fetchone()[0] or 0)
+                rejected_starvation = int(con.execute("""SELECT COUNT(*) FROM jobs j JOIN articles a ON a.id=j.article_id
+                    WHERE j.channel_id=? AND j.state='DONE' AND a.decision='REJECT' AND datetime(j.updated_at)>=datetime(?)""", (cid, cut_starvation)).fetchone()[0] or 0)
+                duplicates_starvation = int(con.execute("""SELECT COUNT(*) FROM jobs j JOIN articles a ON a.id=j.article_id
+                    WHERE j.channel_id=? AND j.state='DONE' AND a.decision='DUPLICATE' AND datetime(j.updated_at)>=datetime(?)""", (cid, cut_starvation)).fetchone()[0] or 0)
                 jobs_done_10m = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND datetime(updated_at)>=datetime(?)", (cid, cut10)).fetchone()[0] or 0)
                 jobs_done_30m = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND datetime(updated_at)>=datetime(?)", (cid, cut30)).fetchone()[0] or 0)
                 jobs_done_60m = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND datetime(updated_at)>=datetime(?)", (cid, cut60)).fetchone()[0] or 0)
@@ -347,6 +357,17 @@ class SupervisorService:
                     "published_30m": published_30m,
                     "published_60m": published_60m,
                     "last_publish": last_publish,
+                    "publish_24h": bool(ch["publish_24h"]),
+                    "publish_start": str(ch["publish_start"] or "07:00"),
+                    "publish_end": str(ch["publish_end"] or "00:00"),
+                    "output_starvation_enabled": bool(ch["output_starvation_enabled"]),
+                    "output_starvation_window_hours": starvation_hours,
+                    "output_starvation_min_processed": max(1, int(ch["output_starvation_min_processed"] or 20)),
+                    "output_starvation_min_published": max(0, int(ch["output_starvation_min_published"] or 0)),
+                    "jobs_done_starvation_window": jobs_done_starvation,
+                    "published_starvation_window": published_starvation,
+                    "rejected_starvation_window": rejected_starvation,
+                    "duplicates_starvation_window": duplicates_starvation,
                     "jobs_done_10m": jobs_done_10m,
                     "jobs_done_30m": jobs_done_30m,
                     "jobs_done_60m": jobs_done_60m,
@@ -360,6 +381,33 @@ class SupervisorService:
                     "last_source_check": last_source_check,
                 }
         return out
+
+    @staticmethod
+    def _publish_window_open_seconds(stats: dict[str, Any], now_dt: datetime) -> tuple[bool, float]:
+        if bool(stats.get("publish_24h")):
+            return True, 24.0 * 3600.0
+        def hm(value: str, fallback: str) -> tuple[int, int]:
+            try:
+                h, m = str(value or fallback).split(":", 1)
+                return max(0, min(23, int(h))), max(0, min(59, int(m)))
+            except Exception:
+                h, m = fallback.split(":", 1); return int(h), int(m)
+        sh, sm = hm(str(stats.get("publish_start") or "07:00"), "07:00")
+        eh, em = hm(str(stats.get("publish_end") or "00:00"), "00:00")
+        minute = now_dt.hour * 60 + now_dt.minute
+        start = sh * 60 + sm; end = eh * 60 + em
+        if start == end:
+            return True, 24.0 * 3600.0
+        if start < end:
+            if not (start <= minute < end):
+                return False, 0.0
+            return True, float((minute - start) * 60 + now_dt.second)
+        # Overnight window, e.g. 18:00-02:00.
+        if minute >= start:
+            return True, float((minute - start) * 60 + now_dt.second)
+        if minute < end:
+            return True, float(((24 * 60 - start) + minute) * 60 + now_dt.second)
+        return False, 0.0
 
     def _operational_states(self, snapshot: dict[str, Any], cfg: SupervisorConfig) -> dict[str, dict[str, Any]]:
         now = time.time()
@@ -421,7 +469,25 @@ class SupervisorService:
             if very_slow:
                 reasons.append("slow source >120s: " + ", ".join(str(x.get("name") or "?") for x in very_slow[:3]))
 
-            result[str(cid)] = {"state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons}
+            open_now, open_seconds = self._publish_window_open_seconds(stats, datetime.now().astimezone())
+            starvation_window = max(1, int(stats.get("output_starvation_window_hours") or 4))
+            starvation_processed = int(stats.get("jobs_done_starvation_window") or 0)
+            starvation_published = int(stats.get("published_starvation_window") or 0)
+            starvation_min_processed = max(1, int(stats.get("output_starvation_min_processed") or 20))
+            starvation_min_published = max(0, int(stats.get("output_starvation_min_published") or 0))
+            output_starved = bool(
+                stats.get("output_starvation_enabled") and open_now
+                and open_seconds >= starvation_window * 3600
+                and starvation_processed >= starvation_min_processed
+                and starvation_published < starvation_min_published
+            )
+            if output_starved:
+                reasons.append(
+                    f"output starvation: published={starvation_published}/{starvation_min_published}, "
+                    f"processed={starvation_processed}/{starvation_min_processed} in {starvation_window}h"
+                )
+
+            result[str(cid)] = {"state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons, "output_starved": output_starved}
         return result
 
     def _database_status(self) -> dict[str, Any]:
@@ -631,6 +697,18 @@ class SupervisorService:
                     "WARNING", dcode, f"Низька пропускна здатність каналу «{name}»",
                     f"Due jobs={due_ch}; oldest_due_age={int(stats.get('oldest_due_age_seconds') or 0)//60} хв; "
                     f"done/30m={int(stats.get('jobs_done_30m') or 0)}; published/30m={int(stats.get('published_30m') or 0)}. {reasons}"
+                ))
+
+            starve_code = f"CHANNEL_OUTPUT_STARVATION_{cid}"
+            starved = bool(op.get("output_starved"))
+            elapsed_starved = self._condition_elapsed(starve_code, starved, now)
+            if starved and elapsed_starved >= 0:
+                incidents.append(Incident(
+                    "WARNING", starve_code, f"Канал «{name}» обробляє матеріали, але не публікує",
+                    f"window={int(stats.get('output_starvation_window_hours') or 0)}h; "
+                    f"processed={int(stats.get('jobs_done_starvation_window') or 0)}; "
+                    f"published={int(stats.get('published_starvation_window') or 0)}/{int(stats.get('output_starvation_min_published') or 0)}; "
+                    f"rejected={int(stats.get('rejected_starvation_window') or 0)}; duplicates={int(stats.get('duplicates_starvation_window') or 0)}."
                 ))
 
             total_sources = int(stats.get("sources_total") or 0)

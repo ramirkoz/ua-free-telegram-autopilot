@@ -158,6 +158,11 @@ class ChannelDialog(tk.Toplevel):
             wraplength=760, foreground="#444",
         ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+        self._check(p, 20, "Контроль голодування виходу", cfg.output_starvation_enabled)
+        self._entry(p, 21, "Вікно голодування виходу, год", cfg.output_starvation_window_hours)
+        self._entry(p, 22, "Мін. оброблених у вікні голодування", cfg.output_starvation_min_processed)
+        self._entry(p, 23, "Мін. публікацій у вікні голодування", cfg.output_starvation_min_published)
+        ttk.Label(p, text="Supervisor попереджає лише коли в поточному дозволеному вікні публікацій канал достатньо обробляє матеріали, але не дає налаштований мінімум постів.", wraplength=760, foreground="#444").grid(row=24, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
     def _build_dedupe(self, p, cfg):
         self._combo(
@@ -218,6 +223,8 @@ class ChannelDialog(tk.Toplevel):
         self._entry(p, 9, "Макс. символів", q.target_max_chars)
         ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
+        self._text(p, 12, "Пороги editorial JSON", cfg.editorial_thresholds_json, 5)
+        ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults; channel-specific послаблення/посилення зберігаються тут, а не в коді runtime.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
     def _save(self):
         try:
@@ -270,6 +277,11 @@ class ChannelDialog(tk.Toplevel):
                 topic_daily_limit=old.topic_daily_limit,
                 related_spacing_posts=old.related_spacing_posts,
                 editorial_weights_json=self._get("Редакційні ваги JSON") or "[]",
+                editorial_thresholds_json=self._get("Пороги editorial JSON") or "{}",
+                output_starvation_enabled=bool(self._get("Контроль голодування виходу")),
+                output_starvation_window_hours=int(self._get("Вікно голодування виходу, год")),
+                output_starvation_min_processed=int(self._get("Мін. оброблених у вікні голодування")),
+                output_starvation_min_published=int(self._get("Мін. публікацій у вікні голодування")),
                 language_mode=self._get("Мова"),
                 media_enrichment_mode=self._get("Медіа-збагачення"),
                 media_first_allowed=bool(self._get("Дозволити media-first")),
@@ -277,6 +289,7 @@ class ChannelDialog(tk.Toplevel):
                 policy=policy,
             )
             json.loads(cfg.editorial_weights_json)
+            json.loads(cfg.editorial_thresholds_json)
             self.store.save_channel(cfg)
             self.on_saved()
             self.destroy()

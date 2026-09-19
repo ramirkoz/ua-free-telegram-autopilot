@@ -130,6 +130,11 @@ class ChannelConfig:
     topic_daily_limit: int = 2
     related_spacing_posts: int = 5
     editorial_weights_json: str = "[]"
+    editorial_thresholds_json: str = "{}"
+    output_starvation_enabled: bool = True
+    output_starvation_window_hours: int = 4
+    output_starvation_min_processed: int = 20
+    output_starvation_min_published: int = 1
     language_mode: str = "ukru_to_uk"
     media_enrichment_mode: str = "auto"
     media_first_allowed: bool = True

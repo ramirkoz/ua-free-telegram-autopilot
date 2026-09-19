@@ -49,7 +49,8 @@ _SCIENTIFIC_CONTEXT = (
 _SCIENTIFIC_SECOND_STOP = {
     "according", "added", "after", "again", "around", "because", "comes", "could", "found", "helps", "including",
     "looking", "might", "provides", "really", "released", "said", "showing", "still", "their", "there", "these",
-    "they", "told", "using", "would",
+    "they", "told", "using", "would", "model", "hope", "science", "podcast", "media", "news", "report",
+    "content", "research", "study", "system", "device", "market", "company", "people", "world",
 }
 
 _EVENT_ACTION_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -214,17 +215,26 @@ def _entity_tokens(value: str) -> set[str]:
 
 
 def _scientific_names(value: str) -> set[str]:
+    """Extract Latin binomials only with nearby taxonomic evidence.
+
+    RC58 used one global science/research marker for the whole article, so ordinary
+    title-case phrases such as ``American Hope`` or ``Astra Model`` could become
+    fake species identifiers.  RC59 requires the taxonomic cue in a local window
+    around the candidate and keeps a conservative generic-word deny-list.
+    """
     raw = str(value or "")
-    low = raw.casefold()
-    if not any(marker in low for marker in _SCIENTIFIC_CONTEXT):
-        return set()
     out: set[str] = set()
-    for first, second in _SCIENTIFIC_BINOMIAL_RE.findall(raw):
-        if second.casefold() in _SCIENTIFIC_SECOND_STOP:
+    for match in _SCIENTIFIC_BINOMIAL_RE.finditer(raw):
+        first, second = match.group(1), match.group(2)
+        first_low, second_low = first.casefold(), second.casefold()
+        if second_low in _SCIENTIFIC_SECOND_STOP or first_low in _ENTITY_STOP:
             continue
-        if first.casefold() in _ENTITY_STOP:
+        start = max(0, match.start() - 180)
+        end = min(len(raw), match.end() + 180)
+        local = raw[start:end].casefold()
+        if not any(marker in local for marker in _SCIENTIFIC_CONTEXT):
             continue
-        out.add(f"{first.casefold()} {second.casefold()}")
+        out.add(f"{first_low} {second_low}")
     return out
 
 
