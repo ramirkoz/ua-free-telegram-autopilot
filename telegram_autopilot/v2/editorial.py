@@ -204,6 +204,41 @@ def _anti_slop_profile(channel: ChannelConfig) -> str:
     return "news"
 
 
+_STANDARD_EDITORIAL_THRESHOLDS: dict[str, int] = {
+    "standard_score": 60, "standard_payoff": 50, "standard_retellability": 48,
+    "standard_signal": 52, "standard_why_now": 32, "standard_novelty_exception": 78,
+    "mechanism_lane_fit": 60, "mechanism_lane_score": 48, "mechanism_lane_mechanism": 60,
+    "mechanism_lane_payoff": 55, "mechanism_lane_retellability": 50,
+    "insight_lane_fit": 60, "insight_lane_score": 48, "insight_lane_insight": 62,
+    "insight_lane_payoff": 55, "insight_lane_retellability": 48,
+    "creative_lane_fit": 60, "creative_lane_score": 50, "creative_lane_novelty": 65,
+    "creative_lane_payoff": 55, "creative_lane_retellability": 58,
+}
+
+_COMMERCIAL_EDITORIAL_THRESHOLDS: dict[str, int] = {
+    "commercial_case_fit": 60, "commercial_case_score": 52, "commercial_transferability": 45, "commercial_anchor": 58,
+    "creative_case_fit": 65, "creative_case_score": 48, "creative_execution": 68, "creative_anchor": 52,
+    "mechanism_case_fit": 70, "mechanism_case_score": 46, "mechanism": 65, "mechanism_transferability": 50,
+}
+
+
+def _editorial_thresholds(channel: ChannelConfig) -> dict[str, int]:
+    base = dict(_COMMERCIAL_EDITORIAL_THRESHOLDS if _is_commercial_editorial(channel) else _STANDARD_EDITORIAL_THRESHOLDS)
+    try:
+        raw = json.loads(str(channel.editorial_thresholds_json or "{}"))
+    except Exception:
+        raw = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key not in base:
+                continue
+            try:
+                base[key] = max(0, min(100, int(float(value))))
+            except Exception:
+                continue
+    return base
+
+
 def _practical_literals(article: Any) -> list[tuple[str, str]]:
     source = str(_v(article, "raw_text", "") or "")
     canonical = str(_v(article, "canonical_source_url", "") or "").strip().rstrip("/.,;:!?")
@@ -339,7 +374,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
-            allowed, code, value_score = self._sold_value_allowed(value, score)
+            allowed, code, value_score = self._sold_value_allowed(value, score, _editorial_thresholds(channel))
             if not allowed:
                 return EditorialOutcome(Decision.REJECT, reason=f"SOLD_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
             return EditorialOutcome(Decision.PUBLISH, reason=f"SOLD_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -350,7 +385,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             event("ai", "CPU local fit/value combined", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
         else:
             value = self._value_gate(article)
-        allowed, code, value_score = self._value_allowed(value, score)
+        allowed, code, value_score = self._value_allowed(value, score, _editorial_thresholds(channel))
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
         return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -371,14 +406,15 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
 
     @staticmethod
-    def _sold_value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
+    def _sold_value_allowed(data: Mapping[str, Any], fit: int, thresholds: Mapping[str, int] | None = None) -> tuple[bool, str, int]:
+        t = dict(_COMMERCIAL_EDITORIAL_THRESHOLDS); t.update(dict(thresholds or {}))
         mechanism = int(data.get("commercial_mechanism", 0)); behavior = int(data.get("consumer_behavior", 0)); creative = int(data.get("creative_execution", 0)); result = int(data.get("measurable_result", 0)); transfer = int(data.get("strategic_transferability", 0)); why_now = int(data.get("why_now", 0))
         score = int(round(mechanism*.24 + behavior*.18 + creative*.16 + result*.18 + transfer*.18 + why_now*.06))
-        if fit >= 60 and score >= 52 and transfer >= 45 and max(mechanism, behavior, result) >= 58:
+        if fit >= t["commercial_case_fit"] and score >= t["commercial_case_score"] and transfer >= t["commercial_transferability"] and max(mechanism, behavior, result) >= t["commercial_anchor"]:
             return True, "commercial_case", score
-        if fit >= 65 and score >= 48 and creative >= 68 and max(mechanism, behavior, transfer) >= 52:
+        if fit >= t["creative_case_fit"] and score >= t["creative_case_score"] and creative >= t["creative_execution"] and max(mechanism, behavior, transfer) >= t["creative_anchor"]:
             return True, "creative_commercial_case", score
-        if fit >= 70 and score >= 46 and mechanism >= 65 and transfer >= 50:
+        if fit >= t["mechanism_case_fit"] and score >= t["mechanism_case_score"] and mechanism >= t["mechanism"] and transfer >= t["mechanism_transferability"]:
             return True, "mechanism_case", score
         return False, "below_sold_value", score
 
@@ -396,15 +432,16 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
 
     @staticmethod
-    def _value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
+    def _value_allowed(data: Mapping[str, Any], fit: int, thresholds: Mapping[str, int] | None = None) -> tuple[bool, str, int]:
+        t = dict(_STANDARD_EDITORIAL_THRESHOLDS); t.update(dict(thresholds or {}))
         weights = {"novelty": .14, "consequence_or_insight": .19, "mechanism": .14, "reader_payoff": .19, "retellability": .15, "concrete_stakes": .09, "why_now": .10}
         score = int(round(sum(int(data.get(key, 0) or 0) * weight for key, weight in weights.items())))
         novelty = int(data.get("novelty", 0)); insight = int(data.get("consequence_or_insight", 0)); mechanism = int(data.get("mechanism", 0)); payoff = int(data.get("reader_payoff", 0)); retell = int(data.get("retellability", 0)); stakes = int(data.get("concrete_stakes", 0)); why_now = int(data.get("why_now", 0)); curiosity = bool(data.get("curiosity_only", False))
-        standard = not (curiosity and insight < 55 and payoff < 60) and score >= 60 and payoff >= 50 and retell >= 48 and max(insight, mechanism, stakes) >= 52 and not (why_now < 32 and novelty < 78)
+        standard = not (curiosity and insight < 55 and payoff < 60) and score >= t["standard_score"] and payoff >= t["standard_payoff"] and retell >= t["standard_retellability"] and max(insight, mechanism, stakes) >= t["standard_signal"] and not (why_now < t["standard_why_now"] and novelty < t["standard_novelty_exception"])
         if standard: return True, "standard", score
-        if fit >= 60 and score >= 48 and mechanism >= 60 and payoff >= 55 and retell >= 50: return True, "policy_fit_mechanism_lane", score
-        if fit >= 60 and score >= 48 and insight >= 62 and payoff >= 55 and retell >= 48: return True, "policy_fit_insight_lane", score
-        if fit >= 60 and score >= 50 and novelty >= 65 and payoff >= 55 and retell >= 58: return True, "policy_fit_creative_lane", score
+        if fit >= t["mechanism_lane_fit"] and score >= t["mechanism_lane_score"] and mechanism >= t["mechanism_lane_mechanism"] and payoff >= t["mechanism_lane_payoff"] and retell >= t["mechanism_lane_retellability"]: return True, "policy_fit_mechanism_lane", score
+        if fit >= t["insight_lane_fit"] and score >= t["insight_lane_score"] and insight >= t["insight_lane_insight"] and payoff >= t["insight_lane_payoff"] and retell >= t["insight_lane_retellability"]: return True, "policy_fit_insight_lane", score
+        if fit >= t["creative_lane_fit"] and score >= t["creative_lane_score"] and novelty >= t["creative_lane_novelty"] and payoff >= t["creative_lane_payoff"] and retell >= t["creative_lane_retellability"]: return True, "policy_fit_creative_lane", score
         return False, "below_editorial_value", score
 
     def write(self, channel: ChannelConfig, article: Any, selection: EditorialOutcome) -> EditorialOutcome:
