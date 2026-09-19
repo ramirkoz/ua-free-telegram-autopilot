@@ -1,0 +1,99 @@
+name: RC59 canonical sync apply
+
+on:
+  push:
+    branches: [release/rc59-throughput-separation]
+    paths:
+      - .sync/rc59_delta.zip
+      - .github/workflows/rc59-canonical-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact RC59 delta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $size = (Get-Item ".sync/rc59_delta.zip").Length
+          if ($size -ne 68775) { throw "Unexpected delta size: $size" }
+          $hash = (Get-FileHash ".sync/rc59_delta.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "67918e74be90c249c877aec88857614a208c10deeed2a08dddbcb2b1b754450f") { throw "Delta SHA mismatch: $hash" }
+
+      - name: Apply RC59 delta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Expand-Archive ".sync/rc59_delta.zip" -DestinationPath ".rc59_apply" -Force
+          Get-ChildItem ".rc59_apply" -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path ".rc59_apply").Path.Length + 1)
+            $dest = Join-Path (Resolve-Path ".").Path $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+            Copy-Item $_.FullName $dest -Force
+          }
+          Remove-Item ".rc59_apply" -Recurse -Force
+          Remove-Item ".sync" -Recurse -Force
+          Remove-Item ".github/workflows/rc59-canonical-sync.yml" -Force
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+
+      - name: Compile
+        run: python -m compileall -q telegram_autopilot tests app_v2.py
+
+      - name: Full regression suite
+        run: python -m pytest -q
+
+      - name: RC59 architecture gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ((Get-Content VERSION.txt -Raw).Trim() -ne "2.0.0-rc59") { throw "VERSION mismatch" }
+          if ((Get-Content V2_VERSION.txt -Raw).Trim() -ne "2.0.0-rc59") { throw "V2 mismatch" }
+          if ((Get-Content PUBLIC_VERSION.txt -Raw).Trim() -ne "2.0.0-rc59") { throw "PUBLIC mismatch" }
+
+          $files = @(
+            "telegram_autopilot/v2/event_dedupe_guard.py",
+            "telegram_autopilot/v2/editorial.py",
+            "telegram_autopilot/v2/storage.py",
+            "telegram_autopilot/v2/supervisor.py"
+          )
+          foreach ($path in $files) {
+            $text = Get-Content $path -Raw
+            if ($text -match "CTRL\+UA|ПРОДАНО|ЗАПОРІЖЖЯ") { throw "Channel name leaked into runtime: $path" }
+            if ($text -match "channel_id\s*==\s*[123]") { throw "Channel ID hardcode leaked into runtime: $path" }
+          }
+
+          $dedupe = Get-Content "telegram_autopilot/v2/event_dedupe_guard.py" -Raw
+          $editorial = Get-Content "telegram_autopilot/v2/editorial.py" -Raw
+          $storage = Get-Content "telegram_autopilot/v2/storage.py" -Raw
+          $supervisor = Get-Content "telegram_autopilot/v2/supervisor.py" -Raw
+          if (-not $dedupe.Contains("rare_only_strong")) { throw "Compound dedupe hardening missing" }
+          if (-not $dedupe.Contains("nearby taxonomy evidence")) { throw "Scientific-name hardening missing" }
+          if (-not $editorial.Contains("_editorial_tuning")) { throw "Channel-owned editorial tuning missing" }
+          if (-not $storage.Contains("output_starvation_enabled")) { throw "Channel-owned starvation settings missing" }
+          if (-not $supervisor.Contains("CHANNEL_OUTPUT_STARVATION_")) { throw "Starvation incident missing" }
+          Write-Host "RC59_SEPARATION_OK"
+
+      - name: Commit clean canonical RC59
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          git commit -m "RC59: repair channel throughput with config/runtime separation"
+          git push origin HEAD:release/rc59-throughput-separation
