@@ -27,7 +27,7 @@ _QUANTITY_RE = re.compile(
     re.I,
 )
 _NAMED_ENTITY_RE = re.compile(r"\b(?:[A-Z][A-Za-z0-9&+.-]{2,}|[A-Z]{2,10})\b")
-_SCIENTIFIC_BINOMIAL_RE = re.compile(r"\b([A-Z][a-z]{3,})\s+([a-z][a-z-]{3,})\b")
+_SCIENTIFIC_BINOMIAL_RE = re.compile(r"\b([A-Z][a-z]{3,})\s+([a-z][a-z-]{2,})\b")
 
 _ENTITY_STOP = {
     "the", "and", "for", "with", "from", "this", "that", "into", "about", "after", "before",
