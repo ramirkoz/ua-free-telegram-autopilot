@@ -66,7 +66,6 @@ jobs:
           $files = @(
             "telegram_autopilot/v2/event_dedupe_guard.py",
             "telegram_autopilot/v2/editorial.py",
-            "telegram_autopilot/v2/storage.py",
             "telegram_autopilot/v2/supervisor.py"
           )
           foreach ($path in $files) {
