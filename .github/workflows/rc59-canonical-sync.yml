@@ -24,9 +24,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $size = (Get-Item ".sync/rc59_delta.zip").Length
-          if ($size -ne 68775) { throw "Unexpected delta size: $size" }
+          if ($size -ne 68914) { throw "Unexpected delta size: $size" }
           $hash = (Get-FileHash ".sync/rc59_delta.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne "67918e74be90c249c877aec88857614a208c10deeed2a08dddbcb2b1b754450f") { throw "Delta SHA mismatch: $hash" }
+          if ($hash -ne "f3944baee91b4671ecde984458b0ae07a3a497ab2d8cb7f037a5cce7cd39c313") { throw "Delta SHA mismatch: $hash" }
 
       - name: Apply RC59 delta
         shell: pwsh
