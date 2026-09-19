@@ -204,6 +204,22 @@ def _anti_slop_profile(channel: ChannelConfig) -> str:
     return "news"
 
 
+def _editorial_tuning(channel: ChannelConfig) -> dict[str, Any]:
+    """Read optional channel-owned editorial thresholds from existing JSON settings."""
+    try:
+        parsed = json.loads(str(channel.editorial_weights_json or "{}"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _int_setting(data: Mapping[str, Any], key: str, default: int) -> int:
+    try:
+        return int(data.get(key, default))
+    except Exception:
+        return int(default)
+
+
 def _practical_literals(article: Any) -> list[tuple[str, str]]:
     source = str(_v(article, "raw_text", "") or "")
     canonical = str(_v(article, "canonical_source_url", "") or "").strip().rstrip("/.,;:!?")
@@ -339,7 +355,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
-            allowed, code, value_score = self._sold_value_allowed(value, score)
+            allowed, code, value_score = self._sold_value_allowed(value, score, _editorial_tuning(channel).get("commercial_gate", {}))
             if not allowed:
                 return EditorialOutcome(Decision.REJECT, reason=f"SOLD_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
             return EditorialOutcome(Decision.PUBLISH, reason=f"SOLD_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -371,14 +387,15 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
 
     @staticmethod
-    def _sold_value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
+    def _sold_value_allowed(data: Mapping[str, Any], fit: int, tuning: Mapping[str, Any] | None = None) -> tuple[bool, str, int]:
+        tuning = tuning or {}
         mechanism = int(data.get("commercial_mechanism", 0)); behavior = int(data.get("consumer_behavior", 0)); creative = int(data.get("creative_execution", 0)); result = int(data.get("measurable_result", 0)); transfer = int(data.get("strategic_transferability", 0)); why_now = int(data.get("why_now", 0))
         score = int(round(mechanism*.24 + behavior*.18 + creative*.16 + result*.18 + transfer*.18 + why_now*.06))
-        if fit >= 60 and score >= 52 and transfer >= 45 and max(mechanism, behavior, result) >= 58:
+        if fit >= _int_setting(tuning, "case_fit_min", 60) and score >= _int_setting(tuning, "case_score_min", 52) and transfer >= _int_setting(tuning, "case_transfer_min", 45) and max(mechanism, behavior, result) >= _int_setting(tuning, "case_anchor_min", 58):
             return True, "commercial_case", score
-        if fit >= 65 and score >= 48 and creative >= 68 and max(mechanism, behavior, transfer) >= 52:
+        if fit >= _int_setting(tuning, "creative_fit_min", 65) and score >= _int_setting(tuning, "creative_score_min", 48) and creative >= _int_setting(tuning, "creative_min", 68) and max(mechanism, behavior, transfer) >= _int_setting(tuning, "creative_anchor_min", 52):
             return True, "creative_commercial_case", score
-        if fit >= 70 and score >= 46 and mechanism >= 65 and transfer >= 50:
+        if fit >= _int_setting(tuning, "mechanism_fit_min", 70) and score >= _int_setting(tuning, "mechanism_score_min", 46) and mechanism >= _int_setting(tuning, "mechanism_min", 65) and transfer >= _int_setting(tuning, "mechanism_transfer_min", 50):
             return True, "mechanism_case", score
         return False, "below_sold_value", score
 

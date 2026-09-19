@@ -43,13 +43,15 @@ _ENTITY_STOP = {
 }
 
 _SCIENTIFIC_CONTEXT = (
-    "species", "taxon", "genus", "scientific", "scientists", "researchers", "study", "research",
-    "вид", "таксон", "рід", "науков", "дослід", "вчен",
+    "new species", "described species", "species", "taxon", "genus", "scientific name", "binomial",
+    "новий вид", "нового виду", "описали вид", "описан вид", "таксон", "рід", "наукова назва",
 )
 _SCIENTIFIC_SECOND_STOP = {
-    "according", "added", "after", "again", "around", "because", "comes", "could", "found", "helps", "including",
+    "according", "added", "after", "again", "around", "because", "comes", "could", "described", "found", "helps", "including",
     "looking", "might", "provides", "really", "released", "said", "showing", "still", "their", "there", "these",
-    "they", "told", "using", "would",
+    "they", "told", "using", "would", "model", "models", "hope", "science", "podcast", "keep", "review", "report",
+    "study", "research", "system", "systems", "method", "methods", "technology", "technologies", "project", "projects",
+    "team", "teams", "company", "companies", "group", "groups", "data", "news", "media", "platform", "platforms",
 }
 
 _EVENT_ACTION_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -198,31 +200,50 @@ def _near_duration_pairs(left: str, right: str) -> list[tuple[float, float]]:
 
 
 def _entity_tokens(value: str) -> set[str]:
-    """Extract actual proper-name-ish entities, not every English word.
+    """Return only high-confidence Latin proper-name anchors.
 
-    RC53 accidentally treated all Latin words as entities.  That was useful for a
-    Flock regression but caused PRODANO false positives where ordinary words like
-    marketing/said/content became an enormous fake entity set.
+    A capitalized sentence-start word is not an entity.  Single-occurrence title
+    words such as ``While``/``Review``/``These`` created false RC58 entity+fact
+    duplicates, so ordinary Title Case tokens now need repetition. Acronyms and
+    internal-capital brands (OpenAI, iPhone-like forms) remain strong immediately.
     """
-    entities: set[str] = set()
-    for token in _NAMED_ENTITY_RE.findall(str(value or "")):
+    raw = str(value or "")
+    found = _NAMED_ENTITY_RE.findall(raw)
+    counts: dict[str, int] = {}
+    originals: dict[str, list[str]] = {}
+    for token in found:
         normalized = token.casefold().strip(".-")
+        counts[normalized] = counts.get(normalized, 0) + 1
+        originals.setdefault(normalized, []).append(token)
+    entities: set[str] = set()
+    for normalized, count in counts.items():
         if len(normalized) < 4 or normalized in _ENTITY_STOP or normalized.isdigit():
             continue
-        entities.add(normalized)
+        forms = originals.get(normalized, [])
+        strong_form = any(form.isupper() or any(ch.isupper() for ch in form[1:]) for form in forms)
+        if strong_form or count >= 2:
+            entities.add(normalized)
     return entities
 
 
 def _scientific_names(value: str) -> set[str]:
+    """Extract binomial names only with nearby taxonomy evidence.
+
+    RC58 used a global ``research/scientists/study`` context switch, causing
+    ordinary English pairs such as ``Astra Model`` or ``American Hope`` to be
+    interpreted as species. Taxonomy context must now occur in the same local
+    sentence/window as the candidate name.
+    """
     raw = str(value or "")
-    low = raw.casefold()
-    if not any(marker in low for marker in _SCIENTIFIC_CONTEXT):
-        return set()
     out: set[str] = set()
-    for first, second in _SCIENTIFIC_BINOMIAL_RE.findall(raw):
-        if second.casefold() in _SCIENTIFIC_SECOND_STOP:
+    for match in _SCIENTIFIC_BINOMIAL_RE.finditer(raw):
+        first, second = match.group(1), match.group(2)
+        if second.casefold() in _SCIENTIFIC_SECOND_STOP or first.casefold() in _ENTITY_STOP:
             continue
-        if first.casefold() in _ENTITY_STOP:
+        start = max(0, match.start() - 160)
+        end = min(len(raw), match.end() + 160)
+        local = raw[start:end].casefold()
+        if not any(marker in local for marker in _SCIENTIFIC_CONTEXT):
             continue
         out.add(f"{first.casefold()} {second.casefold()}")
     return out
@@ -315,22 +336,22 @@ def event_fingerprint_same_event(
     # of particular discoveries, scrolls, species or experiments. Rare shared concepts
     # and independent fact anchors provide the corroboration.
     if compound_events:
-        corroboration = bool(numeric_pairs or quantity_pairs or duration_pairs) or len(shared_rare) >= 3
-        strong_rare = len(shared_rare) >= 4
+        fact_anchor = bool(numeric_pairs or quantity_pairs or duration_pairs)
+        identity_anchor = bool(shared_entities or shared_scientific)
+        action_anchor = len(shared_actions) >= 3 and len(shared) >= 6 and containment >= 0.35 and len(long_shared) >= 5 and len(shared_rare) >= 4
+        anchored = fact_anchor or identity_anchor
+        rare_only_strong = len(shared_rare) >= 8 and len(shared) >= 12 and containment >= 0.45 and len(long_shared) >= 7
         if (
-            len(shared) >= 8
-            and containment >= 0.20
+            anchored
+            and len(shared) >= 8
+            and containment >= 0.24
             and len(long_shared) >= 4
-            and corroboration
-        ) or (
-            len(shared) >= 6
-            and containment >= 0.30
-            and len(long_shared) >= 4
-            and strong_rare
-        ):
+            and len(shared_rare) >= 3
+        ) or action_anchor or rare_only_strong:
             return True, (
                 "compound subject+method+mechanism fingerprint "
                 f"concepts={len(shared)}/{containment:.2f} rare={len(shared_rare)} "
+                f"entities={','.join(sorted(shared_entities)) or '-'} taxa={','.join(sorted(shared_scientific)) or '-'} "
                 f"numbers={numeric_pairs[:3]} quantities={quantity_pairs[:3]} durations={duration_pairs[:3]}"
             )
 

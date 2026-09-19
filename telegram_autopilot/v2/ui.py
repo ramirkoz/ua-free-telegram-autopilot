@@ -158,6 +158,9 @@ class ChannelDialog(tk.Toplevel):
             wraplength=760, foreground="#444",
         ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+        self._check(p, 20, "Контроль відсутності публікацій", cfg.output_starvation_enabled)
+        self._entry(p, 21, "Поріг без публікацій, год", cfg.output_starvation_hours)
+        self._entry(p, 22, "Мін. оброблено за це вікно", cfg.output_starvation_min_processed)
 
     def _build_dedupe(self, p, cfg):
         self._combo(
@@ -217,7 +220,7 @@ class ChannelDialog(tk.Toplevel):
         self._entry(p, 8, "Мін. символів", q.target_min_chars)
         self._entry(p, 9, "Макс. символів", q.target_max_chars)
         ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
-        self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
+        self._text(p, 11, "Редакційні пороги/ваги JSON", cfg.editorial_weights_json, 4)
 
     def _save(self):
         try:
@@ -260,6 +263,9 @@ class ChannelDialog(tk.Toplevel):
                 dedupe_compound_events=bool(self._get("Compound event fingerprint: subject + method + mechanism")),
                 dedupe_rare_terms=bool(self._get("Підсилення рідкісних термінів")),
                 published_dedupe_window_hours=int(self._get("Історія опублікованих для фінальної перевірки, год")),
+                output_starvation_enabled=bool(self._get("Контроль відсутності публікацій")),
+                output_starvation_hours=int(self._get("Поріг без публікацій, год")),
+                output_starvation_min_processed=int(self._get("Мін. оброблено за це вікно")),
                 max_age_hours=int(self._get("Макс. вік матеріалу, год")),
                 max_posts_per_cycle=int(self._get("Макс. постів за цикл")),
                 publish_24h=bool(self._get("Публікація 24/7")),
@@ -269,7 +275,7 @@ class ChannelDialog(tk.Toplevel):
                 topic_balance_enabled=old.topic_balance_enabled,
                 topic_daily_limit=old.topic_daily_limit,
                 related_spacing_posts=old.related_spacing_posts,
-                editorial_weights_json=self._get("Редакційні ваги JSON") or "[]",
+                editorial_weights_json=self._get("Редакційні пороги/ваги JSON") or "[]",
                 language_mode=self._get("Мова"),
                 media_enrichment_mode=self._get("Медіа-збагачення"),
                 media_first_allowed=bool(self._get("Дозволити media-first")),
