@@ -119,6 +119,7 @@ class ChannelConfig:
     dedupe_scientific_names: bool = False
     dedupe_compound_events: bool = False
     dedupe_rare_terms: bool = False
+    dedupe_settings_json: str = "{}"
     published_dedupe_window_hours: int = 168
     max_age_hours: int = 24
     max_posts_per_cycle: int = 3
@@ -130,6 +131,10 @@ class ChannelConfig:
     topic_daily_limit: int = 2
     related_spacing_posts: int = 5
     editorial_weights_json: str = "[]"
+    editorial_value_settings_json: str = "{}"
+    output_starvation_enabled: bool = False
+    output_starvation_hours: int = 6
+    output_starvation_min_processed: int = 20
     language_mode: str = "ukru_to_uk"
     media_enrichment_mode: str = "auto"
     media_first_allowed: bool = True

@@ -204,6 +204,14 @@ def _anti_slop_profile(channel: ChannelConfig) -> str:
     return "news"
 
 
+def _editorial_value_settings(channel: ChannelConfig) -> dict[str, Any]:
+    try:
+        value = json.loads(str(channel.editorial_value_settings_json or "{}"))
+    except Exception:
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
 def _practical_literals(article: Any) -> list[tuple[str, str]]:
     source = str(_v(article, "raw_text", "") or "")
     canonical = str(_v(article, "canonical_source_url", "") or "").strip().rstrip("/.,;:!?")
@@ -339,7 +347,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
-            allowed, code, value_score = self._sold_value_allowed(value, score)
+            allowed, code, value_score = self._sold_value_allowed(value, score, _editorial_value_settings(channel))
             if not allowed:
                 return EditorialOutcome(Decision.REJECT, reason=f"SOLD_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
             return EditorialOutcome(Decision.PUBLISH, reason=f"SOLD_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -371,14 +379,30 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
 
     @staticmethod
-    def _sold_value_allowed(data: Mapping[str, Any], fit: int) -> tuple[bool, str, int]:
+    def _sold_value_allowed(data: Mapping[str, Any], fit: int, settings: Mapping[str, Any] | None = None) -> tuple[bool, str, int]:
+        cfg = dict(settings or {})
         mechanism = int(data.get("commercial_mechanism", 0)); behavior = int(data.get("consumer_behavior", 0)); creative = int(data.get("creative_execution", 0)); result = int(data.get("measurable_result", 0)); transfer = int(data.get("strategic_transferability", 0)); why_now = int(data.get("why_now", 0))
         score = int(round(mechanism*.24 + behavior*.18 + creative*.16 + result*.18 + transfer*.18 + why_now*.06))
-        if fit >= 60 and score >= 52 and transfer >= 45 and max(mechanism, behavior, result) >= 58:
+        if (
+            fit >= int(cfg.get("commercial_case_min_fit", 60) or 60)
+            and score >= int(cfg.get("commercial_case_min_score", 52) or 52)
+            and transfer >= int(cfg.get("commercial_case_min_transferability", 45) or 45)
+            and max(mechanism, behavior, result) >= int(cfg.get("commercial_case_anchor_min", 58) or 58)
+        ):
             return True, "commercial_case", score
-        if fit >= 65 and score >= 48 and creative >= 68 and max(mechanism, behavior, transfer) >= 52:
+        if (
+            fit >= int(cfg.get("creative_case_min_fit", 65) or 65)
+            and score >= int(cfg.get("creative_case_min_score", 48) or 48)
+            and creative >= int(cfg.get("creative_case_min_creative", 68) or 68)
+            and max(mechanism, behavior, transfer) >= int(cfg.get("creative_case_anchor_min", 52) or 52)
+        ):
             return True, "creative_commercial_case", score
-        if fit >= 70 and score >= 46 and mechanism >= 65 and transfer >= 50:
+        if (
+            fit >= int(cfg.get("mechanism_case_min_fit", 70) or 70)
+            and score >= int(cfg.get("mechanism_case_min_score", 46) or 46)
+            and mechanism >= int(cfg.get("mechanism_case_min_mechanism", 65) or 65)
+            and transfer >= int(cfg.get("mechanism_case_min_transferability", 50) or 50)
+        ):
             return True, "mechanism_case", score
         return False, "below_sold_value", score
 

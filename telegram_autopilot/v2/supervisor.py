@@ -400,6 +400,47 @@ class SupervisorService:
             oldest_ready_age = int(stats.get("oldest_ready_age_seconds") or 0)
             max_age_hours = max(1, int(stats.get("max_age_hours") or 24))
             cooling = int(stats.get("sources_cooling_down") or 0)
+            # RC59: output starvation is a universal mechanism. Whether a
+            # particular channel expects output, its time window and minimum
+            # processed volume are explicit ChannelConfig values.
+            try:
+                channel_cfg = self.store.get_channel(int(cid))
+            except Exception:
+                channel_cfg = None
+            if channel_cfg and bool(channel_cfg.output_starvation_enabled):
+                starvation_hours = max(1, int(channel_cfg.output_starvation_hours or 1))
+                starvation_min_processed = max(1, int(channel_cfg.output_starvation_min_processed or 1))
+                window = f"-{starvation_hours} hours"
+                try:
+                    with self.store.connect() as con:
+                        processed = int(con.execute(
+                            """SELECT COUNT(*) FROM articles
+                               WHERE channel_id=? AND datetime(discovered_at)>=datetime('now',?)
+                                 AND decision IN ('PUBLISH','REJECT','DUPLICATE')""",
+                            (int(cid), window),
+                        ).fetchone()[0] or 0)
+                except Exception:
+                    processed = 0
+                last_publish_ts = self._parse_iso(str(stats.get("last_publish") or ""))
+                no_output_long_enough = (
+                    last_publish_ts is None or now - last_publish_ts >= starvation_hours * 3600
+                )
+                starvation = bool(
+                    operational and runtime_age >= starvation_hours * 3600
+                    and processed >= starvation_min_processed and no_output_long_enough
+                )
+                scode = f"CHANNEL_OUTPUT_STARVATION_{cid}"
+                elapsed_starvation = self._condition_elapsed(scode, starvation, now)
+                if starvation and elapsed_starvation >= 0:
+                    incidents.append(Incident(
+                        "WARNING", scode, f"Канал «{name}» обробляє матеріали, але не публікує",
+                        f"За {starvation_hours} год оброблено {processed} матеріалів при порозі "
+                        f"{starvation_min_processed}; остання публікація: {stats.get('last_publish') or 'немає'}. "
+                        "Пороги задані в налаштуваннях цього каналу."
+                    ))
+            else:
+                self._condition_elapsed(f"CHANNEL_OUTPUT_STARVATION_{cid}", False, now)
+
             total_sources = int(stats.get("sources_total") or 0)
             source_errors = int(stats.get("recent_source_errors_15m") or 0)
 
