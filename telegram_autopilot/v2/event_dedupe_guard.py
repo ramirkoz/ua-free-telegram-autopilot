@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from .dedupe import DedupeResult
 from .domain import Decision, DedupeProfile, Stage
@@ -46,10 +47,15 @@ _SCIENTIFIC_CONTEXT = (
     "species", "taxon", "genus", "scientific", "scientists", "researchers", "study", "research",
     "вид", "таксон", "рід", "науков", "дослід", "вчен",
 )
+_SCIENTIFIC_FIRST_STOP = {
+    "american", "british", "european", "global", "great", "new", "quickly", "subscriptions",
+    "research", "science", "scientific", "study", "researchers", "scientists", "report",
+}
 _SCIENTIFIC_SECOND_STOP = {
     "according", "added", "after", "again", "around", "because", "comes", "could", "found", "helps", "including",
     "looking", "might", "provides", "really", "released", "said", "showing", "still", "their", "there", "these",
-    "they", "told", "using", "would",
+    "they", "told", "using", "would", "model", "hope", "science", "podcast", "keep", "report", "study",
+    "research", "company", "system", "device", "project", "market", "product", "service", "platform",
 }
 
 _EVENT_ACTION_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -213,18 +219,33 @@ def _entity_tokens(value: str) -> set[str]:
     return entities
 
 
-def _scientific_names(value: str) -> set[str]:
+def _scientific_names(value: str, *, require_local_context: bool = True) -> set[str]:
+    """Return plausible Latin binomials, not arbitrary Capitalized+lowercase English.
+
+    The mechanism is universal. Channels decide whether to use scientific-name
+    fingerprinting at all; this function only validates candidate binomials.
+    """
     raw = str(value or "")
     low = raw.casefold()
     if not any(marker in low for marker in _SCIENTIFIC_CONTEXT):
         return set()
     out: set[str] = set()
-    for first, second in _SCIENTIFIC_BINOMIAL_RE.findall(raw):
-        if second.casefold() in _SCIENTIFIC_SECOND_STOP:
+    for match in _SCIENTIFIC_BINOMIAL_RE.finditer(raw):
+        first, second = match.group(1), match.group(2)
+        first_low, second_low = first.casefold(), second.casefold()
+        if first_low in _ENTITY_STOP or first_low in _SCIENTIFIC_FIRST_STOP:
             continue
-        if first.casefold() in _ENTITY_STOP:
+        if second_low in _SCIENTIFIC_SECOND_STOP:
             continue
-        out.add(f"{first.casefold()} {second.casefold()}")
+        if first_low.endswith("ly") or second_low.endswith("ing"):
+            continue
+        if require_local_context:
+            start = max(0, match.start() - 240)
+            end = min(len(raw), match.end() + 240)
+            nearby = raw[start:end].casefold()
+            if not any(marker in nearby for marker in _SCIENTIFIC_CONTEXT):
+                continue
+        out.add(f"{first_low} {second_low}")
     return out
 
 
@@ -263,7 +284,7 @@ def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
         "quantity_pairs": _near_quantity_pairs(left, right),
         "duration_pairs": _near_duration_pairs(left, right),
         "shared_entities": _entity_tokens(left_raw) & _entity_tokens(right_raw),
-        "shared_scientific": _scientific_names(left_raw) & _scientific_names(right_raw),
+        "shared_scientific": set(),
         "shared_actions": _action_hits(left) & _action_hits(right),
         "shared_rare": _rare_terms(left) & _rare_terms(right),
     }
@@ -277,6 +298,7 @@ def event_fingerprint_same_event(
     compound_events: bool = False,
     rare_terms: bool = False,
     commercial_profile: bool = False,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
     """High-precision event equivalence controlled only by channel settings.
 
@@ -291,7 +313,13 @@ def event_fingerprint_same_event(
         return False, reason
 
     same_source = int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1)
+    cfg = dict(settings or {})
+    require_local_scientific_context = bool(cfg.get("scientific_require_local_context", True))
     stats = _fingerprint_stats(current, candidate)
+    stats["shared_scientific"] = (
+        _scientific_names(stats["left_raw"], require_local_context=require_local_scientific_context)
+        & _scientific_names(stats["right_raw"], require_local_context=require_local_scientific_context)
+    )
     shared = stats["shared"]
     containment = float(stats["containment"])
     long_shared = stats["long_shared"]
@@ -315,17 +343,21 @@ def event_fingerprint_same_event(
     # of particular discoveries, scrolls, species or experiments. Rare shared concepts
     # and independent fact anchors provide the corroboration.
     if compound_events:
-        corroboration = bool(numeric_pairs or quantity_pairs or duration_pairs) or len(shared_rare) >= 3
-        strong_rare = len(shared_rare) >= 4
+        compound_min_shared = max(4, int(cfg.get("compound_min_shared", 8) or 8))
+        compound_min_containment = max(0.05, min(0.95, float(cfg.get("compound_min_containment", 0.20) or 0.20)))
+        compound_min_long = max(2, int(cfg.get("compound_min_long_shared", 4) or 4))
+        compound_min_rare = max(1, int(cfg.get("compound_min_rare", 3) or 3))
+        corroboration = bool(numeric_pairs or quantity_pairs or duration_pairs) or len(shared_rare) >= compound_min_rare
+        strong_rare = len(shared_rare) >= max(compound_min_rare + 1, 4)
         if (
-            len(shared) >= 8
-            and containment >= 0.20
-            and len(long_shared) >= 4
+            len(shared) >= compound_min_shared
+            and containment >= compound_min_containment
+            and len(long_shared) >= compound_min_long
             and corroboration
         ) or (
-            len(shared) >= 6
-            and containment >= 0.30
-            and len(long_shared) >= 4
+            len(shared) >= max(5, compound_min_shared - 2)
+            and containment >= max(0.30, compound_min_containment + 0.05)
+            and len(long_shared) >= compound_min_long
             and strong_rare
         ):
             return True, (
@@ -519,6 +551,12 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
         compound_events = bool(channel.dedupe_compound_events) if channel else False
         rare_terms = bool(channel.dedupe_rare_terms) if channel else False
         commercial_profile = bool(channel and channel.dedupe_profile == DedupeProfile.COMMERCIAL_EDITORIAL)
+        try:
+            dedupe_settings = json.loads(str(channel.dedupe_settings_json or "{}")) if channel else {}
+        except Exception:
+            dedupe_settings = {}
+        if not isinstance(dedupe_settings, dict):
+            dedupe_settings = {}
 
         best_id = 0
         best_strength = -1.0
@@ -535,6 +573,7 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                 compound_events=compound_events,
                 rare_terms=rare_terms,
                 commercial_profile=commercial_profile,
+                settings=dedupe_settings,
             )
             if same:
                 return DedupeResult("DUPLICATE", int(candidate["id"]), match_reason)
