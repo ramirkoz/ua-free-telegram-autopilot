@@ -5,6 +5,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from ..secrets_store import load_secrets
+from ..facebook import FacebookError, publish_page_link
 from ..telegram import (
     TelegramError,
     prepare_telegram_media_list,
@@ -116,9 +117,132 @@ def _source_urls(article: Any) -> list[str]:
     return urls[:8]
 
 
+def _telegram_post_url(chat_id: str, message_id: str) -> str:
+    target = str(chat_id or "").strip()
+    mid = str(message_id or "").strip()
+    if not target or not mid:
+        return ""
+    if target.startswith("@") and len(target) > 1:
+        return f"https://t.me/{target[1:]}/{mid}"
+    if target.startswith("https://t.me/") or target.startswith("http://t.me/"):
+        base = target.rstrip("/").split("?", 1)[0]
+        return f"{base}/{mid}"
+    if target.startswith("-100") and target[4:].isdigit():
+        return f"https://t.me/c/{target[4:]}/{mid}"
+    if target and not target.lstrip("-").isdigit() and all(ch.isalnum() or ch == "_" for ch in target):
+        return f"https://t.me/{target}/{mid}"
+    return ""
+
+
+def _facebook_message(text: str, telegram_post_url: str) -> str:
+    body = str(text or "").strip()
+    link = str(telegram_post_url or "").strip()
+    if not link:
+        return body
+    return f"{body}\n\nДжерело: {link}".strip()
+
+
 class Publisher:
     def __init__(self, store: V2Store):
         self.store = store
+
+    def _queue_facebook_after_telegram(self, article_id: int, channel: Any, message_id: str) -> None:
+        page_ids = [str(x).strip() for x in (getattr(channel, "facebook_page_ids", []) or []) if str(x).strip()]
+        if not page_ids:
+            return
+        telegram_url = _telegram_post_url(str(channel.telegram_chat_id or ""), str(message_id or ""))
+        if not telegram_url:
+            event(
+                "facebook", "facebook repost skipped: telegram public link unavailable", level=30,
+                channel_id=int(channel.id), article_id=int(article_id), telegram_chat_id=str(channel.telegram_chat_id or ""),
+            )
+            return
+        try:
+            queued = self.store.queue_facebook_reposts(
+                article_id, int(channel.id), page_ids, telegram_message_id=str(message_id), telegram_post_url=telegram_url,
+            )
+            event(
+                "facebook", "facebook reposts queued", channel_id=int(channel.id), article_id=int(article_id),
+                pages=queued, telegram_post_url=telegram_url,
+            )
+            self.publish_pending_facebook(int(channel.id), limit=max(1, min(8, queued or 1)))
+        except Exception as exc:
+            event(
+                "facebook", "facebook queue failed after telegram publish", level=40,
+                channel_id=int(channel.id), article_id=int(article_id), detail=str(exc)[:1000],
+            )
+
+    def _mark_published(
+        self, article_id: int, channel: Any, *, message_id: str, media_count: int = 0,
+        message_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        self.store.mark_published(
+            article_id, message_id=str(message_id), media_count=int(media_count), message_ids=message_ids,
+        )
+        self._queue_facebook_after_telegram(article_id, channel, str(message_id))
+
+    def publish_pending_facebook(self, channel_id: int, *, limit: int = 6) -> int:
+        rows = self.store.pending_facebook_reposts(channel_id, limit=max(1, int(limit)))
+        if not rows:
+            return 0
+        try:
+            secrets = load_secrets()
+        except Exception as exc:
+            event("facebook", "facebook secrets unavailable", level=40, channel_id=channel_id, detail=str(exc)[:800])
+            return 0
+        page_map = {
+            str(item.get("id") or "").strip(): dict(item)
+            for item in (getattr(secrets, "facebook_pages", []) or [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        version = str(getattr(secrets, "facebook_graph_version", "v26.0") or "v26.0").strip() or "v26.0"
+        published = 0
+        for row in rows:
+            article_id = int(row["article_id"] or 0)
+            page_id = str(row["page_id"] or "").strip()
+            page = page_map.get(page_id)
+            if not page:
+                retry_at = self.store.mark_facebook_repost_failed(
+                    article_id, page_id, "Facebook Page credential відсутній у зашифрованих налаштуваннях", retryable=False,
+                )
+                event(
+                    "facebook", "facebook page credential missing", level=30, channel_id=channel_id,
+                    article_id=article_id, page_id=page_id, next_retry_at=retry_at,
+                )
+                continue
+            token = str(page.get("access_token") or "").strip()
+            page_name = str(page.get("name") or page_id).strip() or page_id
+            message = _facebook_message(str(row["final_text"] or ""), str(row["telegram_post_url"] or ""))
+            try:
+                post_id = publish_page_link(
+                    page_id, token, message=message, telegram_post_url=str(row["telegram_post_url"] or ""),
+                    graph_version=version,
+                )
+            except FacebookError as exc:
+                retry_at = self.store.mark_facebook_repost_failed(
+                    article_id, page_id, str(exc), retryable=bool(exc.retryable),
+                )
+                event(
+                    "facebook", "facebook repost failed", level=30 if exc.retryable else 40,
+                    channel_id=channel_id, article_id=article_id, page_id=page_id, page_name=page_name,
+                    retryable=exc.retryable, code=exc.code, next_retry_at=retry_at, detail=str(exc)[:1000],
+                )
+                continue
+            except Exception as exc:
+                retry_at = self.store.mark_facebook_repost_failed(article_id, page_id, str(exc), retryable=True)
+                event(
+                    "facebook", "facebook repost exception", level=40, channel_id=channel_id,
+                    article_id=article_id, page_id=page_id, page_name=page_name, next_retry_at=retry_at, detail=str(exc)[:1000],
+                )
+                continue
+            self.store.mark_facebook_repost_done(article_id, page_id, post_id)
+            published += 1
+            event(
+                "facebook", "facebook repost published", channel_id=channel_id, article_id=article_id,
+                page_id=page_id, page_name=page_name, facebook_post_id=post_id,
+                telegram_post_url=str(row["telegram_post_url"] or ""),
+            )
+        return published
 
     def can_publish_now(self, channel_id: int) -> tuple[bool, str]:
         channel = self.store.get_channel(channel_id)
@@ -285,7 +409,7 @@ class Publisher:
                 )
             except TelegramError as exc:
                 return self._telegram_failure(article_id, channel_id, exc)
-            self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
+            self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
             event(
                 "publish", "published text", channel_id=channel_id, article_id=article_id,
                 message_id=text_result.message_id, message_ids=list(text_result.message_ids),
@@ -338,7 +462,7 @@ class Publisher:
                 )
             except TelegramError as exc:
                 return self._telegram_failure(article_id, channel_id, exc)
-            self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
+            self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
             event(
                 "publish", "published text after media preparation failure", level=30, channel_id=channel_id, article_id=article_id,
                 message_id=text_result.message_id, media_policy=policy, source_media_count=source_media_count,
@@ -363,7 +487,7 @@ class Publisher:
             return "LEGACY_MEDIA_PARTIAL"
 
         if caption_attached and len(media_ids) >= delivery_count and caption_message_id:
-            self.store.mark_published(article_id, message_id=caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+            self._mark_published(article_id, channel, message_id=caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
             event(
                 "publish", "recovered completed captioned media publication", channel_id=channel_id, article_id=article_id,
                 message_id=caption_message_id, published_media_count=delivery_count, upload_mode="multipart_local",
@@ -424,7 +548,7 @@ class Publisher:
                         )
                     except TelegramError as text_exc:
                         return self._telegram_failure(article_id, channel_id, text_exc)
-                    self.store.mark_published(article_id, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
+                    self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
                     event(
                         "publish", "published text after preferred/optional local media rejection", level=30,
                         channel_id=channel_id, article_id=article_id, message_id=text_result.message_id,
@@ -478,7 +602,7 @@ class Publisher:
             event("media", "caption state missing after media delivery", level=40, channel_id=channel_id, article_id=article_id, detail=detail)
             return "CAPTION_STATE_MISSING"
 
-        self.store.mark_published(article_id, message_id=final_caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+        self._mark_published(article_id, channel, message_id=final_caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
         event(
             "publish", "published local-upload media with caption", channel_id=channel_id, article_id=article_id,
             message_id=final_caption_message_id, message_ids=media_ids[:delivery_count],
@@ -492,6 +616,10 @@ class Publisher:
         channel = self.store.get_channel(channel_id)
         if channel is None:
             return 0
+        try:
+            self.publish_pending_facebook(channel_id, limit=4)
+        except Exception as exc:
+            event("facebook", "facebook retry loop isolated", level=30, channel_id=channel_id, detail=str(exc)[:800])
         count = 0
         for article in self.store.ready_articles(channel_id, limit=max(1, channel.max_posts_per_cycle * 4)):
             if count >= max(1, channel.max_posts_per_cycle):
