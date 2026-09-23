@@ -337,7 +337,7 @@ def install_codex() -> str:
         raise
     importlib.invalidate_caches()
     _prune_old_versions(keep=2)
-    return "Codex 0.156.1 встановлено в Tools/Codex. Перезапустіть програму для активації нового runtime."
+    return "Codex 0.156.1 встановлено в Tools/Codex і активовано."
 
 
 def login_chatgpt() -> str:
