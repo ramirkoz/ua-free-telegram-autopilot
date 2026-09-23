@@ -15,6 +15,12 @@ class SourceAttributionMode(StrEnum):
     NAMED_SOURCE = "named_source"
 
 
+class SourceBodyAttributionMode(StrEnum):
+    FOOTER_ONLY = "footer_only"
+    ALWAYS = "always"
+    SOURCE_NAME_MARKER = "source_name_marker"
+
+
 class DedupeProfile(StrEnum):
     STANDARD = "standard"
     SCIENTIFIC_NEWS = "scientific_news"
@@ -90,6 +96,8 @@ class ChannelPolicy:
     extra_instructions: str = ""
     selector_extra_prompt: str = ""
     writer_extra_prompt: str = ""
+    source_body_attribution_mode: SourceBodyAttributionMode = SourceBodyAttributionMode.FOOTER_ONLY
+    source_body_attribution_marker: str = ""
     media_policy: str = "required"
     target_min_chars: int = 300
     target_max_chars: int = 750
