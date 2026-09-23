@@ -9,6 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
+from ..facebook import FacebookError, discover_pages, inspect_page
 from ..secrets_store import load_secrets, save_secrets
 from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
@@ -94,17 +95,19 @@ class ChannelDialog(tk.Toplevel):
         self.vars: dict[str, object] = {}
         book = ttk.Notebook(self)
         book.pack(fill="both", expand=True, padx=10, pady=10)
-        basic, collection, dedupe, policy, editorial = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
+        basic, collection, dedupe, policy, editorial, facebook = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
         book.add(basic, text="Основне")
         book.add(collection, text="Збір")
         book.add(dedupe, text="Дедуплікація")
         book.add(policy, text="Політика")
         book.add(editorial, text="Редакційне")
+        book.add(facebook, text="Facebook")
         self._build_basic(basic, cfg)
         self._build_collection(collection, cfg)
         self._build_dedupe(dedupe, cfg)
         self._build_policy(policy, cfg)
         self._build_editorial(editorial, cfg)
+        self._build_facebook(facebook, cfg)
         footer = ttk.Frame(self)
         footer.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(footer, text="Зберегти канал", command=self._save).pack(side="right")
@@ -237,6 +240,54 @@ class ChannelDialog(tk.Toplevel):
         self._text(p, 12, "Пороги editorial JSON", cfg.editorial_thresholds_json, 5)
         ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
+    def _build_facebook(self, p, cfg):
+        ttk.Label(
+            p,
+            text=(
+                "Після успішної публікації в Telegram Autopilot автоматично створить пост на вибраних Facebook-сторінках. "
+                "Текст береться з готового Telegram-матеріалу, а джерелом у Facebook буде посилання на вже опублікований Telegram-пост."
+            ),
+            wraplength=780, justify="left", foreground="#444",
+        ).pack(anchor="w", padx=10, pady=(12, 10))
+        try:
+            secrets = load_secrets()
+            pages = list(getattr(secrets, "facebook_pages", []) or [])
+        except Exception:
+            pages = []
+        selected = {str(x) for x in (getattr(cfg, "facebook_page_ids", []) or [])}
+        self.facebook_page_vars: dict[str, tk.BooleanVar] = {}
+        self._facebook_saved_page_ids = list(getattr(cfg, "facebook_page_ids", []) or [])
+        self._facebook_known_page_ids: set[str] = set()
+        if not pages:
+            ttk.Label(
+                p, text="Facebook-сторінки ще не додані. Додайте їх у вкладці «Facebook» головного вікна.",
+                foreground="#8a5a00", wraplength=760, justify="left",
+            ).pack(anchor="w", padx=10, pady=10)
+            return
+        box = ttk.LabelFrame(p, text="Автоматичний репост на сторінки", padding=10)
+        box.pack(fill="x", padx=10, pady=6)
+        for index, row in enumerate(pages):
+            if not isinstance(row, dict):
+                continue
+            page_id = str(row.get("id") or "").strip()
+            if not page_id:
+                continue
+            name = str(row.get("name") or page_id).strip() or page_id
+            var = tk.BooleanVar(value=page_id in selected)
+            self.facebook_page_vars[page_id] = var
+            self._facebook_known_page_ids.add(page_id)
+            ttk.Checkbutton(box, text=f"{name}  ·  {page_id}", variable=var).grid(
+                row=index, column=0, sticky="w", padx=4, pady=4
+            )
+        ttk.Label(
+            p,
+            text=(
+                "Якщо Facebook тимчасово не прийме пост, Telegram-публікація не дублюється і не відкочується: "
+                "Facebook-репост зберігається окремо та повторюється з паузою."
+            ),
+            wraplength=780, justify="left", foreground="#555",
+        ).pack(anchor="w", padx=10, pady=10)
+
     def _save(self):
         try:
             old = self.cfg
@@ -303,6 +354,10 @@ class ChannelDialog(tk.Toplevel):
                 media_enrichment_mode=self._get("Медіа-збагачення"),
                 media_first_allowed=bool(self._get("Дозволити media-first")),
                 media_min_text_chars=int(self._get("Media-first поріг тексту")),
+                facebook_page_ids=(
+                    [page_id for page_id, var in getattr(self, "facebook_page_vars", {}).items() if bool(var.get())]
+                    + [page_id for page_id in getattr(self, "_facebook_saved_page_ids", []) if page_id not in getattr(self, "_facebook_known_page_ids", set())]
+                ),
                 policy=policy,
             )
             json.loads(cfg.editorial_weights_json)
@@ -447,7 +502,7 @@ class MainWindow(tk.Tk):
         self.book = ttk.Notebook(self)
         self.book.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.tabs = {}
-        for key, title in (("home", "Головна"), ("channels", "Канали"), ("queue", "Черга"), ("history", "Історія"), ("ai", "AI"), ("learning", "Статистика / навчання"), ("supervisor", "Нагляд"), ("migration", "Міграція"), ("logs", "Журнали")):
+        for key, title in (("home", "Головна"), ("channels", "Канали"), ("queue", "Черга"), ("history", "Історія"), ("ai", "AI"), ("facebook", "Facebook"), ("learning", "Статистика / навчання"), ("supervisor", "Нагляд"), ("migration", "Міграція"), ("logs", "Журнали")):
             frame = ttk.Frame(self.book)
             self.book.add(frame, text=title)
             self.tabs[key] = frame
@@ -456,6 +511,7 @@ class MainWindow(tk.Tk):
         self._build_queue()
         self._build_history()
         self._build_ai()
+        self._build_facebook_settings()
         self._build_learning()
         self._build_supervisor()
         self._build_migration()
@@ -620,6 +676,173 @@ class MainWindow(tk.Tk):
         ttk.Button(buttons, text="Увійти / змінити акаунт", command=self.login_codex).pack(side="left", padx=6)
         self._update_codex_route_label()
         self.ai_tree = self._tree(panel, [("provider", "Провайдер", 120), ("state", "Стан", 180), ("model", "Модель", 280), ("success", "Успіхів", 80), ("fail", "Помилок", 80), ("cooldown", "Пауза до", 180), ("detail", "Деталі", 420)])
+
+    def _build_facebook_settings(self):
+        p = self.tabs["facebook"]
+        try:
+            cfg = load_secrets()
+        except Exception:
+            cfg = None
+        self.fb_app_id_var = tk.StringVar(value=str(getattr(cfg, "facebook_app_id", "") or ""))
+        self.fb_app_secret_var = tk.StringVar(value=str(getattr(cfg, "facebook_app_secret", "") or ""))
+        self.fb_user_token_var = tk.StringVar(value=str(getattr(cfg, "facebook_user_access_token", "") or ""))
+        self.fb_graph_version_var = tk.StringVar(value=str(getattr(cfg, "facebook_graph_version", "v26.0") or "v26.0"))
+        self.fb_status_var = tk.StringVar(value="Facebook: налаштування завантажено")
+
+        info = ttk.Label(
+            p,
+            text=(
+                "Facebook Pages використовуються тільки для автоматичного кроспостингу після Telegram. "
+                "Page Access Token зберігається у зашифрованому secrets.secure; у налаштуваннях каналу зберігається лише ID вибраної сторінки."
+            ),
+            wraplength=1120, justify="left", foreground="#444",
+        )
+        info.pack(anchor="w", padx=12, pady=(12, 6))
+
+        creds = ttk.LabelFrame(p, text="Meta / Facebook credentials", padding=10)
+        creds.pack(fill="x", padx=12, pady=6)
+        fields = (
+            ("App ID", self.fb_app_id_var, False),
+            ("App Secret", self.fb_app_secret_var, True),
+            ("User Access Token", self.fb_user_token_var, True),
+            ("Graph API version", self.fb_graph_version_var, False),
+        )
+        for row, (label, var, secret) in enumerate(fields):
+            ttk.Label(creds, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=4)
+            ttk.Entry(creds, textvariable=var, show="•" if secret else "", width=72).grid(row=row, column=1, sticky="ew", padx=6, pady=4)
+        creds.columnconfigure(1, weight=1)
+        bar = ttk.Frame(creds); bar.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Button(bar, text="Зберегти Facebook дані", command=self.facebook_save_credentials).pack(side="left")
+        ttk.Button(bar, text="Знайти доступні сторінки", command=self.facebook_discover_pages).pack(side="left", padx=6)
+
+        pages = ttk.LabelFrame(p, text="Доступні Facebook-сторінки", padding=8)
+        pages.pack(fill="both", expand=True, padx=12, pady=6)
+        self.fb_pages_tree = ttk.Treeview(pages, columns=("name", "id", "token"), show="headings", height=9)
+        for col, label, width in (("name", "Сторінка", 360), ("id", "Page ID", 220), ("token", "Page token", 170)):
+            self.fb_pages_tree.heading(col, text=label); self.fb_pages_tree.column(col, width=width, anchor="w")
+        self.fb_pages_tree.pack(fill="both", expand=True)
+        page_bar = ttk.Frame(pages); page_bar.pack(fill="x", pady=(7, 0))
+        ttk.Button(page_bar, text="Додати вручну", command=self.facebook_add_page).pack(side="left")
+        ttk.Button(page_bar, text="Редагувати", command=self.facebook_edit_page).pack(side="left", padx=5)
+        ttk.Button(page_bar, text="Видалити", command=self.facebook_delete_page).pack(side="left")
+        ttk.Button(page_bar, text="Перевірити сторінку", command=self.facebook_test_page).pack(side="left", padx=5)
+        ttk.Button(page_bar, text="Копіювати Page token", command=self.facebook_copy_page_token).pack(side="left")
+        ttk.Label(p, textvariable=self.fb_status_var, wraplength=1120, justify="left").pack(anchor="w", padx=12, pady=(4, 12))
+        self.facebook_refresh_pages()
+
+    def _facebook_pages(self) -> list[dict[str, str]]:
+        try:
+            cfg = load_secrets()
+            return [dict(row) for row in (getattr(cfg, "facebook_pages", []) or []) if isinstance(row, dict)]
+        except Exception:
+            return []
+
+    def facebook_refresh_pages(self) -> None:
+        tree = getattr(self, "fb_pages_tree", None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        for row in self._facebook_pages():
+            page_id = str(row.get("id") or "").strip()
+            if not page_id:
+                continue
+            token = str(row.get("access_token") or "").strip()
+            masked = (token[:6] + "…" + token[-4:]) if len(token) > 12 else ("налаштовано" if token else "—")
+            tree.insert("", "end", iid=page_id, values=(str(row.get("name") or page_id), page_id, masked))
+
+    def facebook_save_credentials(self) -> None:
+        try:
+            cfg = load_secrets()
+            cfg.facebook_app_id = self.fb_app_id_var.get().strip()
+            cfg.facebook_app_secret = self.fb_app_secret_var.get().strip()
+            cfg.facebook_user_access_token = self.fb_user_token_var.get().strip()
+            cfg.facebook_graph_version = self.fb_graph_version_var.get().strip() or "v26.0"
+            save_secrets(cfg)
+            self.fb_status_var.set("Facebook credentials збережено у зашифрованому сховищі")
+        except Exception as exc:
+            messagebox.showerror("Facebook", str(exc), parent=self)
+
+    def facebook_discover_pages(self) -> None:
+        self.facebook_save_credentials()
+        token = self.fb_user_token_var.get().strip()
+        version = self.fb_graph_version_var.get().strip() or "v26.0"
+        if not token:
+            messagebox.showerror("Facebook", "Вкажіть Facebook User Access Token", parent=self); return
+        self.fb_status_var.set("Facebook: завантажую доступні сторінки…")
+        def work():
+            try:
+                pages = discover_pages(token, version)
+                current = load_secrets()
+                current.facebook_pages = [{"id": x.id, "name": x.name, "access_token": x.access_token} for x in pages]
+                current.facebook_graph_version = version
+                save_secrets(current)
+                msg = f"Facebook: знайдено сторінок {len(pages)}"
+            except Exception as exc:
+                msg = f"Facebook: помилка — {exc}"
+            self.after(0, lambda: (self.fb_status_var.set(msg), self.facebook_refresh_pages()))
+        threading.Thread(target=work, daemon=True, name="V2-Facebook-Discover").start()
+
+    def _facebook_selected_id(self) -> str:
+        tree = getattr(self, "fb_pages_tree", None)
+        if tree is None or not tree.selection():
+            return ""
+        return str(tree.selection()[0])
+
+    def facebook_add_page(self) -> None:
+        name = simpledialog.askstring("Facebook Page", "Назва сторінки:", parent=self) or ""
+        page_id = simpledialog.askstring("Facebook Page", "Page ID:", parent=self) or ""
+        token = simpledialog.askstring("Facebook Page", "Page Access Token:", show="•", parent=self) or ""
+        if not page_id.strip() or not token.strip():
+            return
+        cfg = load_secrets(); rows=[dict(x) for x in (cfg.facebook_pages or []) if isinstance(x,dict) and str(x.get("id") or "")!=page_id.strip()]
+        rows.append({"id":page_id.strip(),"name":name.strip() or page_id.strip(),"access_token":token.strip()}); cfg.facebook_pages=rows; save_secrets(cfg)
+        self.facebook_refresh_pages(); self.fb_status_var.set(f"Facebook Page {name.strip() or page_id.strip()} збережено")
+
+    def facebook_edit_page(self) -> None:
+        page_id = self._facebook_selected_id()
+        if not page_id:
+            messagebox.showinfo("Facebook", "Оберіть сторінку", parent=self); return
+        cfg=load_secrets(); row=next((dict(x) for x in (cfg.facebook_pages or []) if isinstance(x,dict) and str(x.get("id") or "")==page_id),None)
+        if row is None: return
+        name=simpledialog.askstring("Facebook Page", "Назва сторінки:", initialvalue=str(row.get("name") or page_id), parent=self)
+        new_id=simpledialog.askstring("Facebook Page", "Page ID:", initialvalue=page_id, parent=self)
+        token=simpledialog.askstring("Facebook Page", "Page Access Token (залиште порожнім, щоб не змінювати):", show="•", parent=self)
+        if name is None or new_id is None or not new_id.strip(): return
+        final_token=(token.strip() if token is not None and token.strip() else str(row.get("access_token") or "").strip())
+        rows=[dict(x) for x in (cfg.facebook_pages or []) if isinstance(x,dict) and str(x.get("id") or "")!=page_id]
+        rows.append({"id":new_id.strip(),"name":name.strip() or new_id.strip(),"access_token":final_token}); cfg.facebook_pages=rows; save_secrets(cfg)
+        self.facebook_refresh_pages(); self.fb_status_var.set("Facebook Page оновлено")
+
+    def facebook_delete_page(self) -> None:
+        page_id=self._facebook_selected_id()
+        if not page_id: return
+        if not messagebox.askyesno("Facebook", "Видалити вибрану Facebook-сторінку з Autopilot?", parent=self): return
+        cfg=load_secrets(); cfg.facebook_pages=[dict(x) for x in (cfg.facebook_pages or []) if isinstance(x,dict) and str(x.get("id") or "")!=page_id]; save_secrets(cfg)
+        self.facebook_refresh_pages(); self.fb_status_var.set("Facebook Page видалено")
+
+    def facebook_copy_page_token(self) -> None:
+        page_id=self._facebook_selected_id()
+        if not page_id: return
+        row=next((x for x in self._facebook_pages() if str(x.get("id") or "")==page_id),None)
+        token=str((row or {}).get("access_token") or "").strip()
+        if not token: return
+        self.clipboard_clear(); self.clipboard_append(token); self.update_idletasks(); self.fb_status_var.set("Page Access Token скопійовано")
+
+    def facebook_test_page(self) -> None:
+        page_id=self._facebook_selected_id()
+        if not page_id:
+            messagebox.showinfo("Facebook", "Оберіть сторінку", parent=self); return
+        row=next((x for x in self._facebook_pages() if str(x.get("id") or "")==page_id),None)
+        token=str((row or {}).get("access_token") or "").strip(); version=self.fb_graph_version_var.get().strip() or "v26.0"
+        if not token: return
+        self.fb_status_var.set("Facebook: перевіряю сторінку…")
+        def work():
+            try:
+                page=inspect_page(page_id,token,version); msg=f"Facebook: ✅ {page.name} · {page.id}"
+            except Exception as exc:
+                msg=f"Facebook: ❌ {exc}"
+            self.after(0,lambda:self.fb_status_var.set(msg))
+        threading.Thread(target=work,daemon=True,name="V2-Facebook-Test").start()
 
     def _build_learning(self):
         p = self.tabs["learning"]
