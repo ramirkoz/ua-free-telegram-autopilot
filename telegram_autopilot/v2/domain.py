@@ -145,6 +145,7 @@ class ChannelConfig:
     media_enrichment_mode: str = "auto"
     media_first_allowed: bool = True
     media_min_text_chars: int = 500
+    facebook_page_ids: list[str] = field(default_factory=list)
     policy: ChannelPolicy = field(default_factory=ChannelPolicy)
 
 
