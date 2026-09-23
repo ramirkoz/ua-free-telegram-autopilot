@@ -157,7 +157,10 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
 class AIGateway:
     """Modular V2 AI router with provider-aware health and local full fallback."""
 
-    PROVIDER_ORDER = ("codex", "gemini", "nvidia", "groq", "cloudflare", "local")
+    # Codex uses the user's ChatGPT plan quota, so it is a trusted reserve, not
+    # the default engine for every selector/value task. Cheap direct providers run
+    # first; Codex remains available as the final cloud fallback.
+    PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
     LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     LOCAL_LONG_MAX_OUTPUT = 720
     _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}

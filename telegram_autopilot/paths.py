@@ -9,6 +9,7 @@ from pathlib import Path
 APP_DIR = "UA_FREE_Telegram_Autopilot"
 PORTABLE_MARKER = "portable.flag"
 DATA_DIR_NAME = "Data"
+TOOLS_DIR_NAME = "Tools"
 
 
 def _has_reparse_attribute(path: Path) -> bool:
@@ -37,9 +38,14 @@ def runtime_dir() -> Path:
     override = os.environ.get("UA_FREE_TELEGRAM_AUTOPILOT_ROOT")
     if override:
         return Path(override).expanduser().absolute()
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
+    exe = Path(sys.executable).resolve()
+    if getattr(sys, "frozen", False) or exe.name.casefold().startswith("ua_free_telegram_autopilot"):
+        return exe.parent
+    # Source tree or packaged _runtime/telegram_autopilot layout.
+    candidate = Path(__file__).resolve().parents[1]
+    if candidate.name == "_runtime":
+        return candidate.parent
+    return candidate
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +57,27 @@ def data_dir() -> Path:
     _reject_reparse_chain(root)
     return root
 
+
+
+def tools_dir() -> Path:
+    """Heavy reproducible runtimes live beside the portable app, never in Data."""
+    path = runtime_dir() / TOOLS_DIR_NAME
+    _reject_reparse_chain(path.parent)
+    path.mkdir(parents=True, exist_ok=True)
+    _reject_reparse_chain(path)
+    return path
+
+
+def cache_dir() -> Path:
+    path = data_dir() / "cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def migration_dir() -> Path:
+    path = data_dir() / "migration"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 def database_path() -> Path:
     return data_dir() / "telegram_autopilot.sqlite3"

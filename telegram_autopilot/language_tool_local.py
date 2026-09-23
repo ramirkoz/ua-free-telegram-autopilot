@@ -18,7 +18,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 
-from .paths import data_dir
+from .paths import data_dir, logs_dir, tools_dir
 
 _DEFAULT_URL = "http://127.0.0.1:8081/v2/check"
 _LT_SNAPSHOT_URL = "https://languagetool.org/download/snapshots/LanguageTool-latest-snapshot.zip"
@@ -97,7 +97,13 @@ def _endpoint() -> str:
 
 
 def _tools_dir() -> Path:
-    path = data_dir() / "Tools"
+    path = tools_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _runtime_state_dir() -> Path:
+    path = data_dir() / "runtime"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -111,11 +117,11 @@ def _java_root() -> Path:
 
 
 def _state_path() -> Path:
-    return _tools_dir() / "languagetool_install.json"
+    return _runtime_state_dir() / "languagetool_install.json"
 
 
 def _stats_path() -> Path:
-    return _tools_dir() / "languagetool_stats.json"
+    return _runtime_state_dir() / "languagetool_stats.json"
 
 
 def _read_stats() -> dict[str, object]:
@@ -345,7 +351,7 @@ def _install_java(callback: Callable[[str, str], None] | None) -> Path:
     java = _bundled_java()
     if not java:
         raise RuntimeError("Портативний Java 17 завантажено, але перевірка java -version не пройшла")
-    _emit(callback, "languagetool", "Портативний Java 17 встановлено в Data/Tools/Java17.")
+    _emit(callback, "languagetool", "Портативний Java 17 встановлено в Tools/Java17.")
     return java
 
 
@@ -383,12 +389,12 @@ def _install_languagetool(callback: Callable[[str, str], None] | None) -> Path:
     jar = _find_server_jar()
     if not jar:
         raise RuntimeError("LanguageTool розпаковано, але серверний JAR не знайдено")
-    _emit(callback, "languagetool", "LanguageTool встановлено в Data/Tools/LanguageTool.")
+    _emit(callback, "languagetool", "LanguageTool встановлено в Tools/LanguageTool.")
     return jar
 
 
 def _pid_path() -> Path:
-    return _tools_dir() / "languagetool_server.pid"
+    return _runtime_state_dir() / "languagetool_server.pid"
 
 
 def _terminate_pid_tree(pid: int) -> None:
@@ -410,7 +416,7 @@ def _terminate_pid_tree(pid: int) -> None:
 
 
 def _discover_our_languagetool_pids() -> set[int]:
-    """Find only LanguageTool JVMs launched from this portable Data/Tools tree."""
+    """Find only LanguageTool JVMs launched from this portable Tools tree."""
     if not _is_windows():
         return set()
     root = str(_lt_root().resolve()).replace("'", "''").lower()
@@ -489,7 +495,7 @@ def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | 
         "org.languagetool.server.HTTPServer",
         "--config", str(config), "--port", "8081",
     ]
-    log_path = _tools_dir() / "languagetool_server.log"
+    log_path = logs_dir() / "languagetool_server.log"
     log_handle = open(log_path, "ab", buffering=0)
     kwargs: dict[str, object] = {
         "cwd": str(root),
@@ -521,7 +527,7 @@ def _start_server(java: Path, jar: Path, callback: Callable[[str, str], None] | 
                 _stop_owned_server()
                 return False
             if proc.poll() is not None:
-                _emit(callback, "error", f"LanguageTool server завершився з кодом {proc.returncode}; див. Data/Tools/languagetool_server.log")
+                _emit(callback, "error", f"LanguageTool server завершився з кодом {proc.returncode}; див. Data/logs/languagetool_server.log")
                 break
             if _probe_server(timeout=_LT_STARTUP_TIMEOUT):
                 _emit(callback, "languagetool", "LanguageTool локальний сервер готовий (127.0.0.1:8081).")
@@ -540,7 +546,7 @@ def ensure_languagetool(callback: Callable[[str, str], None] | None = None) -> b
     """Ensure a private local LanguageTool server is available.
 
     Installation is portable: LanguageTool and, if needed, Temurin JRE 17 are
-    stored under Data/Tools. No admin rights, registry changes or public cloud
+    stored under Tools. No admin rights, registry changes or public cloud
     LanguageTool API are used.
     """
     global _NEXT_INSTALL_AT

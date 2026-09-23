@@ -75,7 +75,12 @@ def locate_legacy_database(path: str | Path) -> Path:
     if src.is_file() and src.suffix.casefold() in {".sqlite3", ".sqlite", ".db"}:
         return src
     if src.is_dir():
-        preferred = [src / "telegram_autopilot.sqlite3", src / "Data" / "telegram_autopilot.sqlite3"]
+        preferred = [
+            src / "telegram_autopilot_v2.sqlite3",
+            src / "telegram_autopilot.sqlite3",
+            src / "Data" / "telegram_autopilot_v2.sqlite3",
+            src / "Data" / "telegram_autopilot.sqlite3",
+        ]
         for item in preferred:
             if item.exists():
                 return item

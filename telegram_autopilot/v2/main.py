@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 import sys
 import threading
+import tkinter as tk
 import tkinter.messagebox as messagebox
+from tkinter import filedialog
 from pathlib import Path
 
 from ..instance_lock import AlreadyRunning, InstanceLock
-from ..paths import data_dir
+from ..language_tool_local import shutdown_languagetool
+from ..paths import data_dir, migration_dir
 from . import V2_VERSION
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
 from .bounded_ingest import BoundedStrictIngestService
 from .loghub import LogHub, event
+from .migration_service import MigrationManager
 from .provider_compat import install_provider_compat
 from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
 from .ui_hardening import FastMainWindow as MainWindow
@@ -24,6 +29,71 @@ def _manual_test_build() -> bool:
     roots = [Path(sys.executable).resolve().parent, Path(__file__).resolve().parents[2]]
     return any((root / "MANUAL_TEST_BUILD.txt").is_file() for root in roots)
 
+
+def _first_run_clean_import(store: HardenedV2Store) -> None:
+    """Offer one explicit read-only import from an older portable Data folder.
+
+    The old folder is never modified.  Only durable user/editorial tables and
+    encrypted credentials are copied into the fresh RC78 Data; queues, cooldowns,
+    logs, caches, Tools and runtime state are intentionally left behind.
+    """
+    marker = migration_dir() / "first_run_import.json"
+    try:
+        if marker.exists() or store.list_channels(enabled_only=False):
+            return
+    except Exception:
+        if marker.exists():
+            return
+
+    root = tk.Tk()
+    root.withdraw()
+    decision = "fresh"
+    source = ""
+    summary: dict[str, int] = {}
+    try:
+        wants = messagebox.askyesno(
+            "UA FREE Telegram Autopilot · перший запуск",
+            "Імпортувати потрібні дані зі старої версії?\n\n"
+            "Буде прочитано стару Data тільки для перенесення каналів, джерел, "
+            "редакційної/публікаційної історії, статистики та зашифрованих credentials.\n"
+            "Логи, кеш, Tools, Codex/Java/LanguageTool, cooldown і старі runtime-черги не копіюються.",
+            parent=root,
+        )
+        if wants:
+            source = filedialog.askdirectory(
+                title="Оберіть стару папку Autopilot або її Data",
+                parent=root,
+                mustexist=True,
+            ) or ""
+            if source:
+                current = data_dir().resolve()
+                chosen = Path(source).resolve()
+                if chosen == current or current in chosen.parents:
+                    raise RuntimeError("Не можна імпортувати поточну RC78 Data у саму себе.")
+                summary, _backup, credentials = MigrationManager(store.path).import_clean_portable(
+                    chosen, import_credentials=True, overwrite_credentials=False
+                )
+                decision = "imported"
+                text = (
+                    f"Імпорт завершено.\n\n"
+                    f"Канали: {summary.get('channels', 0)}\n"
+                    f"Джерела: {summary.get('sources', 0)}\n"
+                    f"Матеріали/історія: {summary.get('articles', 0)}\n"
+                    f"Статистика: {summary.get('feedback', 0)}\n\n{credentials}"
+                )
+                messagebox.showinfo("Чистий імпорт завершено", text, parent=root)
+            else:
+                decision = "cancelled"
+    finally:
+        try:
+            marker.write_text(
+                json.dumps({"decision": decision, "source": source, "summary": summary}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        root.destroy()
+
 def main() -> int:
     logs = data_dir() / "logs" / "v2"
     LogHub(logs).configure()
@@ -32,6 +102,7 @@ def main() -> int:
     try:
         with InstanceLock():
             store = HardenedV2Store(v2_database_path())
+            _first_run_clean_import(store)
             runtime = RuntimeEngine(store)
             runtime.ingest = BoundedStrictIngestService(store)
             app = MainWindow(store, runtime, logs)
@@ -110,6 +181,10 @@ def main() -> int:
         except Exception:
             pass
         return 1
+    finally:
+        # Defensive last line of shutdown: never leave the portable LanguageTool JVM
+        # locking an old Autopilot directory after the UI has closed.
+        shutdown_languagetool()
     return 0
 
 

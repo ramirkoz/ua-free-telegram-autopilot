@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .paths import data_dir
+from .paths import cache_dir, tools_dir
 
-CODEX_PACKAGE = "openai-codex==0.147.0"
+CODEX_PACKAGE = "openai-codex==0.156.1"
 _POINTER_FILE = "codex_active.json"
 _VERSIONS_DIR = "codex_versions"
 
@@ -34,7 +34,7 @@ class CodexStatus:
 
 
 def _runtime_root() -> Path:
-    path = data_dir() / "ai_runtime"
+    path = tools_dir() / "Codex"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -215,7 +215,7 @@ def run_codex(prompt: str, *, cwd: Path | None = None) -> str:
     Codex = getattr(sdk, "Codex")
     Sandbox = getattr(sdk, "Sandbox")
     ApprovalMode = getattr(sdk, "ApprovalMode")
-    workdir = Path(cwd or (data_dir() / "codex_workspace"))
+    workdir = Path(cwd or (cache_dir() / "codex_workspace"))
     workdir.mkdir(parents=True, exist_ok=True)
     developer = (
         "You are a newsroom transformation engine embedded in UA FREE Telegram Autopilot. "
@@ -282,16 +282,37 @@ def _verify_install(target: Path) -> None:
         raise CodexEngineError("Codex встановився без пакета openai_codex; активацію скасовано.")
 
 
+
+def _prune_old_versions(*, keep: int = 2) -> None:
+    """Keep the active Codex plus at most one rollback copy; never grow Data/Tools forever."""
+    versions = _runtime_root() / _VERSIONS_DIR
+    if not versions.exists():
+        return
+    active = _read_pointer()
+    entries = [p for p in versions.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    entries.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    protected = {active.resolve()} if active and active.exists() else set()
+    kept = 0
+    for item in entries:
+        resolved = item.resolve()
+        if resolved in protected:
+            continue
+        kept += 1
+        if kept <= max(0, keep - len(protected)):
+            continue
+        shutil.rmtree(item, ignore_errors=True)
+
 def install_codex() -> str:
     versions = _runtime_root() / _VERSIONS_DIR
     versions.mkdir(parents=True, exist_ok=True)
-    unique = f"codex-0.147.0-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    unique = f"codex-0.156.1-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     staging = versions / ("." + unique + ".tmp")
     target = versions / unique
     staging.mkdir(parents=True, exist_ok=False)
     command = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--target", str(staging), CODEX_PACKAGE]
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
+    env["UA_FREE_CHILD_PROCESS"] = "1"
     try:
         completed = subprocess.run(
             command,
@@ -315,7 +336,8 @@ def install_codex() -> str:
             shutil.rmtree(staging, ignore_errors=True)
         raise
     importlib.invalidate_caches()
-    return "Codex 0.147.0 встановлено side-by-side. Перезапустіть програму для активації нового runtime."
+    _prune_old_versions(keep=2)
+    return "Codex 0.156.1 встановлено в Tools/Codex. Перезапустіть програму для активації нового runtime."
 
 
 def login_chatgpt() -> str:

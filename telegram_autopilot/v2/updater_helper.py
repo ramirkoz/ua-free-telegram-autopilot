@@ -170,11 +170,11 @@ def _validate_stage(stage: Path, request: UpdateRequest, runtime: Path) -> None:
     if not abi_file.is_file() or abi_file.read_text(encoding="utf-8").strip() != UPDATE_RUNTIME_ABI:
         raise RuntimeError("UPDATE_RUNTIME_ABI_MISMATCH")
     for required in (
-        "telegram_autopilot/v2/main.py",
-        "telegram_autopilot/v2/storage.py",
-        "telegram_autopilot/v2/update_protocol.py",
-        "telegram_autopilot/v2/updater_helper.py",
-        "app_v2.py",
+        "_runtime/telegram_autopilot/v2/main.py",
+        "_runtime/telegram_autopilot/v2/storage.py",
+        "_runtime/telegram_autopilot/v2/update_protocol.py",
+        "_runtime/telegram_autopilot/v2/updater_helper.py",
+        "_runtime/Lib/site-packages/sitecustomize.py",
         "PUBLIC_VERSION.txt",
         "V2_VERSION.txt",
     ):
@@ -193,8 +193,8 @@ def _apply(stage: Path, runtime: Path, backup: Path) -> dict[str, Any]:
     try:
         for source in _files(stage):
             rel = source.relative_to(stage)
-            if rel.parts and rel.parts[0].casefold() == "data":
-                raise RuntimeError("UPDATE_BUNDLE_CONTAINS_DATA")
+            if rel.parts and rel.parts[0].casefold() in {"data", "tools"}:
+                raise RuntimeError("UPDATE_BUNDLE_CONTAINS_PERSISTENT_STATE")
             destination = runtime / rel
             old_exists = destination.is_file()
             if old_exists:
