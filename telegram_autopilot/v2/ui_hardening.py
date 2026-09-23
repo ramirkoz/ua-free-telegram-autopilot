@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import tkinter as tk
 import threading
 import time
 from typing import Callable
@@ -31,7 +32,88 @@ class FastMainWindow(ProductionMainWindow):
         self._rc51_tree_after: dict[str, object] = {}
         self._rc51_tree_started: dict[str, float] = {}
         super().__init__(store, runtime, logs_dir)
+        self._install_windows_editing_support()
         self._rc51_result_pump()
+
+    def _install_windows_editing_support(self) -> None:
+        """Normal Windows editing in every active V2 Entry/Combobox/Text widget."""
+        for widget_class in ("Entry", "TEntry", "TCombobox", "Text"):
+            self.bind_class(widget_class, "<Control-KeyPress>", self._control_edit_shortcut, add="+")
+            self.bind_class(widget_class, "<Shift-Insert>", self._paste_shortcut, add="+")
+            self.bind_class(widget_class, "<Button-3>", self._show_edit_menu, add="+")
+
+    @staticmethod
+    def _edit_action(event: tk.Event) -> str:
+        keysym = str(getattr(event, "keysym", "") or "").casefold()
+        keycode = int(getattr(event, "keycode", 0) or 0)
+        by_symbol = {"v": "paste", "c": "copy", "x": "cut", "a": "select_all"}
+        return by_symbol.get(keysym) or {86: "paste", 67: "copy", 88: "cut", 65: "select_all"}.get(keycode, "")
+
+    def _control_edit_shortcut(self, event: tk.Event):
+        action = self._edit_action(event)
+        if not action:
+            return None
+        if action == "select_all":
+            self._select_all_widget(event.widget)
+        elif action == "paste":
+            self._paste_widget(event.widget)
+        else:
+            event.widget.event_generate({"copy": "<<Copy>>", "cut": "<<Cut>>"}[action])
+        return "break"
+
+    def _paste_shortcut(self, event: tk.Event):
+        self._paste_widget(event.widget)
+        return "break"
+
+    def _paste_widget(self, widget: tk.Widget) -> None:
+        try:
+            value = self.clipboard_get()
+        except tk.TclError:
+            return
+        try:
+            if isinstance(widget, tk.Text):
+                try:
+                    widget.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                widget.insert("insert", value)
+            else:
+                try:
+                    first = widget.index("sel.first")
+                    last = widget.index("sel.last")
+                    widget.delete(first, last)
+                except tk.TclError:
+                    pass
+                widget.insert("insert", value)
+        except (tk.TclError, AttributeError):
+            pass
+
+    @staticmethod
+    def _select_all_widget(widget: tk.Widget) -> None:
+        try:
+            if isinstance(widget, tk.Text):
+                widget.tag_add("sel", "1.0", "end-1c")
+                widget.mark_set("insert", "1.0")
+                widget.see("insert")
+            else:
+                widget.selection_range(0, "end")
+                widget.icursor("end")
+        except tk.TclError:
+            pass
+
+    def _show_edit_menu(self, event: tk.Event):
+        widget = event.widget
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Вирізати", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Копіювати", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Вставити", command=lambda: self._paste_widget(widget))
+        menu.add_separator()
+        menu.add_command(label="Виділити все", command=lambda: self._select_all_widget(widget))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
 
     def _rc20_async_refresh(self, key: str, work: Callable[[], object], apply: Callable[[object], None]) -> None:
         if self._rc20_closing:
