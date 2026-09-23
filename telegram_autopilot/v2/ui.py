@@ -8,10 +8,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from ..codex_engine import inspect_codex, login_chatgpt, test_codex
+from ..codex_engine import inspect_codex, install_codex, login_chatgpt, test_codex
 from ..facebook import FacebookError, discover_pages, inspect_page
 from ..secrets_store import load_secrets, save_secrets
-from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode
+from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode, SourceBodyAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
 from .migration_service import MigrationManager
@@ -63,6 +63,13 @@ ATTRIBUTION_MODE_LABELS = {
     SourceAttributionMode.NAMED_SOURCE: "Іменоване — Читати у «назва джерела»",
 }
 ATTRIBUTION_MODE_VALUES = {label: mode for mode, label in ATTRIBUTION_MODE_LABELS.items()}
+
+BODY_ATTRIBUTION_LABELS = {
+    SourceBodyAttributionMode.FOOTER_ONLY: "Тільки футер: у тексті джерело не згадувати",
+    SourceBodyAttributionMode.ALWAYS: "Дозволяти атрибуцію джерела в тексті",
+    SourceBodyAttributionMode.SOURCE_NAME_MARKER: "Лише якщо назва джерела містить маркер",
+}
+BODY_ATTRIBUTION_VALUES = {label: mode for mode, label in BODY_ATTRIBUTION_LABELS.items()}
 
 DEDUPE_PROFILE_LABELS = {
     DedupeProfile.STANDARD: "Стандартний",
@@ -159,7 +166,7 @@ class ChannelDialog(tk.Toplevel):
         )
         ttk.Label(
             p,
-            text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела». У тілі назва джерела є обов’язковим контекстом лише коли в назві є слово «громада».",
+            text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела». Правила згадування джерела в самому тексті задаються окремо у вкладці «Редактура».",
             wraplength=760, foreground="#444",
         ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
@@ -232,13 +239,24 @@ class ChannelDialog(tk.Toplevel):
         self._text(p, 4, "Негативні приклади", q.negative_examples, 5)
         self._text(p, 5, "Додаткові інструкції", q.extra_instructions, 4)
         self._text(p, 6, "Додатковий prompt writer", q.writer_extra_prompt, 4)
-        self._combo(p, 7, "Політика медіа", q.media_policy, ["required", "preferred", "optional"])
-        self._entry(p, 8, "Мін. символів", q.target_min_chars)
-        self._entry(p, 9, "Макс. символів", q.target_max_chars)
-        ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
-        self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
-        self._text(p, 12, "Пороги editorial JSON", cfg.editorial_thresholds_json, 5)
-        ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        self._combo(
+            p, 7, "Атрибуція джерела в тексті",
+            BODY_ATTRIBUTION_LABELS.get(q.source_body_attribution_mode, BODY_ATTRIBUTION_LABELS[SourceBodyAttributionMode.FOOTER_ONLY]),
+            list(BODY_ATTRIBUTION_VALUES),
+        )
+        self._entry(p, 8, "Маркер у назві джерела для атрибуції", q.source_body_attribution_marker)
+        ttk.Label(
+            p,
+            text="Це суворе правило конкретного каналу. У режимі «маркер» джерело можна називати в тілі лише коли його назва містить заданий маркер; інакше назва/атрибуція лишаються тільки у footer.",
+            wraplength=760, foreground="#444",
+        ).grid(row=9, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        self._combo(p, 10, "Політика медіа", q.media_policy, ["required", "preferred", "optional"])
+        self._entry(p, 11, "Мін. символів", q.target_min_chars)
+        self._entry(p, 12, "Макс. символів", q.target_max_chars)
+        ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        self._text(p, 14, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
+        self._text(p, 15, "Пороги editorial JSON", cfg.editorial_thresholds_json, 5)
+        ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults.", wraplength=760, foreground="#444").grid(row=16, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
     def _build_facebook(self, p, cfg):
         ttk.Label(
@@ -305,6 +323,8 @@ class ChannelDialog(tk.Toplevel):
                 extra_instructions=self._get("Додаткові інструкції"),
                 selector_extra_prompt=self._get("Додатковий prompt selector"),
                 writer_extra_prompt=self._get("Додатковий prompt writer"),
+                source_body_attribution_mode=BODY_ATTRIBUTION_VALUES.get(self._get("Атрибуція джерела в тексті"), SourceBodyAttributionMode.FOOTER_ONLY),
+                source_body_attribution_marker=self._get("Маркер у назві джерела для атрибуції"),
                 media_policy=self._get("Політика медіа"),
                 target_min_chars=int(self._get("Мін. символів")),
                 target_max_chars=int(self._get("Макс. символів")),
@@ -672,8 +692,10 @@ class MainWindow(tk.Tk):
         )
         buttons = ttk.Frame(codex_box)
         buttons.grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Button(buttons, text="Перевірити Codex", command=self.check_codex).pack(side="left")
-        ttk.Button(buttons, text="Увійти / змінити акаунт", command=self.login_codex).pack(side="left", padx=6)
+        self.codex_install_button = ttk.Button(buttons, text="Встановити / оновити Codex", command=self.install_or_update_codex)
+        self.codex_install_button.pack(side="left")
+        ttk.Button(buttons, text="Перевірити Codex", command=self.check_codex).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Увійти / змінити акаунт", command=self.login_codex).pack(side="left")
         self._update_codex_route_label()
         self.ai_tree = self._tree(panel, [("provider", "Провайдер", 120), ("state", "Стан", 180), ("model", "Модель", 280), ("success", "Успіхів", 80), ("fail", "Помилок", 80), ("cooldown", "Пауза до", 180), ("detail", "Деталі", 420)])
 
@@ -1316,7 +1338,7 @@ class MainWindow(tk.Tk):
         def work():
             status = inspect_codex()
             if not status.installed:
-                text = "Стан Codex: не встановлено або SDK пошкоджений"
+                text = "Стан Codex: SDK відсутній або пошкоджений · натисніть «Встановити / оновити Codex»"
             elif status.authenticated:
                 account = f" · акаунт: {status.account_label}" if status.account_label else ""
                 text = f"Стан Codex: встановлено · авторизовано{account} · версія {status.version or 'невідома'}"
@@ -1325,6 +1347,45 @@ class MainWindow(tk.Tk):
             self.after(0, lambda: self.codex_status.set(text))
 
         threading.Thread(target=work, daemon=True, name="V2-Codex-Status").start()
+
+    def install_or_update_codex(self):
+        self.codex_status.set("Codex: встановлюю актуальний SDK у Tools\\Codex…")
+        button = getattr(self, "codex_install_button", None)
+        if button is not None:
+            try:
+                button.configure(state="disabled")
+            except Exception:
+                pass
+
+        def work():
+            try:
+                install_codex()
+                status = inspect_codex()
+                if status.authenticated:
+                    account = f" · {status.account_label}" if status.account_label else ""
+                    msg = f"Codex: SDK встановлено · авторизовано{account} · версія {status.version or 'невідома'}"
+                else:
+                    msg = f"Codex: SDK встановлено · версія {status.version or 'невідома'} · потрібен вхід через ChatGPT"
+                try:
+                    self.runtime.gateway.probe_all()
+                except Exception:
+                    pass
+            except Exception as exc:
+                msg = f"Codex: помилка встановлення: {exc}"
+
+            def done():
+                self.codex_status.set(msg)
+                if button is not None:
+                    try:
+                        button.configure(state="normal")
+                    except Exception:
+                        pass
+                self.refresh_ai()
+                self.refresh_home()
+
+            self.after(0, done)
+
+        threading.Thread(target=work, daemon=True, name="V2-Codex-Install").start()
 
     def login_codex(self):
         self.codex_status.set("Codex: відкриваю вхід через ChatGPT…")
