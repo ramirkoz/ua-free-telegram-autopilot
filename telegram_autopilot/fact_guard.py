@@ -90,29 +90,63 @@ def _protected_latin_tokens(value: str) -> set[str]:
     return result
 
 
-def _actionable_source_urls(source: str) -> list[str]:
-    """Return exact source URLs that carry an operational call to action.
+_ATTRIBUTION_LINK_CUES = (
+    "за інформацією", "за даними", "за матеріалами", "джерело:",
+    "читати у", "читати на", "детальніше про це інформує",
+    "детальніше про це повідомляє", "детальніше про це пише",
+)
 
-    A generic attribution link is not actionable. Registration/application/forms,
-    tickets, booking, payment, schedules and similar reader tasks are. The URL must
-    stay in the rewritten body so a reader is never forced to open the source merely
-    to recover the action target.
-    """
+
+def _local_url_context(text: str, start: int, end: int, radius: int = 220) -> str:
+    """Return the URL line plus its immediately preceding text line when needed."""
+    value = str(text or "")
+    line_start = value.rfind("\n", 0, start) + 1
+    line_end = value.find("\n", end)
+    if line_end < 0:
+        line_end = len(value)
+    before_on_line = value[line_start:start].strip()
+    if not before_on_line and line_start > 0:
+        prev_end = line_start - 1
+        while prev_end > 0 and value[prev_end - 1] == "\n":
+            prev_end -= 1
+        prev_start = value.rfind("\n", 0, prev_end) + 1
+        line_start = max(prev_start, start - radius)
+    return value[max(0, line_start):min(len(value), max(line_end, end))]
+
+
+def source_urls_in_text(source: str) -> list[str]:
+    result: list[str] = []
+    for match in _URL_RE.finditer(str(source or "")):
+        url = match.group(0).rstrip(".,;:!?")
+        if url and url not in result:
+            result.append(url)
+    return result[:24]
+
+
+def actionable_source_urls(source: str, *, source_name: str = "") -> list[str]:
+    """Return only reader-action URLs, excluding plain attribution/article links."""
     text = str(source or "")
-    folded = text.casefold()
+    name = " ".join(str(source_name or "").split()).casefold()
     result: list[str] = []
     for match in _URL_RE.finditer(text):
         url = match.group(0).rstrip(".,;:!?")
         if not url:
             continue
-        left = max(0, match.start() - 220)
-        right = min(len(text), match.end() + 220)
-        context = folded[left:right]
+        context = _local_url_context(text, match.start(), match.end()).casefold()
+        attribution = any(cue in context for cue in _ATTRIBUTION_LINK_CUES)
+        if name and name in context and any(cue in context for cue in ("інформує", "повідомляє", "пише", "детальніше")):
+            attribution = True
+        if attribution:
+            continue
         if not any(cue in context for cue in _ACTIONABLE_LINK_CUES):
             continue
         if url not in result:
             result.append(url)
     return result[:12]
+
+
+def _actionable_source_urls(source: str) -> list[str]:
+    return actionable_source_urls(source)
 
 
 def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
@@ -131,7 +165,7 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     # Reader-action links are protected facts too. A canonical source footer does
     # not satisfy this contract because it forces the reader to hunt for the actual
     # registration/form/payment target in somebody else's post.
-    missing_action_urls = [url for url in _actionable_source_urls(source) if url not in output_text]
+    missing_action_urls = [url for url in actionable_source_urls(source, source_name=_row_text(article, "source_name")) if url not in output_text]
     if missing_action_urls:
         raise FactGuardError(
             "AI прибрав практичне посилання з джерела: " + ", ".join(missing_action_urls[:4])
