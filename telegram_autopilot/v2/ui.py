@@ -9,7 +9,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
-from ..language_tool_local import shutdown_languagetool
 from ..facebook import FacebookError, discover_pages, inspect_page
 from ..secrets_store import load_secrets, save_secrets
 from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode
@@ -1455,9 +1454,6 @@ class MainWindow(tk.Tk):
         elif selected == "Заблоковано джерелом":
             where += " AND a.blocked_by='SOURCE'"
         elif selected == "Заблоковано медіа":
-            # V2 owns the LanguageTool JVM too. Leaving java.exe alive keeps the
-            # portable folder locked on Windows even after the Tk window vanishes.
-            shutdown_languagetool()
             where += " AND a.blocked_by='MEDIA'"
         elif selected == "Проблема якості":
             where += " AND a.blocked_by='QUALITY'"
