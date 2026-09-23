@@ -17,7 +17,24 @@ _GRAMMAR_RISK_PATTERNS = (
     re.compile(r"\bзадоволення\s+(?:стрибк|скачк)\w*", re.I),
     re.compile(r"(?<![-\w])\d+(?:[.,]\d+)?\s+(?:мегават|гігават)\b", re.I),
     re.compile(r"\bза\s+лічильником\b", re.I),
+    re.compile(r"\bслідж(?:ати|айте|ує|ують|ував|увала|ували)\b", re.I),
+    re.compile(r"\bзберігайте\s+спокійно\b", re.I),
 )
+
+_HARD_GRAMMAR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bслідж(?:ати|айте|ує|ують|ував|увала|ували)\b", re.I), "ненормативна форма «сліджати/сліджайте»"),
+    (re.compile(r"\bзберігайте\s+спокійно\b", re.I), "неприродна конструкція «зберігайте спокійно»"),
+    (re.compile(
+        r"\b(?:зберігайте|стежте|звертайтеся|перевірте|повідомте|передайте|зателефонуйте|приходьте|залишайтеся)\b[^.!?]{0,90}\bта\s+[а-яіїєґ’'-]{4,}(?:ати|яти|ити|ути|ти)\b",
+        re.I,
+    ), "змішано наказовий спосіб та інфінітив у однорідній конструкції"),
+)
+
+
+def hard_grammar_blockers(value: str) -> tuple[str, ...]:
+    """High-confidence Ukrainian grammar failures that must never autopublish."""
+    text = str(value or "")
+    return tuple(dict.fromkeys(label for pattern, label in _HARD_GRAMMAR_PATTERNS if pattern.search(text)))
 
 
 def _sentences(value: str) -> list[str]:
