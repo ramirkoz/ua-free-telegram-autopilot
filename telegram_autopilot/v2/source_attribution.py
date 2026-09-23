@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from .domain import ChannelConfig, SourceAttributionMode
@@ -32,6 +33,46 @@ def source_context_name(channel: ChannelConfig, article: Mapping[str, Any] | Any
         return ""
     return clean_source_name(_value(article, "source_name", ""))
 
+
+
+_COMMUNITY_SOURCE_RE = re.compile(r"(?iu)(?<![\w’'-])громада(?![\w’'-])")
+
+
+def is_community_source_name(value: Any) -> bool:
+    """True only when the configured source name literally contains the word «громада»."""
+    return bool(_COMMUNITY_SOURCE_RE.search(clean_source_name(value)))
+
+
+def source_body_context_name(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
+    """Return a source name that is allowed/required inside the rewritten body.
+
+    Named-source footer attribution remains available for every source. In-body
+    attribution is reserved for community sources whose configured name contains
+    the literal word «громада».
+    """
+    name = source_context_name(channel, article)
+    return name if is_community_source_name(name) else ""
+
+
+def source_body_attribution_issues(
+    channel: ChannelConfig, article: Mapping[str, Any] | Any, text: str
+) -> tuple[str, ...]:
+    """Block redundant reporting attribution for non-community named sources."""
+    name = source_context_name(channel, article)
+    if not name or is_community_source_name(name):
+        return ()
+    body = str(text or "")
+    name_pattern = r"\s+".join(re.escape(part) for part in name.split())
+    reporting_after = re.compile(
+        rf"(?iu){name_pattern}[^.!?\n]{{0,55}}\b(?:повідомляє|повідомив|повідомила|повідомили|інформує|пише|зазначає|розповідає)\b"
+    )
+    reporting_before = re.compile(
+        rf"(?iu)\b(?:за\s+(?:інформацією|даними|повідомленням)|як\s+(?:повідомляє|пише|інформує)|детальніше[^.!?\n]{{0,80}}(?:інформує|повідомляє|пише))[^.!?\n]{{0,100}}{name_pattern}"
+    )
+    issues: list[str] = []
+    if reporting_after.search(body) or reporting_before.search(body):
+        issues.append("назву не-громадського джерела повторено в тілі як атрибуцію замість системного footer")
+    return tuple(issues)
 
 def source_footer_label(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
     name = source_context_name(channel, article)
