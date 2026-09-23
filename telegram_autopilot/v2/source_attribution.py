@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-from .domain import ChannelConfig, SourceAttributionMode
+from .domain import ChannelConfig, SourceAttributionMode, SourceBodyAttributionMode
 
 
 def _value(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -15,12 +15,10 @@ def _value(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
 
 
 def clean_source_name(value: Any, limit: int = 120) -> str:
-    """Return the operator-configured source name in a footer/prompt-safe form."""
     return " ".join(str(value or "").split()).strip()[: max(1, int(limit))]
 
 
 def named_source_enabled(channel: ChannelConfig) -> bool:
-    """Use named attribution only when the operator explicitly enabled it for this channel."""
     try:
         return SourceAttributionMode(str(channel.source_attribution_mode)) == SourceAttributionMode.NAMED_SOURCE
     except Exception:
@@ -28,51 +26,88 @@ def named_source_enabled(channel: ChannelConfig) -> bool:
 
 
 def source_context_name(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
-    """Return the configured donor/source name only for explicit named-source mode."""
     if not named_source_enabled(channel):
         return ""
     return clean_source_name(_value(article, "source_name", ""))
 
 
+def _body_mode(channel: ChannelConfig) -> SourceBodyAttributionMode:
+    try:
+        return SourceBodyAttributionMode(str(channel.policy.source_body_attribution_mode))
+    except Exception:
+        return SourceBodyAttributionMode.FOOTER_ONLY
 
-_COMMUNITY_SOURCE_RE = re.compile(r"(?iu)(?<![\w’'-])громада(?![\w’'-])")
+
+def _marker_matches(name: str, marker: str) -> bool:
+    marker = " ".join(str(marker or "").split()).strip()
+    if not marker:
+        return False
+    pattern = r"(?iu)(?<![\w’'-])" + re.escape(marker) + r"(?![\w’'-])"
+    return bool(re.search(pattern, clean_source_name(name)))
 
 
-def is_community_source_name(value: Any) -> bool:
-    """True only when the configured source name literally contains the word «громада»."""
-    return bool(_COMMUNITY_SOURCE_RE.search(clean_source_name(value)))
+def source_body_attribution_allowed(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> bool:
+    name = clean_source_name(_value(article, "source_name", ""))
+    if not name:
+        return False
+    mode = _body_mode(channel)
+    if mode == SourceBodyAttributionMode.ALWAYS:
+        return True
+    if mode == SourceBodyAttributionMode.SOURCE_NAME_MARKER:
+        return _marker_matches(name, str(channel.policy.source_body_attribution_marker or ""))
+    return False
 
 
 def source_body_context_name(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
-    """Return a source name that is allowed/required inside the rewritten body.
+    name = clean_source_name(_value(article, "source_name", ""))
+    return name if source_body_attribution_allowed(channel, article) else ""
 
-    Named-source footer attribution remains available for every source. In-body
-    attribution is reserved for community sources whose configured name contains
-    the literal word «громада».
-    """
-    name = source_context_name(channel, article)
-    return name if is_community_source_name(name) else ""
+
+def source_body_instruction(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
+    name = clean_source_name(_value(article, "source_name", ""))
+    if not name:
+        return ""
+    if source_body_attribution_allowed(channel, article):
+        return (
+            "\nАТРИБУЦІЯ ДЖЕРЕЛА В ТІЛІ: дозволена правилами цього каналу. "
+            "Якщо атрибуція потрібна для ясності, використовуй SOURCE NAME природно, без канцелярського шаблону. "
+        )
+    mode = _body_mode(channel)
+    marker = str(channel.policy.source_body_attribution_marker or "").strip()
+    reason = f" (умова-маркер у назві: {marker})" if mode == SourceBodyAttributionMode.SOURCE_NAME_MARKER and marker else ""
+    return (
+        "\nАТРИБУЦІЯ ДЖЕРЕЛА В ТІЛІ: ЗАБОРОНЕНА правилами цього каналу" + reason + ". "
+        "Не згадуй SOURCE NAME у тексті й не представляй джерело як автора повідомлення. "
+        "Посилання та назву джерела система додасть окремим footer. "
+    )
+
+
+def _source_aliases(name: str) -> tuple[str, ...]:
+    clean = clean_source_name(name)
+    if not clean:
+        return ()
+    aliases = [clean]
+    without_numeric_prefix = re.sub(r"(?u)^\s*\d+[\s:._-]+", "", clean).strip()
+    if len(without_numeric_prefix) >= 3 and without_numeric_prefix.casefold() != clean.casefold():
+        aliases.append(without_numeric_prefix)
+    return tuple(dict.fromkeys(aliases))
 
 
 def source_body_attribution_issues(
     channel: ChannelConfig, article: Mapping[str, Any] | Any, text: str
 ) -> tuple[str, ...]:
-    """Block redundant reporting attribution for non-community named sources."""
-    name = source_context_name(channel, article)
-    if not name or is_community_source_name(name):
+    if source_body_attribution_allowed(channel, article):
+        return ()
+    name = clean_source_name(_value(article, "source_name", ""))
+    if not name:
         return ()
     body = str(text or "")
-    name_pattern = r"\s+".join(re.escape(part) for part in name.split())
-    reporting_after = re.compile(
-        rf"(?iu){name_pattern}[^.!?\n]{{0,55}}\b(?:повідомляє|повідомив|повідомила|повідомили|інформує|пише|зазначає|розповідає)\b"
-    )
-    reporting_before = re.compile(
-        rf"(?iu)\b(?:за\s+(?:інформацією|даними|повідомленням)|як\s+(?:повідомляє|пише|інформує)|детальніше[^.!?\n]{{0,80}}(?:інформує|повідомляє|пише))[^.!?\n]{{0,100}}{name_pattern}"
-    )
-    issues: list[str] = []
-    if reporting_after.search(body) or reporting_before.search(body):
-        issues.append("назву не-громадського джерела повторено в тілі як атрибуцію замість системного footer")
-    return tuple(issues)
+    for alias in _source_aliases(name):
+        pattern = r"(?iu)(?<![\w’'-])" + r"\s+".join(re.escape(part) for part in alias.split()) + r"(?![\w’'-])"
+        if re.search(pattern, body):
+            return ("правила каналу забороняють згадувати/атрибутувати джерело в тілі; джерело має лишатися тільки у footer",)
+    return ()
+
 
 def source_footer_label(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
     name = source_context_name(channel, article)
@@ -86,7 +121,6 @@ def source_body_hard_limit(
     telegram_limit: int = 900,
     default_body_limit: int = 880,
 ) -> int:
-    """Reserve caption space for a custom named-source footer when enabled."""
     footer = source_footer_label(channel, article)
     if not footer:
         return int(default_body_limit)
@@ -95,7 +129,6 @@ def source_body_hard_limit(
 
 
 def require_source_context(text: str, source_name: str) -> None:
-    """Keep the explicitly configured source context in the final rewrite."""
     name = clean_source_name(source_name)
     if not name:
         return
@@ -110,11 +143,6 @@ def attribution_for_article(
     source_url: str,
     source_urls: list[str] | tuple[str, ...],
 ) -> tuple[list[str], list[str] | None]:
-    """Return footer URLs/labels without changing reader-action links in the body.
-
-    ``named_source`` uses the exact primary original-post URL and the configured source
-    name. ``standard`` keeps the historical ``Джерело`` / ``Джерело N`` contract.
-    """
     label = source_footer_label(channel, article)
     if label and str(source_url or "").startswith(("http://", "https://")):
         return [str(source_url)], [label]
