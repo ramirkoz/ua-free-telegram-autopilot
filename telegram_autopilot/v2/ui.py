@@ -1252,7 +1252,7 @@ class MainWindow(tk.Tk):
 
     def _build_migration(self):
         p = self.tabs["migration"]
-        text = "Імпорт читає стару Data ТІЛЬКИ read-only. Перед заміною V2 БД створюється backup. Переносяться канали, правила, ваги, джерела, published history, dedupe/feedback та зашифровані credentials. Не переносяться cooldown, retry, worker state, RC markers та transient errors. Codex SDK входить до самого portable і не залежить від старої Data."
+        text = "Імпорт читає стару Data ТІЛЬКИ read-only. Перед заміною V2 БД створюється backup. Переносяться канали, правила, ваги, джерела, published history, dedupe/feedback та зашифровані credentials. Не переносяться cooldown, retry, worker state, RC markers та transient errors. Codex SDK не переноситься зі старої Data: його можна встановити/оновити окремо у Tools\\Codex на вкладці «AI»."
         ttk.Label(p, text=text, wraplength=980, justify="left").pack(anchor="w", padx=12, pady=12)
         self.migration_status = tk.StringVar(value="")
         ttk.Button(p, text="Імпортувати стару Data", command=self.import_legacy).pack(anchor="w", padx=12, pady=5)
