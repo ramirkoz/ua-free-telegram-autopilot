@@ -156,7 +156,7 @@ class ChannelDialog(tk.Toplevel):
         )
         ttk.Label(
             p,
-            text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела»; назва джерела також зберігається як обов'язковий контекст рерайту.",
+            text="Стандартне: Джерело / Джерело N. Іменоване: Читати у «назва джерела». У тілі назва джерела є обов’язковим контекстом лише коли в назві є слово «громада».",
             wraplength=760, foreground="#444",
         ).grid(row=18, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         ttk.Label(p, text="Джерело є обов'язковим для READY/PUBLISH і не може бути вимкнене.").grid(row=19, column=0, columnspan=2, sticky="w", padx=6, pady=6)
