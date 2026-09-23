@@ -15,7 +15,7 @@ from ..rewrite_verifier import assess_rewrite, hard_editorial_blockers
 from ..ukrainian_quality import apply_safe_ukrainian_fixes, final_language_blockers, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
 from .source_attribution import (
-    require_source_context, source_body_attribution_issues, source_body_context_name,
+    require_source_context, source_body_attribution_issues, source_body_context_name, source_body_instruction,
     source_body_hard_limit, source_context_name,
 )
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
@@ -582,15 +582,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             "Не додавай від себе порад, моралей, застережень або загальних фраз. "
             if channel.mode == ChannelMode.MONITORING else ""
         )
-        named_source_style = (
-            "\nГРОМАДА-ДЖЕРЕЛО: природно вживи назву громади в тексті; не починай механічним шаблоном «[назва] повідомляє, що». "
-            if source_context else (
-                "\nНЕ-ГРОМАДСЬКЕ ДЖЕРЕЛО: не представляй SOURCE NAME у тілі як джерело повідомлення. "
-                "Не пиши «за інформацією SOURCE NAME», «SOURCE NAME повідомляє/інформує/пише» або «детальніше інформує SOURCE NAME». "
-                "Не вставляй URL самого матеріалу/видання: назву й посилання на джерело система додасть у footer. "
-                if source_name else ""
-            )
-        )
+        named_source_style = source_body_instruction(channel, article)
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
@@ -684,15 +676,7 @@ SOURCE:
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
             if source_context else ""
         )
-        source_attribution_instruction = (
-            "Назву громади-джерела можна природно лишити в тілі. "
-            if source_context else (
-                "SOURCE NAME не є громадою: прибери з тіла будь-яке представлення цього медіа/джерела як автора повідомлення; "
-                "не пиши «за інформацією», «повідомляє», «інформує», «пише» з SOURCE NAME і не залишай URL самого матеріалу/видання. "
-                "Footer джерела додасть система. "
-                if source_name else ""
-            )
-        )
+        source_attribution_instruction = source_body_instruction(channel, article)
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nФОРМАТ: якщо фінальний текст має 350+ символів, він повинен мати 2–4 короткі змістові абзаци; не зливай його в один блок.\nПоверни тільки фінальний текст."""
 
