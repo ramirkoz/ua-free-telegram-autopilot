@@ -20,6 +20,9 @@ from .update_protocol import UpdateProtocol
 def v2_database_path() -> Path:
     return data_dir() / "telegram_autopilot_v2.sqlite3"
 
+def _manual_test_build() -> bool:
+    roots = [Path(sys.executable).resolve().parent, Path(__file__).resolve().parents[2]]
+    return any((root / "MANUAL_TEST_BUILD.txt").is_file() for root in roots)
 
 def main() -> int:
     logs = data_dir() / "logs" / "v2"
@@ -76,7 +79,10 @@ def main() -> int:
                 app.set_startup_ready(True, f"Підготовка бази завершена: URL={stats.get('normalized_urls', 0)}, дублікати={stats.get('reconciled_duplicates', 0)}")
                 try:
                     UpdateProtocol().mark_startup_healthy(V2_VERSION)
-                    update_coordinator.start()
+                    if _manual_test_build():
+                        event("update", "manual test build: auto-update disabled", version=V2_VERSION)
+                    else:
+                        update_coordinator.start()
                     event("update", "startup health marker written", version=V2_VERSION)
                 except Exception as exc:
                     event("update", "startup health marker failed", level=30, detail=str(exc)[:1000])

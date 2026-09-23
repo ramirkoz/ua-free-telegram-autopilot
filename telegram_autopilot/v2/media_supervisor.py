@@ -22,7 +22,7 @@ class MediaAwareProductionSupervisorService(ProductionSupervisorService):
                     con.execute(
                         """SELECT COUNT(*) FROM articles
                            WHERE channel_id=? AND discovered_at>=?
-                             AND last_error_code IN ('MEDIA_REQUIRED','MEDIA_REQUIRED_SKIPPED','TELEGRAM_MEDIA_REFRESH_REQUIRED')""",
+                             AND last_error_code IN ('MEDIA_REQUIRED','MEDIA_REQUIRED_SKIPPED','TELEGRAM_MEDIA_REFRESH_REQUIRED','TELEGRAM_VIDEO_PENDING')""",
                         (channel_id, cut60),
                     ).fetchone()[0]
                     or 0

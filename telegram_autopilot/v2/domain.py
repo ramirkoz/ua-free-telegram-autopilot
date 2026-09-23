@@ -135,6 +135,12 @@ class ChannelConfig:
     output_starvation_window_hours: int = 4
     output_starvation_min_processed: int = 20
     output_starvation_min_published: int = 1
+    page_prefer_feed: bool = False
+    page_candidate_scan_limit: int = 24
+    page_fetch_limit: int = 8
+    input_starvation_enabled: bool = True
+    input_starvation_min_seen: int = 40
+    input_starvation_cycles: int = 3
     language_mode: str = "ukru_to_uk"
     media_enrichment_mode: str = "auto"
     media_first_allowed: bool = True

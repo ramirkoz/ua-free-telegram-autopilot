@@ -175,7 +175,12 @@ class _ArticleHTMLParser(HTMLParser):
         self.figcaption_depth = 0
         self.featured_media = ""
         self.featured_alt = ""
+        self.featured_title = ""
+        self.featured_url = ""
+        self.featured_type = ""
+        self.twitter_card = ""
         self.featured_video = ""
+        self.featured_video_poster = ""
 
     @property
     def in_article(self) -> bool:
@@ -209,6 +214,8 @@ class _ArticleHTMLParser(HTMLParser):
     def _image_candidate(self, values: dict[str, str], *, featured: bool = False) -> dict[str, object] | None:
         candidate = (
             values.get("data-src") or values.get("data-lazy-src") or values.get("data-original")
+            or values.get("data-original-src") or values.get("data-image-src") or values.get("data-image")
+            or _best_srcset(values.get("data-srcset", "")) or _best_srcset(values.get("data-lazy-srcset", ""))
             or _best_srcset(values.get("srcset", "")) or values.get("src") or ""
         )
         alt = values.get("alt", "")
@@ -271,16 +278,29 @@ class _ArticleHTMLParser(HTMLParser):
 
         if tag == "meta":
             prop = (values.get("property") or values.get("name") or "").casefold()
+            content = values.get("content", "").strip()
+            if prop in {"og:title", "twitter:title"} and content and not self.featured_title:
+                self.featured_title = " ".join(content.split())[:500]
+            elif prop == "og:url" and content and not self.featured_url:
+                self.featured_url = urljoin(self.base_url, content)[:3000]
+            elif prop == "og:type" and content and not self.featured_type:
+                self.featured_type = content.casefold()[:120]
+            elif prop == "twitter:card" and content and not self.twitter_card:
+                self.twitter_card = content.casefold()[:120]
             if prop in {"og:image:alt", "twitter:image:alt"}:
-                alt = " ".join(values.get("content", "").split()).strip()
+                alt = " ".join(content.split()).strip()
                 if alt and not self.featured_alt:
                     self.featured_alt = alt[:500]
             if prop in {"og:image", "og:image:secure_url", "twitter:image", "twitter:image:src"} and not self.featured_media:
-                url = editorial_media_candidate(self.base_url, values.get("content", ""), alt=self.featured_alt, featured=True)
+                url = editorial_media_candidate(self.base_url, content, alt=self.featured_alt, featured=True)
                 if url:
                     self.featured_media = encode_media("image", url)
+            if prop in {"og:video:thumbnail_url", "og:video:thumbnail", "video:thumbnail_url"} and not self.featured_video_poster:
+                url = editorial_media_candidate(self.base_url, content, context="video poster", featured=True)
+                if url:
+                    self.featured_video_poster = encode_media("image", url)
             if prop in {"og:video", "og:video:url", "og:video:secure_url", "twitter:player"} and not self.featured_video:
-                candidate = values.get("content", "").strip()
+                candidate = content
                 low = candidate.casefold()
                 kind = "iframe" if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")) else "video"
                 url = editorial_media_candidate(self.base_url, candidate, context="featured video")
@@ -305,6 +325,15 @@ class _ArticleHTMLParser(HTMLParser):
                         self._finish_text_capture()
                         self.blocks.append({"type": "media", **candidate, "caption": ""})
             elif tag == "video":
+                poster = (values.get("poster") or values.get("data-poster") or values.get("data-poster-src") or "").strip()
+                if poster and not self.featured_video_poster:
+                    poster_url = editorial_media_candidate(
+                        self.base_url, poster,
+                        alt=(values.get("title") or values.get("aria-label") or ""),
+                        context=self._context("article video poster"), featured=True,
+                    )
+                    if poster_url:
+                        self.featured_video_poster = encode_media("image", poster_url)
                 candidate = values.get("src", "")
                 url = editorial_media_candidate(self.base_url, candidate, context=self._context())
                 if url:
@@ -462,46 +491,236 @@ _JSONLD_SCRIPT_RE = re.compile(
 )
 
 
-def _jsonld_video_candidate(html: str, base_url: str) -> str:
-    """Return a VideoObject embed/content URL when normal markup hides the player.
 
-    Some publisher CMSes render the visible video from JavaScript and leave no iframe
-    in the article HTML.  Their JSON-LD still carries VideoObject.embedUrl/contentUrl.
+_ARTICLE_TYPES = {"article", "newsarticle", "blogposting", "report", "analysisnewsarticle"}
+_GENERIC_TITLE_TOKENS = {
+    "this", "that", "with", "from", "into", "about", "after", "before", "their", "your", "they", "have", "will",
+    "news", "story", "article", "image", "photo", "video", "brand", "campaign", "company",
+}
+
+
+def _meaningful_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9\u0400-\u04ff]+", (value or "").casefold())
+        if len(token) >= 4 and token not in _GENERIC_TITLE_TOKENS
+    }
+
+
+def _same_article_url(left: str, right: str) -> bool:
+    try:
+        a, b = urlsplit(left or ""), urlsplit(right or "")
+    except ValueError:
+        return False
+    if not a.hostname or not b.hostname or a.hostname.casefold() != b.hostname.casefold():
+        return False
+    pa = re.sub(r"/+", "/", a.path or "/").rstrip("/") or "/"
+    pb = re.sub(r"/+", "/", b.path or "/").rstrip("/") or "/"
+    return pa == pb
+
+
+def _metadata_matches_article(meta_title: str, meta_url: str, base_url: str, title: str) -> bool:
+    title_tokens = _meaningful_tokens(title)
+    meta_tokens = _meaningful_tokens(meta_title)
+    title_ok = bool(title_tokens and meta_tokens and (title_tokens & meta_tokens))
+    url_ok = bool(meta_url and base_url and _same_article_url(meta_url, base_url))
+    return title_ok and url_ok
+
+
+def _media_url_tokens(value: str) -> set[str]:
+    try:
+        path = urlsplit(value or "").path
+    except ValueError:
+        path = value or ""
+    return _meaningful_tokens(path.replace("-", " ").replace("_", " "))
+
+
+def _safe_og_featured(
+    featured: str,
+    alt: str,
+    title: str,
+    *,
+    meta_title: str = "",
+    meta_url: str = "",
+    meta_type: str = "",
+    base_url: str = "",
+) -> str:
+    """Use page-level OG/Twitter image only when the asset itself is tied to the story.
+
+    A matching og:title/og:url is necessary context but is not enough by itself: stale
+    CMS cards can retain a foreign image while all other page metadata is correct. The
+    image needs its own evidence via alt text, URL slug/article id, or equivalent tokens.
     """
+    raw = str(featured or "").strip()
+    if not raw:
+        return ""
+    title_tokens = _meaningful_tokens(title)
+    if not title_tokens:
+        return ""
+    alt_tokens = _meaningful_tokens(alt)
+    if alt_tokens & title_tokens:
+        return raw
+    asset_tokens = _media_url_tokens(raw)
+    if asset_tokens & title_tokens:
+        return raw
+    try:
+        source_path = urlsplit(base_url or "").path
+        image_path = urlsplit(raw).path
+    except ValueError:
+        source_path = image_path = ""
+    source_ids = set(re.findall(r"\d{6,}", source_path))
+    image_ids = set(re.findall(r"\d{6,}", image_path))
+    page_meta_ok = _metadata_matches_article(meta_title, meta_url, base_url, title)
+    type_ok = not meta_type or "article" in meta_type or "website" in meta_type
+    if page_meta_ok and type_ok and source_ids and (source_ids & image_ids):
+        return raw
+    return ""
+
+
+def _image_values(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key in ("url", "contentUrl", "thumbnailUrl"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                yield item.strip()
+    elif isinstance(value, list):
+        for item in value:
+            yield from _image_values(item)
+
+
+def _jsonld_nodes(html: str) -> list[dict]:
+    nodes: list[dict] = []
     def walk(node):
         if isinstance(node, dict):
-            raw_type = node.get("@type")
-            types = raw_type if isinstance(raw_type, list) else [raw_type]
-            if any(str(t or "").casefold() == "videoobject" for t in types):
-                for key in ("contentUrl", "embedUrl", "url"):
-                    value = node.get(key)
-                    if isinstance(value, str) and value.strip():
-                        yield value.strip()
+            nodes.append(node)
             for value in node.values():
-                yield from walk(value)
+                walk(value)
         elif isinstance(node, list):
             for value in node:
-                yield from walk(value)
-
+                walk(value)
     for raw in _JSONLD_SCRIPT_RE.findall(str(html or "")):
         try:
             payload = json.loads(raw.strip())
         except Exception:
             continue
-        for candidate in walk(payload):
-            absolute = urljoin(base_url, candidate)
-            low = absolute.casefold()
-            if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")):
-                url = editorial_media_candidate(base_url, absolute, context="jsonld video")
+        walk(payload)
+    return nodes
+
+
+def _node_types(node: dict) -> set[str]:
+    raw_type = node.get("@type")
+    values = raw_type if isinstance(raw_type, list) else [raw_type]
+    return {str(value or "").casefold() for value in values if value}
+
+
+def _node_url_candidates(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key in ("@id", "url"):
+            item = value.get(key)
+            if isinstance(item, str):
+                yield item
+    elif isinstance(value, list):
+        for item in value:
+            yield from _node_url_candidates(item)
+
+
+def _jsonld_node_matches_article(node: dict, *, title: str, base_url: str) -> bool:
+    article_title = str(node.get("headline") or node.get("name") or "")
+    title_tokens = _meaningful_tokens(title)
+    node_tokens = _meaningful_tokens(article_title)
+    if title_tokens and node_tokens and (title_tokens & node_tokens):
+        return True
+    for key in ("mainEntityOfPage", "url", "@id"):
+        for candidate in _node_url_candidates(node.get(key)):
+            if _same_article_url(base_url, urljoin(base_url, candidate)):
+                return True
+    return False
+
+
+def _jsonld_article_image_candidate(html: str, base_url: str, title: str = "") -> str:
+    """Return a schema.org Article image tied to the current article, not a related card."""
+    article_nodes = [node for node in _jsonld_nodes(html) if _node_types(node) & _ARTICLE_TYPES]
+    ordered = [node for node in article_nodes if _jsonld_node_matches_article(node, title=title, base_url=base_url)]
+    if len(article_nodes) == 1 and article_nodes[0] not in ordered:
+        ordered.append(article_nodes[0])
+    for node in ordered:
+        for key in ("image", "thumbnailUrl", "primaryImageOfPage"):
+            for candidate in _image_values(node.get(key)):
+                url = editorial_media_candidate(base_url, candidate, context="schema article image", featured=True)
                 if url:
-                    return encode_media("iframe", url)
-            path = urlsplit(absolute).path.casefold()
-            if path.endswith((".mp4", ".m4v", ".mov", ".webm")):
-                url = editorial_media_candidate(base_url, absolute, context="jsonld video")
-                if url:
-                    return encode_media("video", url)
+                    return encode_media("image", url)
     return ""
 
+
+def _video_object_values(node: dict, base_url: str) -> tuple[str, str]:
+    video = ""
+    poster = ""
+    for key in ("contentUrl", "embedUrl", "url"):
+        value = node.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        absolute = urljoin(base_url, value.strip())
+        low = absolute.casefold()
+        if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")):
+            url = editorial_media_candidate(base_url, absolute, context="jsonld video")
+            if url:
+                video = encode_media("iframe", url)
+                break
+        path = urlsplit(absolute).path.casefold()
+        if path.endswith((".mp4", ".m4v", ".mov", ".webm")):
+            url = editorial_media_candidate(base_url, absolute, context="jsonld video")
+            if url:
+                video = encode_media("video", url)
+                break
+    for key in ("thumbnailUrl", "thumbnail", "image"):
+        for candidate in _image_values(node.get(key)):
+            url = editorial_media_candidate(base_url, candidate, context="verified video poster", featured=True)
+            if url:
+                poster = encode_media("image", url)
+                break
+        if poster:
+            break
+    return video, poster
+
+
+def _jsonld_video_media_candidates(html: str, base_url: str, title: str = "") -> tuple[str, str]:
+    """Return (video, poster) only from VideoObject data attributable to this story."""
+    nodes = _jsonld_nodes(html)
+    # Strongest case: a VideoObject nested directly under the matching Article node.
+    articles = [node for node in nodes if _node_types(node) & _ARTICLE_TYPES and _jsonld_node_matches_article(node, title=title, base_url=base_url)]
+    for article in articles:
+        video_value = article.get("video")
+        candidates: list[dict] = []
+        def collect(value):
+            if isinstance(value, dict):
+                if "videoobject" in _node_types(value):
+                    candidates.append(value)
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+        collect(video_value)
+        for candidate in candidates:
+            video, poster = _video_object_values(candidate, base_url)
+            if video or poster:
+                return video, poster
+    # Some CMSes expose the VideoObject as a sibling in @graph. Require its own
+    # title/name/description to overlap this article before trusting the thumbnail.
+    title_tokens = _meaningful_tokens(title)
+    for node in nodes:
+        if "videoobject" not in _node_types(node):
+            continue
+        own = " ".join(str(node.get(key) or "") for key in ("name", "headline", "description"))
+        if title_tokens and not (title_tokens & _meaningful_tokens(own)):
+            continue
+        video, poster = _video_object_values(node, base_url)
+        if video or poster:
+            return video, poster
+    return "", ""
 
 def _parse_scope(html: str, base_url: str, *, include_main: bool) -> _ArticleHTMLParser:
     parser = _ArticleHTMLParser(base_url, include_main=include_main)
@@ -513,13 +732,11 @@ def _parse_scope(html: str, base_url: str, *, include_main: bool) -> _ArticleHTM
 
 
 def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
-    # Prefer the semantic <article> element. Large publisher pages commonly keep
-    # related-story cards, carousels and recommendation images inside <main>, and
-    # treating all of <main> as article content is how unrelated cars/banners leaked
-    # into publication pipelines. Only fall back to <main> when no usable <article>
-    # exists at all.
+    # Prefer the semantic <article> element.  Crucially, body media is extracted
+    # independently from page-level OG metadata.  RC70 could publish a stale/unrelated
+    # OG image when a publisher page exposed no body image, which is worse than no media.
     article_parser = _parse_scope(html, base_url, include_main=False)
-    article_blocks, article_media = _normalize_layout(article_parser.blocks, article_parser.featured_media, article_parser.featured_video)
+    article_blocks, article_media = _normalize_layout(article_parser.blocks, "", article_parser.featured_video)
     article_text = _clean_text("\n".join(
         str(block.get("text") or "") for block in article_blocks if block.get("type") == "text"
     ))
@@ -530,7 +747,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     text = article_text
     if not article_parser.article_seen or len(article_text) < 50:
         main_parser = _parse_scope(html, base_url, include_main=True)
-        main_blocks, main_media = _normalize_layout(main_parser.blocks, main_parser.featured_media, main_parser.featured_video)
+        main_blocks, main_media = _normalize_layout(main_parser.blocks, "", main_parser.featured_video)
         main_text = _clean_text("\n".join(
             str(block.get("text") or "") for block in main_blocks if block.get("type") == "text"
         ))
@@ -540,19 +757,67 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     if not text:
         text = _clean_text("".join(parser.all_chunks))
 
-    # RC56: recover JS-rendered publisher videos from schema.org VideoObject when no
-    # regular iframe/meta video survived the article parser.
-    if not parser.featured_video:
-        parser.featured_video = _jsonld_video_candidate(html, base_url)
-        if parser.featured_video and parser.featured_video not in media:
-            media.insert(0, parser.featured_video)
-
     title = " ".join(parser.title_chunks or article_parser.title_chunks).strip()
+
+    # Recover JS-rendered publisher video + thumbnail from schema.org VideoObject.
+    jsonld_video, jsonld_video_poster = _jsonld_video_media_candidates(html, base_url, title)
+    if not parser.featured_video and jsonld_video:
+        parser.featured_video = jsonld_video
+        if parser.featured_video not in media:
+            media.insert(0, parser.featured_video)
+    if not parser.featured_video_poster and jsonld_video_poster:
+        parser.featured_video_poster = jsonld_video_poster
+
+    # Media trust order:
+    #   1. media structurally inside <article>/<main>,
+    #   2. schema.org Article.image tied to this article,
+    #   3. a poster/thumbnail tied to this article's VideoObject/player,
+    #   4. OG/Twitter image only with asset-level evidence that it belongs here.
+    # Foreign/stale page cards fail closed instead of becoming Telegram artwork.
+    jsonld_featured = _jsonld_article_image_candidate(html, base_url, title)
+    selected_featured = ""
+    # Iframe embeds are useful evidence/video links but are not uploadable Telegram
+    # media. Treat an iframe-only story as still needing a verified image/poster.
+    publishable_media = [item for item in media if not str(item).startswith("iframe|")]
+    provenance = "body" if publishable_media else "none"
+    if not publishable_media and jsonld_featured:
+        selected_featured = jsonld_featured
+        media.insert(0, jsonld_featured)
+        provenance = "jsonld_article_image"
+    elif not publishable_media:
+        video_poster = parser.featured_video_poster
+        if not video_poster and parser.twitter_card == "player" and parser.featured_video and parser.featured_media:
+            # Twitter player cards define twitter:image as the player's own poster.
+            video_poster = parser.featured_media
+        if video_poster:
+            selected_featured = video_poster
+            media.insert(0, video_poster)
+            provenance = "verified_video_poster"
+        else:
+            selected_featured = _safe_og_featured(
+                parser.featured_media, parser.featured_alt, title,
+                meta_title=parser.featured_title, meta_url=parser.featured_url,
+                meta_type=parser.featured_type, base_url=base_url,
+            )
+            if selected_featured:
+                media.insert(0, selected_featured)
+                provenance = "verified_og"
+            elif parser.featured_media:
+                provenance = "rejected_foreign"
+
     layout_json = json.dumps({
-        "version": 5, "featured": parser.featured_media, "featured_video": parser.featured_video,
-        "featured_meta": {"alt": parser.featured_alt}, "blocks": blocks,
+        "version": 7,
+        "featured": selected_featured,
+        "featured_video": parser.featured_video,
+        "featured_meta": {
+            "alt": parser.featured_alt,
+            "provenance": provenance,
+            "page_title": parser.featured_title,
+            "page_url": parser.featured_url,
+        },
+        "blocks": blocks,
     }, ensure_ascii=False, separators=(",", ":"))
-    return ExtractedArticle(title[:500], text[:120_000], media, layout_json)
+    return ExtractedArticle(title[:500], text[:120_000], list(dict.fromkeys(media))[:24], layout_json)
 
 
 def extract_article(html: str) -> tuple[str, str]:

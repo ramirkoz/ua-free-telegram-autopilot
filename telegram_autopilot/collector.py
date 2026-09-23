@@ -522,7 +522,37 @@ def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
             continue
     return []
 
-def collect_source(source: Source) -> list[CollectedArticle]:
+
+_PAGE_NAV_WORDS = {"about","advertise","careers","contact","events","home","login","newsletter","podcast","privacy","search","shop","subscribe","terms","topics","videos"}
+_PAGE_BAD_SEGMENTS = {"about","author","authors","category","contact","events","page","privacy","search","tag","tags","topics"}
+
+def _article_link_score(url: str, text: str) -> int:
+    try:
+        parts = urlsplit(str(url or ""))
+    except Exception:
+        return -100
+    path = str(parts.path or "").strip("/")
+    if not path:
+        return -100
+    segments = [s for s in path.split("/") if s]
+    low_text = " ".join(str(text or "").casefold().split())
+    low_segments = [s.casefold() for s in segments]
+    score = 0
+    if low_text in _PAGE_NAV_WORDS or any(low_text.startswith(x + " ") for x in _PAGE_NAV_WORDS): score -= 8
+    if any(seg in _PAGE_BAD_SEGMENTS for seg in low_segments[:2]): score -= 7
+    if len(segments) >= 2: score += 2
+    if len(segments) >= 3: score += 2
+    slug = segments[-1]
+    if len(slug) >= 20: score += 2
+    if len(slug) >= 35: score += 2
+    if "-" in slug or "_" in slug: score += 1
+    if re.search(r"/(?:19|20)\d{2}/(?:0?[1-9]|1[0-2])(?:/|$)", "/" + path + "/"): score += 5
+    elif re.search(r"/(?:19|20)\d{2}(?:/|$)", "/" + path + "/"): score += 3
+    if 24 <= len(str(text or "").strip()) <= 220: score += 2
+    if len(segments) == 1 and len(slug) < 16: score -= 3
+    return score
+
+def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8) -> list[CollectedArticle]:
     try:
         if source.kind == "telegram":
             return _collect_telegram(source)
@@ -541,12 +571,14 @@ def collect_source(source: Source) -> list[CollectedArticle]:
                 _enrich_article(item, timeout=12.0)
             return items[:40]
         if source.kind == "page":
+            if bool(page_prefer_feed):
+                fallback = _collect_common_feed_fallback(source)
+                if fallback:
+                    return fallback
             try:
                 response = _source_fetch(
-                    source.url,
-                    max_bytes=5 * 1024 * 1024,
-                    allowed_content_types={"text/html", "application/xhtml+xml"},
-                    timeout=20,
+                    source.url, max_bytes=5 * 1024 * 1024,
+                    allowed_content_types={"text/html", "application/xhtml+xml"}, timeout=20,
                 )
             except NetworkError as exc:
                 if "HTTP 429" in str(exc) or "HTTP 403" in str(exc):
@@ -555,26 +587,35 @@ def collect_source(source: Source) -> list[CollectedArticle]:
                         return fallback
                 raise
             html = response.body.decode("utf-8", errors="replace")
-            parser = _LinkParser(source.url)
-            parser.feed(html)
+            parser = _LinkParser(source.url); parser.feed(html)
             base_host = (urlsplit(source.url).hostname or "").lower()
-            seen: set[str] = set()
+            unique: dict[str, tuple[int,int,str,str]] = {}
+            for order, (url, text) in enumerate(parser.links):
+                parts = urlsplit(url)
+                if (parts.hostname or "").lower() != base_host or len(text) < 18:
+                    continue
+                key = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+                score = _article_link_score(url, text)
+                prior = unique.get(key)
+                if prior is None or score > prior[0]:
+                    unique[key] = (score, order, url, text)
+            scan_limit = max(8, min(120, int(page_candidate_scan_limit or 24)))
+            fetch_limit = max(4, min(40, int(page_fetch_limit or 8)))
+            candidates = sorted(unique.values(), key=lambda row: (-row[0], row[1]))[:scan_limit]
             result: list[CollectedArticle] = []
             deadline = time.monotonic() + 75.0
             attempted = 0
-            for url, text in parser.links:
-                if time.monotonic() >= deadline or attempted >= 8:
+            for score, _order, url, text in candidates:
+                if time.monotonic() >= deadline or attempted >= fetch_limit:
                     break
-                host = (urlsplit(url).hostname or "").lower()
-                if host != base_host or url in seen or len(text) < 18:
+                if score < -4:
                     continue
-                seen.add(url)
                 attempted += 1
                 item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=12.0)
                 if len(item.raw_text) < 250:
                     continue
                 result.append(item)
-                if len(result) >= 8:
+                if len(result) >= fetch_limit:
                     break
             return result
     except NetworkError as exc:

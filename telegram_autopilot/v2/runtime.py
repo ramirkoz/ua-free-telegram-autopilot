@@ -39,11 +39,30 @@ class ChannelRuntimeState:
     collect_started_at: str = ""
     collector_heartbeat_at: str = ""
     collector_errors: int = 0
+    last_collect_seen: int = 0
+    last_collect_added: int = 0
+    last_collect_known_external_id: int = 0
+    last_collect_known_canonical_url: int = 0
+    input_zero_add_cycles: int = 0
     last_job_activity_at: str = ""
     heartbeat_at: str = ""
     phase: str = "idle"
     phase_started_at: str = ""
 
+
+
+
+def _media_gate_retry_seconds(channel: ChannelConfig, reason: str) -> int:
+    """Retry cadence for media gates without channel-name special cases.
+
+    A Telegram video placeholder changes only when ingest refreshes the source.
+    Re-running the same job every five minutes merely burns worker capacity, so
+    VIDEO_PENDING sleeps for at least 30 minutes (or six visible poll intervals).
+    A successful source refresh already requeues it immediately in storage.
+    """
+    if str(reason or "") == "TELEGRAM_VIDEO_PENDING":
+        return max(1800, max(1, int(channel.poll_interval_minutes or 1)) * 60 * 6)
+    return 300
 
 class RuntimeEngine:
     """Clean V2 scheduler with one isolated preparation loop per channel."""
@@ -59,6 +78,7 @@ class RuntimeEngine:
         self.stop_event.set()  # not running until start() explicitly clears it
         self._threads: dict[int, threading.Thread] = {}
         self._collector_threads: dict[int, threading.Thread] = {}
+        self._watchdog_thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self.states: dict[int, ChannelRuntimeState] = {}
         self.started_at: str = ""
@@ -99,6 +119,9 @@ class RuntimeEngine:
         threading.Thread(target=self._startup_ai_probe, name="V2-AI-Startup-Probe", daemon=True).start()
         for row in self.store.list_channels(enabled_only=True):
             self._start_channel(int(row["id"]))
+        if not self._watchdog_thread or not self._watchdog_thread.is_alive():
+            self._watchdog_thread = threading.Thread(target=self._watchdog_loop, name="V2-Runtime-Watchdog", daemon=True)
+            self._watchdog_thread.start()
         event("app", "V2 runtime started", channels=len(self._threads), collectors=len(self._collector_threads))
 
     def _startup_ai_probe(self) -> None:
@@ -113,6 +136,8 @@ class RuntimeEngine:
         self.stop_event.set()
         deadline = time.monotonic() + max(0.5, float(timeout))
         threads = [*list(self._threads.values()), *list(self._collector_threads.values())]
+        if self._watchdog_thread is not None:
+            threads.append(self._watchdog_thread)
         for thread in threads:
             remaining = max(0.0, deadline - time.monotonic())
             thread.join(remaining)
@@ -121,6 +146,26 @@ class RuntimeEngine:
             event("app", "V2 runtime stop incomplete", level=logging.ERROR, lingering_threads=lingering, timeout_seconds=float(timeout))
         else:
             event("app", "V2 runtime stopped", channels=len(self._threads), collectors=len(self._collector_threads))
+
+    def _watchdog_loop(self) -> None:
+        """Continuously restore dead per-channel workers/collectors while runtime is expected to run."""
+        while not self.stop_event.wait(5.0):
+            try:
+                enabled = [int(row["id"]) for row in self.store.list_channels(enabled_only=True)]
+                for channel_id in enabled:
+                    with self._lock:
+                        worker_was_alive = bool(self._threads.get(channel_id) and self._threads[channel_id].is_alive())
+                        collector_was_alive = bool(self._collector_threads.get(channel_id) and self._collector_threads[channel_id].is_alive())
+                    self._start_channel(channel_id)
+                    with self._lock:
+                        worker_is_alive = bool(self._threads.get(channel_id) and self._threads[channel_id].is_alive())
+                        collector_is_alive = bool(self._collector_threads.get(channel_id) and self._collector_threads[channel_id].is_alive())
+                    if not worker_was_alive and worker_is_alive:
+                        event("worker", "self-heal restarted channel worker", level=logging.WARNING, channel_id=channel_id)
+                    if not collector_was_alive and collector_is_alive:
+                        event("worker", "self-heal restarted channel collector", level=logging.WARNING, channel_id=channel_id)
+            except Exception as exc:
+                event("worker", "runtime watchdog error", level=logging.ERROR, detail=str(exc)[:1200])
 
     def refresh_channels(self) -> None:
         enabled = {int(row["id"]) for row in self.store.list_channels(enabled_only=True)}
@@ -147,7 +192,13 @@ class RuntimeEngine:
         state = self.states[channel_id]
         worker_id = f"channel-{channel_id}"
         while not self.stop_event.is_set():
-            channel = self.store.get_channel(channel_id)
+            try:
+                channel = self.store.get_channel(channel_id)
+            except Exception as exc:
+                state.errors += 1
+                event("worker", "channel lookup error", level=logging.ERROR, channel_id=channel_id, detail=str(exc)[:1200])
+                self.stop_event.wait(2.0)
+                continue
             if channel is None or not channel.enabled:
                 event("worker", "channel worker stopped because channel disabled/missing", channel_id=channel_id)
                 return
@@ -170,7 +221,13 @@ class RuntimeEngine:
         """Independent collector so a slow 10-15 minute crawl cannot freeze processing/publish."""
         state = self.states[channel_id]
         while not self.stop_event.is_set():
-            channel = self.store.get_channel(channel_id)
+            try:
+                channel = self.store.get_channel(channel_id)
+            except Exception as exc:
+                state.collector_errors += 1
+                event("worker", "collector channel lookup error", level=logging.ERROR, channel_id=channel_id, detail=str(exc)[:1200])
+                self.stop_event.wait(2.0)
+                continue
             if channel is None or not channel.enabled:
                 event("worker", "channel collector stopped because channel disabled/missing", channel_id=channel_id)
                 state.collecting = False
@@ -195,7 +252,13 @@ class RuntimeEngine:
                 state.collect_cycles += 1
                 state.last_collect_duration_seconds = round(max(0.0, finished - started), 2)
                 state.last_collect_completed_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-                event("worker", "collection cycle", channel_id=channel_id, duration_seconds=state.last_collect_duration_seconds, **result)
+                state.last_collect_seen = int(result.get("seen") or 0)
+                state.last_collect_added = int(result.get("added") or 0)
+                state.last_collect_known_external_id = int(result.get("known_external_id") or 0)
+                state.last_collect_known_canonical_url = int(result.get("known_canonical_url") or 0)
+                min_seen = max(1, int(getattr(channel, "input_starvation_min_seen", 40) or 40))
+                state.input_zero_add_cycles = state.input_zero_add_cycles + 1 if state.last_collect_seen >= min_seen and state.last_collect_added == 0 else 0
+                event("worker", "collection cycle", channel_id=channel_id, duration_seconds=state.last_collect_duration_seconds, input_zero_add_cycles=state.input_zero_add_cycles, **result)
             except Exception as exc:
                 finished = time.monotonic()
                 state.last_collect_monotonic = finished
@@ -256,9 +319,10 @@ class RuntimeEngine:
                 raise RuntimeError("CHANNEL_MISSING")
             media_ok, media_reason = processing_media_gate(channel, current)
             if not media_ok:
-                self.store.defer_job(job_id, blocked_by=BlockedBy.MEDIA, error_code=media_reason, detail="Monitoring channel requires valid media before AI processing", retry_seconds=300, count_attempt=False)
+                retry_seconds = _media_gate_retry_seconds(channel, media_reason)
+                self.store.defer_job(job_id, blocked_by=BlockedBy.MEDIA, error_code=media_reason, detail="Monitoring channel requires valid media before AI processing", retry_seconds=retry_seconds, count_attempt=False)
                 self._job_activity(state, "deferred")
-                event("media", "required monitoring item deferred before AI", level=logging.WARNING, channel_id=channel_id, article_id=article_id, code=media_reason)
+                event("media", "required monitoring item deferred before AI", level=logging.WARNING, channel_id=channel_id, article_id=article_id, code=media_reason, retry_seconds=retry_seconds)
                 return True
             if str(current["decision"]) != str(Decision.PENDING):
                 self.store.finish_job(job_id)
@@ -321,13 +385,18 @@ class RuntimeEngine:
                     "collecting": state.collecting,
                     "collect_started_at": state.collect_started_at,
                     "collector_errors": state.collector_errors,
+                    "last_collect_seen": state.last_collect_seen,
+                    "last_collect_added": state.last_collect_added,
+                    "last_collect_known_external_id": state.last_collect_known_external_id,
+                    "last_collect_known_canonical_url": state.last_collect_known_canonical_url,
+                    "input_zero_add_cycles": state.input_zero_add_cycles,
                     "phase": state.phase,
                     "phase_started_at": state.phase_started_at,
                 }
                 for cid, state in self.states.items()
             }
         providers = [
-            {"provider": item.provider, "state": str(item.state), "model": item.model, "detail": item.detail, "cooldown_until": item.cooldown_until}
+            {"provider": item.provider, "state": str(item.state), "model": item.model, "detail": item.detail, "cooldown_until": item.cooldown_until, "enabled": not (str(item.state) == "UNKNOWN" and str(item.detail or "").strip().casefold() == "вимкнено вручну")}
             for item in self.store.provider_health()
         ]
         models = [

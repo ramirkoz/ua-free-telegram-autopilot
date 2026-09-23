@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 import queue
 import threading
 import time
@@ -453,7 +454,7 @@ class MainWindow:
 
     def save_secret_ui(self,quiet=False):
         try:
-            old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; sec=SecretConfig(**data,channel_bot_tokens=old.channel_bot_tokens,local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); save_secrets(sec)
+            old=load_secrets(); data={k:e.get().strip() for k,e in self.secret_entries.items()}; payload=asdict(old); payload.update(data); payload.update(local_enabled=self.local_enabled.get(),local_base_url=self.local_url.get(),local_model=self.local_model.get()); sec=SecretConfig(**payload); save_secrets(sec)
             clear_router_cooldowns()
             if not quiet: messagebox.showinfo(APP_NAME,"Токени збережено. AI cooldown скинуто, провайдери перевірятимуться заново.")
         except Exception as exc: messagebox.showerror(APP_NAME,str(exc))

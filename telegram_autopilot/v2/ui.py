@@ -9,7 +9,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from ..codex_engine import inspect_codex, login_chatgpt, test_codex
-from ..secrets_store import load_secrets
+from ..secrets_store import load_secrets, save_secrets
 from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
@@ -94,12 +94,14 @@ class ChannelDialog(tk.Toplevel):
         self.vars: dict[str, object] = {}
         book = ttk.Notebook(self)
         book.pack(fill="both", expand=True, padx=10, pady=10)
-        basic, dedupe, policy, editorial = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
+        basic, collection, dedupe, policy, editorial = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
         book.add(basic, text="Основне")
+        book.add(collection, text="Збір")
         book.add(dedupe, text="Дедуплікація")
         book.add(policy, text="Політика")
         book.add(editorial, text="Редакційне")
         self._build_basic(basic, cfg)
+        self._build_collection(collection, cfg)
         self._build_dedupe(dedupe, cfg)
         self._build_policy(policy, cfg)
         self._build_editorial(editorial, cfg)
@@ -162,7 +164,16 @@ class ChannelDialog(tk.Toplevel):
         self._entry(p, 21, "Вікно голодування виходу, год", cfg.output_starvation_window_hours)
         self._entry(p, 22, "Мін. оброблених у вікні голодування", cfg.output_starvation_min_processed)
         self._entry(p, 23, "Мін. публікацій у вікні голодування", cfg.output_starvation_min_published)
-        ttk.Label(p, text="Supervisor попереджає лише коли в поточному дозволеному вікні публікацій канал достатньо обробляє матеріали, але не дає налаштований мінімум постів.", wraplength=760, foreground="#444").grid(row=24, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        ttk.Label(p, text="Supervisor попереджає лише коли канал достатньо обробляє матеріали, але не дає налаштований мінімум постів.", wraplength=760, foreground="#444").grid(row=24, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+
+    def _build_collection(self, p, cfg):
+        self._check(p, 0, "Для page-джерел спочатку пробувати стандартний RSS/feed", cfg.page_prefer_feed)
+        self._entry(p, 1, "Скільки посилань page-джерела аналізувати", cfg.page_candidate_scan_limit)
+        self._entry(p, 2, "Скільки кандидатів page-джерела реально завантажувати", cfg.page_fetch_limit)
+        self._check(p, 3, "Контроль голодування входу", cfg.input_starvation_enabled)
+        self._entry(p, 4, "Мін. seen за цикл для контролю входу", cfg.input_starvation_min_seen)
+        self._entry(p, 5, "Скільки циклів seen>0 / added=0 вважати проблемою", cfg.input_starvation_cycles)
+        ttk.Label(p, text="Параметри належать цьому каналу. Ядро однакове для всіх каналів і не знає їхніх назв або ID.", wraplength=760, foreground="#444").grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=10)
 
     def _build_dedupe(self, p, cfg):
         self._combo(
@@ -224,7 +235,7 @@ class ChannelDialog(tk.Toplevel):
         ttk.Label(p, text="Commercial / Editorial вмикає комерційний value gate, marketing-aware media та video diagnostics саме для цього каналу. Runtime не визначає канал за ID або назвою.", wraplength=760, foreground="#444").grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         self._text(p, 11, "Редакційні ваги JSON", cfg.editorial_weights_json, 4)
         self._text(p, 12, "Пороги editorial JSON", cfg.editorial_thresholds_json, 5)
-        ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults; channel-specific послаблення/посилення зберігаються тут, а не в коді runtime.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        ttk.Label(p, text="Пороги належать каналу. Порожній JSON використовує універсальні defaults.", wraplength=760, foreground="#444").grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
     def _save(self):
         try:
@@ -282,6 +293,12 @@ class ChannelDialog(tk.Toplevel):
                 output_starvation_window_hours=int(self._get("Вікно голодування виходу, год")),
                 output_starvation_min_processed=int(self._get("Мін. оброблених у вікні голодування")),
                 output_starvation_min_published=int(self._get("Мін. публікацій у вікні голодування")),
+                page_prefer_feed=bool(self._get("Для page-джерел спочатку пробувати стандартний RSS/feed")),
+                page_candidate_scan_limit=int(self._get("Скільки посилань page-джерела аналізувати")),
+                page_fetch_limit=int(self._get("Скільки кандидатів page-джерела реально завантажувати")),
+                input_starvation_enabled=bool(self._get("Контроль голодування входу")),
+                input_starvation_min_seen=int(self._get("Мін. seen за цикл для контролю входу")),
+                input_starvation_cycles=int(self._get("Скільки циклів seen>0 / added=0 вважати проблемою")),
                 language_mode=self._get("Мова"),
                 media_enrichment_mode=self._get("Медіа-збагачення"),
                 media_first_allowed=bool(self._get("Дозволити media-first")),
@@ -413,6 +430,7 @@ class MainWindow(tk.Tk):
         self.feedback = FeedbackService(store)
         self.feedback_runtime = FeedbackRuntime(self.feedback, store)
         self.learning = LearningEngine(store)
+        self._install_windows_edit_support()
         self._running = False
         self._startup_ready = True
         self._feedback_ready = False
@@ -445,6 +463,101 @@ class MainWindow(tk.Tk):
         self.supervisor.start()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(800, self.refresh_all)
+
+    @staticmethod
+    def _edit_action(event: tk.Event) -> str:
+        keysym = str(getattr(event, "keysym", "") or "").casefold()
+        keycode = int(getattr(event, "keycode", 0) or 0)
+        by_symbol = {"v": "paste", "c": "copy", "x": "cut", "a": "select_all"}
+        if keysym in by_symbol:
+            return by_symbol[keysym]
+        # Windows virtual-key codes remain V/C/X/A even under Ukrainian layout.
+        return {86: "paste", 67: "copy", 88: "cut", 65: "select_all"}.get(keycode, "")
+
+    @staticmethod
+    def _is_editable_widget(widget: tk.Widget) -> bool:
+        return isinstance(widget, (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox))
+
+    def _install_windows_edit_support(self) -> None:
+        # Bind once at application level so every current and future Entry/Text in
+        # V2 dialogs gets standard Windows editing behaviour. This fixes Ctrl+V
+        # under non-Latin layouts and restores the right-click context menu.
+        self.bind_all("<Control-KeyPress>", self._control_edit_shortcut, add="+")
+        self.bind_all("<Shift-Insert>", self._paste_shortcut, add="+")
+        self.bind_all("<Button-3>", self._show_edit_menu, add="+")
+
+    def _control_edit_shortcut(self, event: tk.Event):
+        widget = event.widget
+        if not self._is_editable_widget(widget):
+            return None
+        action = self._edit_action(event)
+        if not action:
+            return None
+        if action == "select_all":
+            self._select_all_widget(widget)
+        elif action == "paste":
+            self._paste_widget(widget)
+        else:
+            widget.event_generate({"copy": "<<Copy>>", "cut": "<<Cut>>"}[action])
+        return "break"
+
+    def _paste_shortcut(self, event: tk.Event):
+        if not self._is_editable_widget(event.widget):
+            return None
+        self._paste_widget(event.widget)
+        return "break"
+
+    def _paste_widget(self, widget: tk.Widget) -> None:
+        try:
+            value = self.clipboard_get()
+        except tk.TclError:
+            return
+        try:
+            if isinstance(widget, tk.Text):
+                try:
+                    widget.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                widget.insert("insert", value)
+            else:
+                try:
+                    first = widget.index("sel.first")
+                    last = widget.index("sel.last")
+                    widget.delete(first, last)
+                except tk.TclError:
+                    pass
+                widget.insert("insert", value)
+        except (tk.TclError, AttributeError):
+            pass
+
+    @staticmethod
+    def _select_all_widget(widget: tk.Widget) -> None:
+        try:
+            if isinstance(widget, tk.Text):
+                widget.tag_add("sel", "1.0", "end-1c")
+                widget.mark_set("insert", "1.0")
+                widget.see("insert")
+            else:
+                widget.selection_range(0, "end")
+                widget.icursor("end")
+        except tk.TclError:
+            pass
+
+    def _show_edit_menu(self, event: tk.Event):
+        widget = event.widget
+        if not self._is_editable_widget(widget):
+            return None
+        menu = tk.Menu(self, tearoff=False)
+        menu.add_command(label="Вирізати", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Копіювати", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Вставити", command=lambda: self._paste_widget(widget))
+        menu.add_separator()
+        menu.add_command(label="Виділити все", command=lambda: self._select_all_widget(widget))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
 
     def _build_home(self):
         self.home_text = tk.Text(self.tabs["home"], wrap="word", state="disabled", font=("TkDefaultFont", 11))
@@ -481,14 +594,32 @@ class MainWindow(tk.Tk):
 
     def _build_ai(self):
         panel = self.tabs["ai"]
-        bar = ttk.Frame(panel)
-        bar.pack(fill="x", padx=8, pady=(8, 0))
-        self.codex_status = tk.StringVar(value="Codex: перевіряється…")
-        ttk.Label(bar, textvariable=self.codex_status).pack(side="left")
-        ttk.Button(bar, text="Перевірити Codex", command=self.check_codex).pack(side="right")
-        ttk.Button(bar, text="Увійти через ChatGPT", command=self.login_codex).pack(side="right", padx=6)
+        codex_box = ttk.LabelFrame(panel, text="Codex / ChatGPT", padding=8)
+        codex_box.pack(fill="x", padx=8, pady=(8, 4))
+        self.codex_status = tk.StringVar(value="Стан Codex: не перевірявся")
+        self.codex_route_status = tk.StringVar(value="У маршрутизації AI: ВИМКНЕНО")
+        try:
+            _ai_cfg = load_secrets()
+            _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False))
+        except Exception:
+            _codex_enabled = False
+        self.codex_enabled_var = tk.BooleanVar(value=_codex_enabled)
+        ttk.Checkbutton(
+            codex_box, text="Дозволити автоматичне використання Codex у AI Router",
+            variable=self.codex_enabled_var, command=self.save_codex_preference,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        ttk.Label(codex_box, textvariable=self.codex_route_status, font=("TkDefaultFont", 10, "bold")).grid(
+            row=0, column=1, sticky="w"
+        )
+        ttk.Label(codex_box, textvariable=self.codex_status, foreground="#555").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 4)
+        )
+        buttons = ttk.Frame(codex_box)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Button(buttons, text="Перевірити Codex", command=self.check_codex).pack(side="left")
+        ttk.Button(buttons, text="Увійти / змінити акаунт", command=self.login_codex).pack(side="left", padx=6)
+        self._update_codex_route_label()
         self.ai_tree = self._tree(panel, [("provider", "Провайдер", 120), ("state", "Стан", 180), ("model", "Модель", 280), ("success", "Успіхів", 80), ("fail", "Помилок", 80), ("cooldown", "Пауза до", 180), ("detail", "Деталі", 420)])
-        self.after(400, self.refresh_codex_status)
 
     def _build_learning(self):
         p = self.tabs["learning"]
@@ -760,9 +891,9 @@ class MainWindow(tk.Tk):
         cfg = self.supervisor.config
         info = (
             "Нагляд працює окремим фоновим потоком усередині V2: формує status.json, incident.json "
-            "та recent_events.json, ловить AI/worker/queue/SQLite/disk/media аварії й дзеркалить telemetry "
-            "у локальну папку Google Drive Desktop. Telegram-оповіщення та окремий агент прибрані: "
-            "діагностика читається напряму з файлового feed."
+            "та recent_events.json, ловить AI/worker/queue/SQLite/disk/media аварії й відправляє telemetry "
+            "напряму через Google Drive API. Локальна папка Google Drive Desktop лишається тільки резервним fallback. "
+            "Telegram-оповіщення та окремий агент прибрані: діагностика читається напряму з Drive feed."
         )
         ttk.Label(p, text=info, wraplength=1120, justify="left").grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(12, 8))
         self.sup_enabled = tk.BooleanVar(value=cfg.enabled)
@@ -773,7 +904,7 @@ class MainWindow(tk.Tk):
         self.sup_queue_stall = tk.StringVar(value=str(cfg.queue_stall_seconds))
         self.sup_disk_mb = tk.StringVar(value=str(cfg.disk_min_free_mb))
         ttk.Checkbutton(p, text="Увімкнути нагляд", variable=self.sup_enabled).grid(row=1, column=0, sticky="w", padx=12, pady=4)
-        ttk.Label(p, text="Google Drive / telemetry папка").grid(row=2, column=0, sticky="w", padx=12, pady=4)
+        ttk.Label(p, text="Резервна локальна telemetry папка").grid(row=2, column=0, sticky="w", padx=12, pady=4)
         ttk.Entry(p, textvariable=self.sup_mirror_dir, width=80).grid(row=2, column=1, columnspan=2, sticky="ew", padx=12, pady=4)
         ttk.Button(p, text="Обрати папку", command=self.supervisor_choose_mirror).grid(row=2, column=3, sticky="w", padx=4, pady=4)
         fields = (
@@ -816,7 +947,7 @@ class MainWindow(tk.Tk):
             messagebox.showerror("Нагляд", str(exc))
 
     def supervisor_choose_mirror(self):
-        path = filedialog.askdirectory(title="Оберіть локальну синхронізовану папку Supervisor Feed")
+        path = filedialog.askdirectory(title="Оберіть резервну локальну папку Supervisor Feed")
         if path:
             self.sup_mirror_dir.set(path)
             self.supervisor_save()
@@ -849,9 +980,26 @@ class MainWindow(tk.Tk):
         cfg = summary.get("config") or {}
         ai = snap.get("ai") or {}
         q = snap.get("queue") or {}
+        transport = snap.get("transport") or {}
+        api_ok = str(transport.get("drive_api_last_ok_at") or "")
+        api_error = str(transport.get("drive_api_last_error") or "")
+        api_source = str(transport.get("drive_api_credential_source") or "")
+        mirror_ok = str(transport.get("local_mirror_last_ok_at") or "")
+        mirror_error = str(transport.get("local_mirror_last_error") or "")
+        if api_ok:
+            telemetry = f"API OK · {api_ok}" + (f" · {api_source}" if api_source else "")
+        elif api_error and mirror_ok:
+            telemetry = f"API ERROR, fallback OK · {mirror_ok} · {api_error[:120]}"
+        elif api_error:
+            telemetry = f"ERROR: {api_error[:180]}"
+        elif mirror_error:
+            telemetry = f"fallback ERROR: {mirror_error[:160]}"
+        else:
+            telemetry = "очікує першого успішного API heartbeat"
         incident_text = "; ".join(f"{i.get('severity')} {i.get('code')}: {i.get('title')}" for i in incidents) or "немає"
         self.supervisor_status.set(
             f"Supervisor thread: {'працює' if summary.get('thread_alive') else 'не працює'} · "
+            f"Drive telemetry: {telemetry} · "
             f"AI {ai.get('healthy', 0)}/{ai.get('total', 0)} · active jobs {q.get('active', 0)} · "
             f"last publish {q.get('last_publish') or 'немає'} · incidents: {incident_text} · "
             f"mirror: {cfg.get('mirror_dir') or 'не задано'}"
@@ -914,16 +1062,43 @@ class MainWindow(tk.Tk):
 
         threading.Thread(target=work, daemon=True, name="V2-AI-Probe").start()
 
+    def _update_codex_route_label(self) -> None:
+        enabled = bool(getattr(self, "codex_enabled_var", tk.BooleanVar(value=False)).get())
+        if hasattr(self, "codex_route_status"):
+            self.codex_route_status.set(
+                "У маршрутизації AI: УВІМКНЕНО" if enabled else "У маршрутизації AI: ВИМКНЕНО"
+            )
+
+    def save_codex_preference(self):
+        try:
+            cfg = load_secrets()
+            cfg.codex_enabled = bool(self.codex_enabled_var.get())
+            save_secrets(cfg)
+            self._update_codex_route_label()
+            state = "увімкнено" if cfg.codex_enabled else "вимкнено"
+            self.status.set(f"Автоматичне використання Codex {state}.")
+            self.refresh_ai()
+            self.refresh_home()
+        except Exception as exc:
+            messagebox.showerror("Codex", f"Не вдалося зберегти налаштування: {exc}", parent=self)
+
     def refresh_codex_status(self):
+        self._update_codex_route_label()
+        # No automatic Codex inspection while it is disabled. Installation/account
+        # status is refreshed only by the explicit manual check/login actions.
+        if hasattr(self, "codex_enabled_var") and not bool(self.codex_enabled_var.get()):
+            if self.codex_status.get().startswith("Стан Codex: перевіряється"):
+                self.codex_status.set("Стан Codex: не перевірявся · натисніть «Перевірити Codex»")
+            return
         def work():
             status = inspect_codex()
             if not status.installed:
-                text = "Codex: SDK відсутній або пошкоджений"
+                text = "Стан Codex: не встановлено або SDK пошкоджений"
             elif status.authenticated:
-                account = f" · {status.account_label}" if status.account_label else ""
-                text = f"Codex {status.version or '0.147.0'}: готовий{account}"
+                account = f" · акаунт: {status.account_label}" if status.account_label else ""
+                text = f"Стан Codex: встановлено · авторизовано{account} · версія {status.version or 'невідома'}"
             else:
-                text = f"Codex {status.version or '0.147.0'}: потрібен вхід через ChatGPT"
+                text = f"Стан Codex: встановлено · потрібен вхід через ChatGPT · версія {status.version or 'невідома'}"
             self.after(0, lambda: self.codex_status.set(text))
 
         threading.Thread(target=work, daemon=True, name="V2-Codex-Status").start()
@@ -946,7 +1121,7 @@ class MainWindow(tk.Tk):
         threading.Thread(target=work, daemon=True, name="V2-Codex-Login").start()
 
     def check_codex(self):
-        self.codex_status.set("Codex: виконую живий тест…")
+        self.codex_status.set("Стан Codex: виконую ручний живий тест…")
 
         def work():
             try:
@@ -956,7 +1131,7 @@ class MainWindow(tk.Tk):
                 except Exception:
                     pass
             except Exception as exc:
-                msg = f"Codex: тест не пройдено: {exc}"
+                msg = f"Стан Codex: ручний тест не пройдено: {exc}"
             self.after(0, lambda: (self.codex_status.set(msg), self.refresh_ai(), self.refresh_home()))
 
         threading.Thread(target=work, daemon=True, name="V2-Codex-Test").start()

@@ -391,7 +391,8 @@ class SupervisorService:
                 h, m = str(value or fallback).split(":", 1)
                 return max(0, min(23, int(h))), max(0, min(59, int(m)))
             except Exception:
-                h, m = fallback.split(":", 1); return int(h), int(m)
+                h, m = fallback.split(":", 1)
+                return int(h), int(m)
         sh, sm = hm(str(stats.get("publish_start") or "07:00"), "07:00")
         eh, em = hm(str(stats.get("publish_end") or "00:00"), "00:00")
         minute = now_dt.hour * 60 + now_dt.minute
@@ -402,7 +403,6 @@ class SupervisorService:
             if not (start <= minute < end):
                 return False, 0.0
             return True, float((minute - start) * 60 + now_dt.second)
-        # Overnight window, e.g. 18:00-02:00.
         if minute >= start:
             return True, float((minute - start) * 60 + now_dt.second)
         if minute < end:
@@ -448,6 +448,7 @@ class SupervisorService:
             oldest_ready_age = int(stats.get("oldest_ready_age_seconds") or 0)
             max_age_hours = max(1, int(stats.get("max_age_hours") or 24))
             cooling = int(stats.get("sources_cooling_down") or 0)
+
             total_sources = int(stats.get("sources_total") or 0)
             source_errors = int(stats.get("recent_source_errors_15m") or 0)
 
@@ -486,8 +487,13 @@ class SupervisorService:
                     f"output starvation: published={starvation_published}/{starvation_min_published}, "
                     f"processed={starvation_processed}/{starvation_min_processed} in {starvation_window}h"
                 )
-
-            result[str(cid)] = {"state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons, "output_starved": output_starved}
+            channel_runtime = dict(dict(snapshot.get("channels") or {}).get(str(cid)) or dict(dict(snapshot.get("channels") or {}).get(cid) or {}))
+            cfg_row = self.store.get_channel(cid)
+            input_cycles = int(channel_runtime.get("input_zero_add_cycles") or 0)
+            input_starved = bool(cfg_row is not None and bool(getattr(cfg_row,"input_starvation_enabled",True)) and input_cycles >= max(1,int(getattr(cfg_row,"input_starvation_cycles",3) or 3)))
+            if input_starved:
+                reasons.append(f"input starvation: seen={int(channel_runtime.get('last_collect_seen') or 0)}, added={int(channel_runtime.get('last_collect_added') or 0)}, zero-add cycles={input_cycles}")
+            result[str(cid)] = {"state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons, "output_starved": output_starved, "input_starved": input_starved}
         return result
 
     def _database_status(self) -> dict[str, Any]:
@@ -503,14 +509,39 @@ class SupervisorService:
         enabled_rows = self.store.list_channels(enabled_only=True)
         enabled = {str(int(r["id"])): str(r["name"]) for r in enabled_rows}
         providers = list(runtime.get("providers") or [])
-        healthy = sum(1 for p in providers if str(p.get("state")) == "HEALTHY")
+        enabled_providers = [p for p in providers if bool(p.get("enabled", True))]
+        healthy = sum(1 for p in enabled_providers if str(p.get("state")) == "HEALTHY")
         free = shutil.disk_usage(self.store.path.parent).free
         queue = self._queue_snapshot()
         with self._lock:
             expected = self._expected_running
         ai_blocked = int(dict(queue.get("blockers") or {}).get("AI", 0) or 0)
-        ai_total = len(providers)
+        ai_total = len(enabled_providers)
         ai_state = "UNKNOWN" if ai_total <= 0 else ("DOWN" if healthy <= 0 else ("HEALTHY" if healthy >= ai_total else "DEGRADED"))
+        channel_settings: dict[str, dict[str, Any]] = {}
+        for row in enabled_rows:
+            cid = int(row["id"])
+            cfg_row = self.store.get_channel(cid)
+            if cfg_row is None:
+                continue
+            channel_settings[str(cid)] = {
+                "mode": str(cfg_row.mode),
+                "editorial_runtime_profile": str(cfg_row.editorial_runtime_profile),
+                "media_policy": cfg_row.policy.normalized_media_policy(),
+                "poll_interval_minutes": int(cfg_row.poll_interval_minutes),
+                "max_posts_per_cycle": int(cfg_row.max_posts_per_cycle),
+                "page_prefer_feed": bool(cfg_row.page_prefer_feed),
+                "page_candidate_scan_limit": int(cfg_row.page_candidate_scan_limit),
+                "page_fetch_limit": int(cfg_row.page_fetch_limit),
+                "input_starvation_enabled": bool(cfg_row.input_starvation_enabled),
+                "input_starvation_min_seen": int(cfg_row.input_starvation_min_seen),
+                "input_starvation_cycles": int(cfg_row.input_starvation_cycles),
+                "output_starvation_enabled": bool(cfg_row.output_starvation_enabled),
+                "output_starvation_window_hours": int(cfg_row.output_starvation_window_hours),
+                "output_starvation_min_processed": int(cfg_row.output_starvation_min_processed),
+                "output_starvation_min_published": int(cfg_row.output_starvation_min_published),
+            }
+
         snapshot = {
             "schema": "ua-free-autopilot-supervisor-v2",
             "version": V2_VERSION,
@@ -529,6 +560,7 @@ class SupervisorService:
             "queue": queue,
             "media": self._media_snapshot(),
             "channel_stats": self._channel_stats(),
+            "channel_settings": channel_settings,
             "database": self._database_status(),
             "disk": {"free_bytes": int(free), "free_mb": int(free // (1024 * 1024))},
         }
@@ -709,6 +741,20 @@ class SupervisorService:
                     f"processed={int(stats.get('jobs_done_starvation_window') or 0)}; "
                     f"published={int(stats.get('published_starvation_window') or 0)}/{int(stats.get('output_starvation_min_published') or 0)}; "
                     f"rejected={int(stats.get('rejected_starvation_window') or 0)}; duplicates={int(stats.get('duplicates_starvation_window') or 0)}."
+                ))
+
+            input_code = f"CHANNEL_INPUT_STARVATION_{cid}"
+            input_starved = bool(op.get("input_starved"))
+            elapsed_input = self._condition_elapsed(input_code, input_starved, now)
+            if input_starved and elapsed_input >= 0:
+                ch_runtime = dict(channels.get(str(cid)) or {})
+                incidents.append(Incident(
+                    "WARNING", input_code, f"Канал «{name}» читає джерела, але не знаходить нових матеріалів",
+                    f"seen={int(ch_runtime.get('last_collect_seen') or 0)}; "
+                    f"added={int(ch_runtime.get('last_collect_added') or 0)}; "
+                    f"known_external={int(ch_runtime.get('last_collect_known_external_id') or 0)}; "
+                    f"known_url={int(ch_runtime.get('last_collect_known_canonical_url') or 0)}; "
+                    f"zero_add_cycles={int(ch_runtime.get('input_zero_add_cycles') or 0)}."
                 ))
 
             total_sources = int(stats.get("sources_total") or 0)

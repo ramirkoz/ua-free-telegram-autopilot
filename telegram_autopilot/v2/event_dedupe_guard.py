@@ -43,8 +43,15 @@ _ENTITY_STOP = {
 }
 
 _SCIENTIFIC_CONTEXT = (
-    "species", "taxon", "genus", "scientific", "scientists", "researchers", "study", "research",
-    "вид", "таксон", "рід", "науков", "дослід", "вчен",
+    "species", "taxon", "genus", "scientific name", "binomial", "subspecies",
+    "вид", "таксон", "рід", "латинська назва", "біологічний вид",
+)
+_SCIENTIFIC_CONTEXT_RE = re.compile(
+    r"(?:\b(?:new|newly\s+described|undescribed|distinct)\s+species\b"
+    r"|\bspecies\b|\bgenus\b|\btaxon(?:omy|omic|on)?\b|\bbinomial\b|\bscientific\s+name\b|\bsubspecies\b"
+    r"|\b(?:нов(?:ий|ого|а|у)|невідом(?:ий|ого|а|у))\s+вид\w*\b|\bвид(?:у|ом|и|ів)?\b|\bтаксон\w*\b|\bрід\b"
+    r"|\bлатинськ\w*\s+назв\w*\b|\bбіологічн\w*\s+вид\w*\b)",
+    re.I,
 )
 _SCIENTIFIC_SECOND_STOP = {
     "according", "added", "after", "again", "around", "because", "comes", "could", "found", "helps", "including",
@@ -73,6 +80,23 @@ _RARE_STOP = {
     "дослідники", "дослідження", "науковці", "вчені", "результати", "показали",
     "researchers", "research", "scientists", "study", "results", "using", "based",
 }
+
+# Broad topic/boilerplate concepts must never become event-identity anchors by
+# themselves.  Prefixes are used because ``_concept_sequence`` stems words.
+_COMPOUND_GENERIC_ROOTS = (
+    "research", "scient", "study", "report", "result", "analysis", "testing", "test",
+    "company", "system", "device", "market", "security", "data", "cloud", "server", "access",
+    "content", "product", "model", "technology", "platform", "service", "method", "process",
+    "event", "unique", "user", "people", "world", "news", "article", "information",
+    "дослід", "науков", "вчен", "результ", "аналіз", "тест", "компан", "систем", "пристр",
+    "ринок", "безпек", "дан", "сервер", "доступ", "контент", "продукт", "модел", "технолог",
+    "платформ", "сервіс", "метод", "процес", "поді", "новин", "статт", "інформац",
+)
+
+
+def _is_generic_identity_term(term: str) -> bool:
+    value = str(term or "").casefold().strip(".'’-_")
+    return (not value) or any(value.startswith(root) for root in _COMPOUND_GENERIC_ROOTS)
 
 _WORD_NUMBERS = {
     "один": 1, "одна": 1, "одне": 1, "два": 2, "дві": 2, "три": 3, "чотири": 4,
@@ -107,10 +131,23 @@ def _numbers(value: str) -> list[float]:
 
 
 def _near_numeric_pairs(left: str, right: str) -> list[tuple[float, float]]:
+    """Return only genuinely compatible numeric anchors.
+
+    RC60 used an absolute tolerance of two for every small number, so unrelated
+    facts such as 3 vs 1 or 12 vs 11 became corroborating evidence.  Small
+    counts now need to be effectively equal; percentages / larger measurements
+    still allow a narrow relative tolerance (for example 90 vs 92 percent).
+    """
     pairs: list[tuple[float, float]] = []
     for a in _numbers(left):
         for b in _numbers(right):
-            tolerance = max(2.0, 0.04 * max(abs(a), abs(b)))
+            scale = max(abs(a), abs(b))
+            if scale < 20:
+                tolerance = 0.25
+            elif scale <= 100:
+                tolerance = max(1.0, 0.03 * scale)
+            else:
+                tolerance = max(1.0, 0.02 * scale)
             if abs(a - b) <= tolerance:
                 pairs.append((a, b))
                 break
@@ -154,7 +191,13 @@ def _near_quantity_pairs(left: str, right: str) -> list[tuple[float, float]]:
         for index, b in enumerate(right_values):
             if index in used:
                 continue
-            tolerance = max(2.0, 0.04 * max(abs(a), abs(b)))
+            scale = max(abs(a), abs(b))
+            if scale < 20:
+                tolerance = 0.25
+            elif scale <= 100:
+                tolerance = max(1.0, 0.03 * scale)
+            else:
+                tolerance = max(1.0, 0.02 * scale)
             if abs(a - b) <= tolerance:
                 pairs.append((a, b))
                 used.add(index)
@@ -215,12 +258,11 @@ def _entity_tokens(value: str) -> set[str]:
 
 
 def _scientific_names(value: str) -> set[str]:
-    """Extract Latin binomials only with nearby taxonomic evidence.
+    """Extract a Latin binomial only when explicit taxonomy language is nearby.
 
-    RC58 used one global science/research marker for the whole article, so ordinary
-    title-case phrases such as ``American Hope`` or ``Astra Model`` could become
-    fake species identifiers.  RC59 requires the taxonomic cue in a local window
-    around the candidate and keeps a conservative generic-word deny-list.
+    Generic research words are intentionally *not* taxonomy evidence.  That
+    prevents phrases such as ``Machine Learning``, ``Read More`` or ``Share This``
+    from becoming fake species merely because an article also says "researchers".
     """
     raw = str(value or "")
     out: set[str] = set()
@@ -229,10 +271,10 @@ def _scientific_names(value: str) -> set[str]:
         first_low, second_low = first.casefold(), second.casefold()
         if second_low in _SCIENTIFIC_SECOND_STOP or first_low in _ENTITY_STOP:
             continue
-        start = max(0, match.start() - 180)
-        end = min(len(raw), match.end() + 180)
-        local = raw[start:end].casefold()
-        if not any(marker in local for marker in _SCIENTIFIC_CONTEXT):
+        start = max(0, match.start() - 150)
+        end = min(len(raw), match.end() + 150)
+        local = raw[start:end]
+        if not _SCIENTIFIC_CONTEXT_RE.search(local):
             continue
         out.add(f"{first_low} {second_low}")
     return out
@@ -246,21 +288,46 @@ def _rare_terms(value: str) -> set[str]:
     terms: set[str] = set()
     for token in _concept_sequence(value):
         term = str(token or "").casefold().strip(".'’-_")
-        if len(term) < 7 or term in _RARE_STOP or term.isdigit():
+        if len(term) < 7 or term in _RARE_STOP or term.isdigit() or _is_generic_identity_term(term):
             continue
         terms.add(term)
     return terms
 
 
+def _identity_text(row: Any) -> str:
+    """Compact event-bearing text used by high-precision fingerprints.
+
+    Full scraped pages often contain navigation, recommendations and repeated
+    site boilerplate.  Comparing 14k characters of that material made unrelated
+    stories look similar.  Identity matching is therefore limited to the title,
+    event summary and the leading editorial/source text where the event itself is
+    normally stated.
+    """
+    title = str(_value(row, "title", "") or "").strip()
+    summary = str(_value(row, "event_summary", "") or "").strip()
+    final_text = str(_value(row, "final_text", "") or "").strip()
+    raw_text = str(_value(row, "raw_text", "") or "").strip()
+    parts = [title, summary]
+    if final_text:
+        parts.append(final_text[:2200])
+    if raw_text:
+        parts.append(raw_text[:2200])
+    return "\n".join(part for part in parts if part)[:5200]
+
+
 def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
-    left_raw = _value_text(current)[:14000]
-    right_raw = _value_text(candidate)[:14000]
+    left_raw = _identity_text(current)
+    right_raw = _identity_text(candidate)
     left = left_raw.casefold()
     right = right_raw.casefold()
     concepts_a = set(_concept_sequence(left))
     concepts_b = set(_concept_sequence(right))
     shared = concepts_a & concepts_b
     containment = len(shared) / max(1, min(len(concepts_a), len(concepts_b)))
+    salient_a = {term for term in concepts_a if len(term) >= 5 and not _is_generic_identity_term(term)}
+    salient_b = {term for term in concepts_b if len(term) >= 5 and not _is_generic_identity_term(term)}
+    salient_shared = salient_a & salient_b
+    salient_containment = len(salient_shared) / max(1, min(len(salient_a), len(salient_b)))
     return {
         "left_raw": left_raw,
         "right_raw": right_raw,
@@ -269,6 +336,9 @@ def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
         "shared": shared,
         "containment": containment,
         "long_shared": {item for item in shared if len(item) >= 6},
+        "salient_shared": salient_shared,
+        "salient_containment": salient_containment,
+        "salient_long_shared": {item for item in salient_shared if len(item) >= 6},
         "numeric_pairs": _near_numeric_pairs(left, right),
         "quantity_pairs": _near_quantity_pairs(left, right),
         "duration_pairs": _near_duration_pairs(left, right),
@@ -305,6 +375,9 @@ def event_fingerprint_same_event(
     shared = stats["shared"]
     containment = float(stats["containment"])
     long_shared = stats["long_shared"]
+    salient_shared = stats["salient_shared"]
+    salient_containment = float(stats["salient_containment"])
+    salient_long_shared = stats["salient_long_shared"]
     numeric_pairs = stats["numeric_pairs"]
     quantity_pairs = stats["quantity_pairs"]
     duration_pairs = stats["duration_pairs"]
@@ -316,10 +389,13 @@ def event_fingerprint_same_event(
     # Exact Latin binomials are high-information identifiers, but only channels that
     # explicitly enable the scientific-name fingerprint use this lane.
     if scientific_names and shared_scientific:
-        return True, (
-            "scientific-name event fingerprint "
-            f"taxa={','.join(sorted(shared_scientific))} concepts={len(shared)}/{containment:.2f}"
-        )
+        scientific_corroborated = bool(shared_actions) or (salient_containment >= 0.32 and len(salient_long_shared) >= 4)
+        if scientific_corroborated:
+            return True, (
+                "scientific-name event fingerprint "
+                f"taxa={','.join(sorted(shared_scientific))} actions={','.join(sorted(shared_actions)) or '-'} "
+                f"concepts={len(shared)}/{containment:.2f}"
+            )
 
     # Generic subject + method/mechanism lane. It deliberately does not contain names
     # of particular discoveries, scrolls, species or experiments. Rare shared concepts
@@ -328,30 +404,31 @@ def event_fingerprint_same_event(
         corroboration = bool(numeric_pairs or quantity_pairs or duration_pairs) or len(shared_rare) >= 3
         strong_rare = len(shared_rare) >= 4
         if (
-            len(shared) >= 8
-            and containment >= 0.20
-            and len(long_shared) >= 4
+            len(salient_shared) >= 4
+            and salient_containment >= 0.30
+            and len(salient_long_shared) >= 3
             and corroboration
         ) or (
-            len(shared) >= 6
-            and containment >= 0.30
-            and len(long_shared) >= 4
+            len(salient_shared) >= 4
+            and salient_containment >= 0.35
+            and len(salient_long_shared) >= 3
             and strong_rare
+            and len(shared_actions) >= 2
         ):
             return True, (
                 "compound subject+method+mechanism fingerprint "
-                f"concepts={len(shared)}/{containment:.2f} rare={len(shared_rare)} "
+                f"concepts={len(shared)}/{containment:.2f} salient={len(salient_shared)}/{salient_containment:.2f} rare={len(shared_rare)} "
                 f"numbers={numeric_pairs[:3]} quantities={quantity_pairs[:3]} durations={duration_pairs[:3]}"
             )
 
         # A proper-name incident skeleton catches heavy rewrites while still requiring
         # multiple independent actions and substantial conceptual overlap.
         if shared_entities and len(shared_actions) >= 2:
-            if len(shared) >= 11 and containment >= 0.30 and len(long_shared) >= 6:
+            if len(salient_shared) >= 6 and salient_containment >= 0.35 and len(salient_long_shared) >= 4:
                 return True, (
                     "named-entity incident fingerprint "
                     f"entities={','.join(sorted(shared_entities))} actions={','.join(sorted(shared_actions))} "
-                    f"concepts={len(shared)}/{containment:.2f}"
+                    f"concepts={len(shared)}/{containment:.2f} salient={len(salient_shared)}/{salient_containment:.2f}"
                 )
 
     # Proper-name + normalized fact lane is useful globally. Commercial channels use
@@ -359,16 +436,16 @@ def event_fingerprint_same_event(
     if shared_entities and (quantity_pairs or duration_pairs):
         required_actions = 4 if same_source else 3
         required_shared = 7 if same_source else 6
-        min_containment = 0.14
+        min_containment = 0.28
         if commercial_profile:
             required_actions = max(required_actions, 3)
             required_shared = max(required_shared, 8)
-            min_containment = 0.18
+            min_containment = 0.32
         if (
             len(shared_actions) >= required_actions
-            and len(shared) >= required_shared
-            and containment >= min_containment
-            and len(long_shared) >= 3
+            and len(salient_shared) >= max(4, required_shared - 2)
+            and salient_containment >= min_containment
+            and len(salient_long_shared) >= 3
         ):
             return True, (
                 "entity+fact event fingerprint "
@@ -380,9 +457,9 @@ def event_fingerprint_same_event(
     if (
         anchor_count >= 2
         and len(shared_actions) >= 3
-        and len(shared) >= 8
-        and containment >= 0.16
-        and len(long_shared) >= 4
+        and len(salient_shared) >= 5
+        and salient_containment >= 0.32
+        and len(salient_long_shared) >= 4
     ):
         return True, (
             "multi-fact event fingerprint "
@@ -395,9 +472,9 @@ def event_fingerprint_same_event(
     if (
         not commercial_profile
         and numeric_pairs
-        and len(shared) >= 12
-        and containment >= 0.28
-        and len(long_shared) >= 6
+        and len(salient_shared) >= 7
+        and salient_containment >= 0.34
+        and len(salient_long_shared) >= 5
     ):
         return True, (
             "concept+numeric event fingerprint "
@@ -405,7 +482,7 @@ def event_fingerprint_same_event(
         )
 
     return False, (
-        f"{reason}; event fingerprint concepts={len(shared)}/{containment:.2f} "
+        f"{reason}; event fingerprint concepts={len(shared)}/{containment:.2f} salient={len(salient_shared)}/{salient_containment:.2f} "
         f"long={len(long_shared)} taxa={','.join(sorted(shared_scientific)) or '-'} "
         f"entities={','.join(sorted(shared_entities)) or '-'} actions={','.join(sorted(shared_actions)) or '-'} "
         f"rare={len(shared_rare)} numbers={numeric_pairs[:3]} quantities={quantity_pairs[:3]} durations={duration_pairs[:3]}"

@@ -66,6 +66,27 @@ def _video_expected(article: Any) -> bool:
     text = (str(article["title"] or "") + "\n" + str(article["raw_text"] or "")[:3500] + "\n" + str(article["final_text"] or "")[:1800]).casefold()
     return any(word in text for word in _VIDEO_EXPECTED_WORDS)
 
+def _telegram_video_recovery(article: Any) -> str:
+    try:
+        layout = json.loads(str(article["article_layout_json"] or "{}"))
+    except Exception:
+        return ""
+    if not isinstance(layout, dict):
+        return ""
+    tg = layout.get("telegram")
+    return str(tg.get("video_recovery") or "") if isinstance(tg, dict) else ""
+
+def _web_media_provenance(article: Any) -> str:
+    try:
+        layout = json.loads(str(article["article_layout_json"] or "{}"))
+    except Exception:
+        return ""
+    if not isinstance(layout, dict):
+        return ""
+    meta = layout.get("featured_meta")
+    return str(meta.get("provenance") or "") if isinstance(meta, dict) else ""
+
+
 def _source_urls(article: Any) -> list[str]:
     """Return canonical attribution URLs, preserving the primary source first."""
     urls: list[str] = []
@@ -216,11 +237,13 @@ class Publisher:
 
         policy = channel.policy.normalized_media_policy()
         source_media_count = int(bundle.source_media_count or bundle.declared_media_count or bundle.count)
+        video_recovery = _telegram_video_recovery(article)
         event(
             "media", "publication media gate", channel_id=channel_id, article_id=article_id,
             media_policy=policy, source_media_count=source_media_count,
             bundle_media_count=bundle.count, declared_media_count=bundle.declared_media_count,
             source_kind=bundle.source_kind, stitched=bundle.stitched,
+            telegram_video_recovery=video_recovery, web_media_provenance=_web_media_provenance(article),
         )
         if policy == "required" and not bundle.count:
             self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_REQUIRED", detail="Політика каналу вимагає валідне медіа", retry_seconds=None, count_attempt=False)

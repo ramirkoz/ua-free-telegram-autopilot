@@ -10,11 +10,12 @@ from typing import Any
 from .advanced_supervisor import AdvancedSupervisorService
 from .local_reporter import LocalTelegramReporter
 from .loghub import event
-from .production_supervisor import LIVE_FEED_NAMES, _ProductionUpdateProtocol
+from .production_supervisor import CANONICAL_LIVE_FEED_NAME, LEGACY_LIVE_FEED_NAMES, LIVE_FEED_NAMES, _ProductionUpdateProtocol
 from .supervisor import Incident, SupervisorConfig, SupervisorService
 from .fileio import atomic_copy
 from . import V2_VERSION
 from .telemetry_supervisor import TelemetryProductionSupervisorService
+from .drive_api_telemetry import DirectDriveTelemetry
 
 
 # Passive observability only. These files are written from the application to the
@@ -66,6 +67,10 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
 
         self.local_reporter = LocalTelegramReporter(root=self.root)
         self._local_report_result: dict[str, Any] = {"status": "starting"}
+        # RC64: passive telemetry prefers the Google Drive API. The historical
+        # filesystem mirror remains fallback-only for machines where OAuth is
+        # intentionally unavailable. Core runtime work never depends on either.
+        self._drive_api = DirectDriveTelemetry(CANONICAL_LIVE_FEED_NAME)
 
     @staticmethod
     def _rc55_valid_telemetry_source(source: Path, name: str) -> bool:
@@ -87,63 +92,49 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         return False
 
     def _rc55_existing_live_targets(self, *, force: bool = False) -> list[Path]:
-        """Return every existing local Drive LIVE folder, not just one winner.
+        """Resolve exactly one telemetry target.
 
-        Duplicate Drive folders/mounts happened in production. Passive telemetry is
-        safe to fan out, and doing so prevents one stale duplicate from making the
-        remote observer blind while another mount is actually being synced.
+        RC55 fanned status files out to every folder with a matching display name.
+        Google Drive permits duplicate folder names, so that made a stale/read-only
+        duplicate look alive while the real observer watched a different folder.
+        RC63 gives one uniquely named canonical folder absolute priority and keeps a
+        single legacy fallback only for migration.
         """
         now = time.monotonic()
-        if not force and self._rc55_mirror_targets and now - self._rc55_mirror_targets_checked_at < 300.0:
+        if not force and self._rc55_mirror_targets and now - self._rc55_mirror_targets_checked_at < 60.0:
             return list(self._rc55_mirror_targets)
-        candidates: list[Path] = []
+
         configured = str(self.config.mirror_dir or "").strip()
-        if configured:
-            candidates.append(Path(configured).expanduser())
-        home = Path.home()
-        roots = [home, home / "Google Drive", home / "GoogleDrive"]
-        if os.name == "nt":
-            roots.extend(Path(f"{letter}:\\") for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ")
-        vault_names = (
-            "UA FREE Telegram Autopilot — Project Vault",
-            "UA FREE Telegram Autopilot - Project Vault",
-            "Project Vault",
-        )
-        for root in roots:
+        configured_path = Path(configured).expanduser() if configured else None
+        if configured_path is not None:
             try:
-                if not root.exists():
-                    continue
+                if configured_path.is_dir() and configured_path.name == CANONICAL_LIVE_FEED_NAME:
+                    self._rc55_mirror_targets = [configured_path]
+                    self._rc55_mirror_targets_checked_at = now
+                    return [configured_path]
             except OSError:
-                continue
-            for drive_root in (root, root / "My Drive", root / "Мій диск"):
-                for feed in LIVE_FEED_NAMES:
-                    candidates.append(drive_root / feed)
-                    for vault in vault_names:
-                        candidates.append(drive_root / vault / feed)
-        out: list[Path] = []
-        seen: set[str] = set()
-        for path in candidates:
-            key = os.path.normcase(os.path.abspath(str(path)))
-            if key in seen:
-                continue
-            seen.add(key)
+                pass
+
+        discovered = str(self._discover_live_mirror_dir() or "").strip()
+        if discovered:
+            path = Path(discovered).expanduser()
             try:
                 if path.is_dir():
-                    out.append(path)
-                    continue
-                # A configured LIVE path may have been removed/corrupted by a sync
-                # conflict. Re-create it only when its parent is already mounted.
-                if configured and key == os.path.normcase(os.path.abspath(configured)) and path.parent.is_dir():
-                    path.mkdir(parents=True, exist_ok=True)
-                    out.append(path)
+                    if str(path) != configured:
+                        cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": str(path)}).normalized()
+                        self.save_config(cfg)
+                    self._rc55_mirror_targets = [path]
+                    self._rc55_mirror_targets_checked_at = now
+                    return [path]
             except OSError:
-                continue
-        self._rc55_mirror_targets = out
+                pass
+
+        self._rc55_mirror_targets = []
         self._rc55_mirror_targets_checked_at = now
-        return list(out)
+        return []
 
     def _mirror_file(self, source, name: str) -> None:
-        """Mirror passive telemetry to all known LIVE mounts with schema guard."""
+        """Send passive telemetry through Drive API, with local-sync fallback only."""
         name = str(name or "")
         if name not in _OUTBOUND_TELEMETRY_FILES:
             return
@@ -152,33 +143,41 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             self._mirror_last_error = f"refused invalid telemetry payload for {name}"
             event("supervisor", "refused invalid telemetry mirror payload", level=40, file=name, path=str(source))
             return
+
+        api_error = ""
+        try:
+            self._drive_api.upload_path(source, name=name)
+            from .storage import now_iso
+            self._mirror_last_ok_at = now_iso()
+            self._mirror_last_error = ""
+            return
+        except Exception as exc:
+            api_error = f"Drive API: {type(exc).__name__}: {exc}"[:1000]
+            event("supervisor", "Drive API telemetry failed; trying local fallback", level=30, file=name, detail=api_error)
+
+        # Migration fallback only. This path is deliberately secondary so a missing
+        # or stale Google Drive Desktop mount can never make cloud telemetry vanish
+        # when OAuth is available.
         targets = self._rc55_existing_live_targets(force=False)
         if not targets:
-            # Retain inherited self-healing discovery as a fallback, then rescan.
             try:
                 self.ensure_live_mirror(force=True)
             except Exception:
                 pass
             targets = self._rc55_existing_live_targets(force=True)
-        if not targets:
-            self._mirror_last_error = "LIVE supervisor mirror not found"
-            return
         errors: list[str] = []
-        successes = 0
-        for target_dir in targets:
+        for target_dir in targets[:1]:
             try:
                 target_dir.mkdir(parents=True, exist_ok=True)
                 atomic_copy(source, target_dir / name)
-                successes += 1
+                from .storage import now_iso
+                self._mirror_last_ok_at = now_iso()
+                self._mirror_last_error = ""
+                return
             except Exception as exc:
                 errors.append(f"{target_dir}: {type(exc).__name__}: {exc}")
-        if successes:
-            from .storage import now_iso
-            self._mirror_last_ok_at = now_iso()
-            self._mirror_last_error = ""
-        else:
-            self._mirror_last_error = "; ".join(errors)[:1200]
-            self._rc55_existing_live_targets(force=True)
+        local_error = "; ".join(errors)[:800] if errors else "local Drive Desktop fallback not found"
+        self._mirror_last_error = f"{api_error}; fallback: {local_error}"[:1200]
 
     def build_snapshot(self) -> dict[str, Any]:
         snapshot = super().build_snapshot()
@@ -197,10 +196,15 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         }
         snapshot["local_telegram_report"] = dict(self._local_report_result)
         transport = dict(snapshot.get("transport") or {})
+        drive_api = self._drive_api.status()
         snapshot["transport"] = {
             **transport,
-            "mode": "outbound_telemetry_plus_signed_update",
-            "feed": transport.get("feed") or "SUPERVISOR FEED — Autopilot V2 LIVE",
+            "mode": "drive_api_outbound_telemetry_plus_signed_update",
+            "drive_api": drive_api,
+            "drive_api_last_ok_at": drive_api.get("last_ok_at") or "",
+            "drive_api_last_error": drive_api.get("last_error") or "",
+            "drive_api_credential_source": drive_api.get("credential_source") or "",
+            "feed": transport.get("feed") or CANONICAL_LIVE_FEED_NAME,
             "update_channel_configured": bool(str(self.config.mirror_dir or "").strip()),
             "status_mirror": True,
             "recent_events_mirror": True,

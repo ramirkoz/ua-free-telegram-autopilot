@@ -176,6 +176,8 @@ class AIGateway:
 
     def _configured(self, provider: str, cfg) -> bool:
         if provider == "codex":
+            if not bool(getattr(cfg, "codex_enabled", False)):
+                return False
             # A transient account inspection failure is not the same thing as an
             # absent configuration. The actual probe/call decides auth/quota/network.
             try:
@@ -280,6 +282,14 @@ class AIGateway:
 
     def _refresh_provider_summary(self, provider: str, cfg) -> ProviderHealth:
         current = self._health_map().get(provider, ProviderHealth(provider=provider))
+        if provider == "codex" and not bool(getattr(cfg, "codex_enabled", False)):
+            current.state = ProviderState.UNKNOWN
+            current.model = ""
+            current.detail = "вимкнено вручну"
+            current.cooldown_until = ""
+            current.updated_at = now_iso()
+            self.store.set_provider_health(current)
+            return current
         if not self._configured(provider, cfg):
             current.state = ProviderState.CONFIG_ERROR
             current.model = ""

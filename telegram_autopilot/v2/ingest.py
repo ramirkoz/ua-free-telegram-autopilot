@@ -30,6 +30,9 @@ class TelegramEntry:
     discarded_non_content: int=0
     discarded_video_thumb: int=0
     discarded_duplicate: int=0
+    video_recovery: str=""
+    video_attachment_seen: bool=False
+    video_poster_url: str=""
 
 
 class TelegramParser(HTMLParser):
@@ -224,6 +227,9 @@ class TelegramParser(HTMLParser):
                 discarded_non_content=int(self.current.get("discarded_non_content") or 0),
                 discarded_video_thumb=int(self.current.get("discarded_video_thumb") or 0),
                 discarded_duplicate=int(self.current.get("discarded_duplicate") or 0),
+                video_recovery=str(self.current.get("video_recovery") or ""),
+                video_attachment_seen=bool(self.current.get("video_attachment_seen")),
+                video_poster_url=str((self.current.get("video_poster_candidates") or [""])[0] if isinstance(self.current.get("video_poster_candidates"), list) and self.current.get("video_poster_candidates") else ""),
             ))
         self.current = None
         self.message_depth = self.text_depth = self.forward_depth = None
@@ -445,8 +451,10 @@ class IngestService:
                 finally:
                     beat()
         return {"seen":seen,"added":added,"errors":errors,"skipped_cooldown":skipped}
-    def _existing(self,channel_id: int,source_id: int,external_id: str,url: str) -> bool:
+    def _existing_reason(self,channel_id: int,source_id: int,external_id: str,url: str) -> str:
         with self.store.connect() as con:
             if con.execute("SELECT 1 FROM articles WHERE source_id=? AND external_id=?",(int(source_id),str(external_id))).fetchone() is not None:
-                return True
-        return self.store.find_equivalent_article(int(channel_id),str(url or "")) is not None
+                return "external_id"
+        return "canonical_url" if self.store.find_equivalent_article(int(channel_id),str(url or "")) is not None else ""
+    def _existing(self,channel_id: int,source_id: int,external_id: str,url: str) -> bool:
+        return bool(self._existing_reason(channel_id,source_id,external_id,url))

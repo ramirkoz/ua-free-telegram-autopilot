@@ -60,7 +60,7 @@ class MediaRecoveryRuntimeEngine(ProductionRuntimeEngine):
                 """SELECT j.id job_id,j.article_id,a.channel_id,a.last_error_code,a.discovered_at
                    FROM jobs j JOIN articles a ON a.id=j.article_id
                    WHERE j.state='WAITING' AND a.decision='PENDING' AND a.blocked_by='MEDIA'
-                     AND a.last_error_code IN ('MEDIA_REQUIRED','TELEGRAM_MEDIA_REFRESH_REQUIRED')
+                     AND a.last_error_code IN ('MEDIA_REQUIRED','TELEGRAM_MEDIA_REFRESH_REQUIRED','TELEGRAM_VIDEO_PENDING')
                    ORDER BY j.updated_at ASC LIMIT 250"""
             ).fetchall()
 

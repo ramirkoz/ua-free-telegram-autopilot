@@ -10,6 +10,7 @@ from .loghub import event
 from .media_supervisor import MediaAwareProductionSupervisorService
 from .storage import now_iso
 from .supervisor import Incident, SupervisorConfig
+from .production_supervisor import CANONICAL_LIVE_FEED_NAME
 
 
 class TelemetryProductionSupervisorService(MediaAwareProductionSupervisorService):
@@ -40,16 +41,32 @@ class TelemetryProductionSupervisorService(MediaAwareProductionSupervisorService
             return 0.0
 
     def _candidate_mirrors(self) -> list[Path]:
+        # RC63: the production resolver knows the one canonical LIVE folder.
+        # If it exists, do not let a legacy duplicate with a newer/older status
+        # timestamp compete with it.  Legacy discovery is fallback only.
+        try:
+            raw = str(self._discover_live_mirror_dir() or "").strip()
+        except Exception as exc:
+            self._telemetry_last_discovery_error = f"{type(exc).__name__}: {exc}"[:800]
+            raw = ""
+        if raw:
+            path = Path(raw).expanduser()
+            try:
+                if path.is_dir() and path.name == CANONICAL_LIVE_FEED_NAME:
+                    return [path]
+            except OSError:
+                pass
+
         out: list[Path] = []
         for resolver in (self._discover_live_mirror_dir, self._discover_mirror_dir):
             try:
-                raw = str(resolver() or "").strip()
+                fallback_raw = str(resolver() or "").strip()
             except Exception as exc:
                 self._telemetry_last_discovery_error = f"{type(exc).__name__}: {exc}"[:800]
                 continue
-            if not raw:
+            if not fallback_raw:
                 continue
-            path = Path(raw).expanduser()
+            path = Path(fallback_raw).expanduser()
             try:
                 if path.is_dir() and all(str(path) != str(existing) for existing in out):
                     out.append(path)

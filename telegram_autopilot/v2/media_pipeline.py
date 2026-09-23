@@ -190,14 +190,27 @@ def media_required(channel: ChannelConfig) -> bool:
 def processing_media_gate(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> tuple[bool, str]:
     raw = build_media_bundle(article)
     if raw.source_kind == "telegram":
+        video_recovery = ""
+        video_seen = False
         try:
             layout = json.loads(str(_v(article, "article_layout_json", "{}") or "{}"))
             tg = layout.get("telegram") if isinstance(layout, dict) else None
             filter_version = int(tg.get("media_filter_version") or 0) if isinstance(tg, dict) else 0
+            if isinstance(tg, dict):
+                video_recovery = str(tg.get("video_recovery") or "").strip().casefold()
+                video_seen = bool(tg.get("video_attachment_seen")) or video_recovery in {
+                    "direct_video", "exact_post_video", "poster_fallback", "no_video"
+                }
         except Exception:
             filter_version = 0
         if filter_version < 3:
             return False, "TELEGRAM_MEDIA_REFRESH_REQUIRED"
+        has_video = any(item.kind == "video" for item in raw.items)
+        if video_seen and not has_video and video_recovery in {"poster_fallback", "no_video"}:
+            # RC69 media-integrity invariant: if Telegram says the source item is a
+            # video, a poster screenshot is not equivalent media. Hold the item and
+            # retry source hydration instead of publishing the screenshot or naked text.
+            return False, "TELEGRAM_VIDEO_PENDING"
     if channel.mode != ChannelMode.MONITORING or not media_required(channel):
         return True, "OK"
     if raw.count:

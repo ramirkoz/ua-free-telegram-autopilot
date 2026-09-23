@@ -114,6 +114,22 @@ class StrictTelegramParser(base.TelegramParser):
             path_local.update(ancestor_classes)
         self._strict_candidate_classes = path_local
 
+        # Current Telegram HTML sometimes lazy-loads video URLs outside ``src``.
+        # Capture direct media attributes while the candidate still belongs to this
+        # exact ``data-post`` widget. The base parser will still handle normal src.
+        low_tag = tag.casefold()
+        if self.current is not None:
+            if self._contains_marker(path_local, self._DIRECT_CONTENT_MEDIA_MARKERS) and any(
+                hint in cls.casefold() for cls in path_local for hint in ("video", "player")
+            ):
+                self.current["video_attachment_seen"] = 1
+            direct_video = self._video_attr_url(values) if low_tag in {"video", "source", "a", "div"} else ""
+            if direct_video and (low_tag in {"video", "source"} or direct_video.casefold().split("?",1)[0].endswith((".mp4", ".m4v", ".mov", ".webm"))):
+                self._add_media("video", direct_video, path_local)
+            poster = str(values.get("poster") or "").strip()
+            if poster.startswith(("http://", "https://")):
+                self._remember_video_poster(poster)
+
         # Telegram frequently renders operational links as ``<a href=...>посиланням</a>``.
         # The base parser keeps only visible text, which silently destroys the target.
         # Preserve the exact href inline while we are inside the real message text.
@@ -163,6 +179,39 @@ class StrictTelegramParser(base.TelegramParser):
         assert isinstance(candidates, list)
         candidates.append(encode_media("image", value)[:3020])
 
+    def _remember_video_poster(self, url: str) -> None:
+        """Preserve the exact post's own video poster as a last-resort visual.
+
+        Public ``t.me/s`` pages often expose only the poster image for a video and
+        omit the direct MP4 URL. Older code correctly rejected that poster as a
+        *second* attachment when a video was available, but accidentally turned
+        genuine video posts into text-only articles when the MP4 was lazy-loaded.
+        The poster is therefore retained only as an exact-post fallback.
+        """
+        if self.current is None:
+            return
+        value = str(url or "").strip()
+        if not value:
+            return
+        self.current["video_attachment_seen"] = 1
+        key = media_identity("image", value)
+        keys = self.current.setdefault("video_poster_keys", set())
+        assert isinstance(keys, set)
+        if key in keys:
+            return
+        keys.add(key)
+        posters = self.current.setdefault("video_poster_candidates", [])
+        assert isinstance(posters, list)
+        posters.append(encode_media("image", value)[:3020])
+
+    @staticmethod
+    def _video_attr_url(values: dict[str, str]) -> str:
+        for key in ("src", "data-src", "data-video", "data-video-src", "data-url", "data-file"):
+            value = str(values.get(key) or "").strip()
+            if value.startswith(("http://", "https://")):
+                return value
+        return ""
+
     def _add_media(self, kind: str, url: str, classes: set[str]) -> None:
         if self.current is None:
             return
@@ -173,6 +222,7 @@ class StrictTelegramParser(base.TelegramParser):
 
         if str(kind).casefold() == "image" and self._contains_marker(candidate_classes, self._VIDEO_THUMB_MARKERS):
             self.current["discarded_video_thumb"] = int(self.current.get("discarded_video_thumb") or 0) + 1
+            self._remember_video_poster(url)
             return
 
         hard_markers = set(self._NON_CONTENT_MEDIA_MARKERS) - set(self._SOFT_PREVIEW_MARKERS)
@@ -193,6 +243,8 @@ class StrictTelegramParser(base.TelegramParser):
         value = str(url or "").strip()
         if not value:
             return
+        if str(kind).casefold() == "video":
+            self.current["video_recovery"] = "direct_video"
         key = media_identity(kind, value)
         keys = self.current.setdefault("media_keys", set())
         assert isinstance(keys, set)
@@ -211,15 +263,34 @@ class StrictTelegramParser(base.TelegramParser):
         # deterministic.
         if self.current is not None:
             media = self.current.setdefault("media", [])
+            posters = self.current.get("video_poster_candidates")
             previews = self.current.get("preview_media_candidates")
-            if isinstance(media, list) and not media and isinstance(previews, list) and previews:
+            if isinstance(media, list) and not media and isinstance(posters, list) and posters:
+                # RC69: a video poster is evidence that the source owns a VIDEO, not
+                # a legitimate replacement for that video. Keep the poster only as
+                # diagnostic/retry metadata. Publishing a screenshot in place of a
+                # playable source video is a media-integrity failure.
+                self.current["video_poster_fallback_used"] = 1
+                self.current["video_recovery"] = "poster_fallback"
+            if (
+                isinstance(media, list) and not media
+                and not bool(self.current.get("video_attachment_seen"))
+                and isinstance(previews, list) and previews
+            ):
                 media.append(str(previews[0]))
                 self.current["preview_fallback_used"] = 1
         super()._finish()
 
 
-def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
-    article = base._to_article(username, entry, [])
+def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_id: dict[int, base.TelegramEntry]) -> CollectedArticle:
+    """Annotate a source-owned Telegram article after deterministic adjacency stitching.
+
+    RC67 accidentally replaced the mature text+adjacent-media ownership rule with
+    "one data-post == one article". Municipal channels often post caption/text and
+    then the media as the immediately following Telegram message. RC69 restores
+    that bounded ownership rule: only consecutive message IDs within the existing
+    five-minute adjacency window may be joined. No arbitrary neighbour donates media.
+    """
     try:
         layout = json.loads(str(article.article_layout_json or "{}"))
     except Exception:
@@ -230,14 +301,66 @@ def _article_v4(username: str, entry: base.TelegramEntry) -> CollectedArticle:
     if not isinstance(tg, dict):
         tg = {}
         layout["telegram"] = tg
-    tg["media_filter_version"] = 5
-    tg["stitched"] = False
+    tg["media_filter_version"] = 7
+    tg["stitch_policy"] = "adjacent_media_only_v2"
+
+    mids = tg.get("message_ids") if isinstance(tg.get("message_ids"), list) else []
+    group = [entry_by_id.get(int(mid)) for mid in mids if str(mid).isdigit()]
+    group = [entry for entry in group if entry is not None]
+    modes = [str(getattr(entry, "video_recovery", "") or "") for entry in group]
+    if "exact_post_video" in modes:
+        mode = "exact_post_video"
+    elif "direct_video" in modes:
+        mode = "direct_video"
+    elif "poster_fallback" in modes:
+        mode = "poster_fallback"
+    elif "no_video" in modes:
+        mode = "no_video"
+    else:
+        mode = ""
+    tg["video_recovery"] = mode
+    tg["video_attachment_seen"] = any(bool(getattr(entry, "video_attachment_seen", False)) for entry in group)
+    posters = [str(getattr(entry, "video_poster_url", "") or "") for entry in group]
+    posters = [value for value in posters if value]
+    if posters:
+        # Metadata only. Never merge this into article.media_urls.
+        tg["video_poster_url"] = posters[0]
+
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article
 
 
+def _strict_media_bearing(entry: base.TelegramEntry) -> bool:
+    """Treat a confirmed Telegram video placeholder as media-bearing for stitching.
+
+    Telegram may expose a video marker/poster without the MP4 URL. RC69 correctly
+    stopped publishing the poster as a fake replacement, but that left video-only
+    messages as ``text==""`` and ``media==[]``. The base stitcher then discarded
+    them before they could be attached to the adjacent caption/text message.
+
+    A placeholder is *not* publishable media. It only participates in ownership
+    stitching so the combined article carries ``video_attachment_seen`` and is
+    blocked later with TELEGRAM_VIDEO_PENDING until the real video is recovered.
+    """
+    if bool(entry.media):
+        return True
+    if bool(getattr(entry, "video_attachment_seen", False)):
+        return True
+    return str(getattr(entry, "video_recovery", "") or "") in {
+        "direct_video", "exact_post_video", "poster_fallback", "no_video"
+    }
+
+
 def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
-    """One Telegram data-post widget is one article; neighbours never donate media."""
+    """Attach adjacent Telegram text/media messages, including pending video posts.
+
+    Ownership remains deliberately narrow: consecutive Telegram post IDs and the
+    existing <=300 second adjacency window. Unlike the base stitcher, a same-post
+    video placeholder with no downloadable MP4 still counts as media-bearing for
+    stitching. It never becomes article media by itself; it only preserves the
+    relationship so the publication gate can defer the combined article instead of
+    publishing the caption as naked text.
+    """
     ordered = sorted(
         entries,
         key=lambda entry: (
@@ -245,7 +368,187 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             base._post_number(entry.post) if base._post_number(entry.post) is not None else 10**18,
         ),
     )
-    return [_article_v4(username, entry) for entry in ordered if entry.text]
+    entry_by_id = {
+        int(post_id): entry
+        for entry in ordered
+        if (post_id := base._post_number(entry.post)) is not None
+    }
+
+    articles: list[CollectedArticle] = []
+    i = 0
+    while i < len(ordered):
+        current = ordered[i]
+        current_media = _strict_media_bearing(current)
+
+        # media/video placeholder first -> text/caption next
+        if not current.text and current_media:
+            run = [current]
+            j = i + 1
+            while (
+                j < len(ordered)
+                and not ordered[j].text
+                and _strict_media_bearing(ordered[j])
+                and base._adjacent(run[-1], ordered[j])
+            ):
+                run.append(ordered[j])
+                j += 1
+
+            if j < len(ordered) and ordered[j].text and base._adjacent(run[-1], ordered[j]):
+                primary = ordered[j]
+                attached = run[:]
+                k = j + 1
+                previous = primary
+                while (
+                    k < len(ordered)
+                    and not ordered[k].text
+                    and _strict_media_bearing(ordered[k])
+                    and base._adjacent(previous, ordered[k])
+                ):
+                    attached.append(ordered[k])
+                    previous = ordered[k]
+                    k += 1
+                article = base._to_article(username, primary, attached)
+                event(
+                    "ingest", "telegram adjacent stitch", source=username,
+                    primary_post=base._post_number(primary.post),
+                    message_ids=[base._post_number(x.post) for x in [primary, *attached]],
+                    direction="media_then_text", pending_video=any(
+                        bool(getattr(x, "video_attachment_seen", False)) and not bool(x.media)
+                        for x in attached
+                    ),
+                )
+                articles.append(article)
+                i = k
+                continue
+
+            # Keep unmatched media-only entries out of publication. They may pair
+            # with a future text post on a later poll, where the source window will
+            # contain both messages.
+            i = j
+            continue
+
+        # text/caption first -> media/video placeholder next
+        if current.text:
+            attached: list[base.TelegramEntry] = []
+            j = i + 1
+            previous = current
+            while (
+                j < len(ordered)
+                and not ordered[j].text
+                and _strict_media_bearing(ordered[j])
+                and base._adjacent(previous, ordered[j])
+            ):
+                attached.append(ordered[j])
+                previous = ordered[j]
+                j += 1
+
+            if not current.media and not attached and j >= len(ordered) and base._held(current):
+                i = j
+                continue
+
+            article = base._to_article(username, current, attached)
+            if attached:
+                event(
+                    "ingest", "telegram adjacent stitch", source=username,
+                    primary_post=base._post_number(current.post),
+                    message_ids=[base._post_number(x.post) for x in [current, *attached]],
+                    direction="text_then_media", pending_video=any(
+                        bool(getattr(x, "video_attachment_seen", False)) and not bool(x.media)
+                        for x in attached
+                    ),
+                )
+            articles.append(article)
+            i = j
+            continue
+
+        i += 1
+
+    return [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
+
+def _entry_has_video(entry: base.TelegramEntry) -> bool:
+    from ..media import decode_media
+    for encoded in entry.media:
+        try:
+            kind, _ = decode_media(encoded)
+        except Exception:
+            continue
+        if kind == "video":
+            return True
+    return False
+
+
+def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.TelegramEntry:
+    """Resolve the exact Telegram video outcome and emit one explicit telemetry event.
+
+    Modes are intentionally transport-level and channel-agnostic:
+    ``direct_video`` (already present on t.me/s), ``exact_post_video`` (recovered
+    from the exact embed), ``poster_fallback`` (same-post visual only), or
+    ``no_video`` (Telegram exposed a video marker but no usable media).
+    """
+    post_id = base._post_number(entry.post)
+    if post_id is None:
+        return entry
+    source_url = f"https://t.me/{username}/{post_id}"
+
+    if _entry_has_video(entry):
+        entry.video_recovery = str(getattr(entry, "video_recovery", "") or "direct_video")
+        event(
+            "ingest", "telegram video recovery outcome", source=username, post_id=post_id,
+            source_url=source_url, mode=entry.video_recovery, media_count=len(entry.media),
+            discarded_video_thumb=int(getattr(entry, "discarded_video_thumb", 0) or 0),
+        )
+        return entry
+
+    if int(getattr(entry, "discarded_video_thumb", 0) or 0) <= 0:
+        return entry
+
+    try:
+        response = collector._source_fetch(
+            f"https://t.me/{username}/{post_id}?embed=1&mode=tme",
+            max_bytes=8 * 1024 * 1024,
+            allowed_content_types={"text/html", "application/xhtml+xml"},
+            timeout=20,
+        )
+        parser = StrictTelegramParser(username)
+        parser.feed(response.body.decode("utf-8", errors="replace"))
+        parser.close()
+        exact = next((x for x in parser.entries if base._post_number(x.post) == post_id), None)
+        if exact is None and len(parser.entries) == 1:
+            exact = parser.entries[0]
+        if exact is not None and _entry_has_video(exact):
+            if not exact.text:
+                exact.text = entry.text
+            if not exact.published:
+                exact.published = entry.published
+            exact.video_recovery = "exact_post_video"
+            event(
+                "ingest", "telegram video recovery outcome", source=username, post_id=post_id,
+                source_url=source_url, mode="exact_post_video", media_count=len(exact.media),
+                discarded_video_thumb=int(getattr(entry, "discarded_video_thumb", 0) or 0),
+            )
+            return exact
+    except Exception as exc:
+        event(
+            "ingest", "telegram exact video hydration failed", level=30, source=username,
+            post_id=post_id, source_url=source_url, detail=str(exc)[:500],
+        )
+
+    if str(getattr(entry, "video_poster_url", "") or ""):
+        # Poster exists, but RC69 deliberately keeps it out of source media. It is
+        # useful evidence/retry metadata, not a substitute for the original video.
+        entry.video_recovery = "poster_fallback"
+        mode = "poster_fallback"
+    else:
+        entry.video_recovery = "no_video"
+        mode = "no_video"
+    event(
+        "ingest", "telegram video recovery outcome",
+        level=30 if mode == "no_video" else 20,
+        source=username, post_id=post_id, source_url=source_url, mode=mode,
+        media_count=len(entry.media),
+        discarded_video_thumb=int(getattr(entry, "discarded_video_thumb", 0) or 0),
+    )
+    return entry
 
 
 def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
@@ -261,14 +564,17 @@ def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
     parser = StrictTelegramParser(username)
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
-    items = strict_stitch_telegram(username, parser.entries)
+    entries = [_hydrate_exact_video_post(username, entry) for entry in parser.entries]
+    items = strict_stitch_telegram(username, entries)
     if not items:
         raise collector.CollectorError("Не вдалося прочитати Telegram-канал")
     return items[-40:]
 
 
-def collect_strict(source: Source) -> list[CollectedArticle]:
-    return collect_telegram_strict(source) if source.kind == "telegram" else collector.collect_source(source)
+def collect_strict(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8) -> list[CollectedArticle]:
+    return collect_telegram_strict(source) if source.kind == "telegram" else collector.collect_source(
+        source, page_prefer_feed=page_prefer_feed, page_candidate_scan_limit=page_candidate_scan_limit, page_fetch_limit=page_fetch_limit
+    )
 
 
 class StrictIngestService(base.IngestService):

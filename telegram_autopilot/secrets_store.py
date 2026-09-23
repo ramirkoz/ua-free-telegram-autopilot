@@ -22,6 +22,7 @@ class SecretConfig:
     groq_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
+    codex_enabled: bool = False
     local_enabled: bool = False
     local_base_url: str = "http://127.0.0.1:8080/v1"
     local_model: str = "local-model"
@@ -29,6 +30,10 @@ class SecretConfig:
     telegram_api_hash: str = ""
     telegram_phone: str = ""
     telegram_user_session: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_refresh_token: str = ""
+    google_account_email: str = ""
 
     def normalized(self) -> "SecretConfig":
         try:
@@ -43,6 +48,7 @@ class SecretConfig:
             groq_api_key=self.groq_api_key.strip(),
             cloudflare_account_id=self.cloudflare_account_id.strip(),
             cloudflare_api_token=self.cloudflare_api_token.strip(),
+            codex_enabled=bool(self.codex_enabled),
             local_enabled=bool(self.local_enabled),
             local_base_url=self.local_base_url.strip() or "http://127.0.0.1:8080/v1",
             local_model=self.local_model.strip() or "local-model",
@@ -50,6 +56,10 @@ class SecretConfig:
             telegram_api_hash=str(self.telegram_api_hash or "").strip(),
             telegram_phone=str(self.telegram_phone or "").strip(),
             telegram_user_session=str(self.telegram_user_session or "").strip(),
+            google_client_id=str(self.google_client_id or "").strip(),
+            google_client_secret=str(self.google_client_secret or "").strip(),
+            google_refresh_token=str(self.google_refresh_token or "").strip(),
+            google_account_email=str(self.google_account_email or "").strip(),
         )
 
 

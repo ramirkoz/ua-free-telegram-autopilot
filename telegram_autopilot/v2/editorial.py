@@ -9,7 +9,8 @@ from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from ..evidence_pack import build_evidence_pack
 from ..fact_guard import validate_fact_guard
 from ..language import looks_ukrainian
-from ..ukrainian_quality import apply_safe_ukrainian_fixes, human_style_issues, language_quality_issues
+from ..rewrite_verifier import assess_rewrite, hard_editorial_blockers
+from ..ukrainian_quality import apply_safe_ukrainian_fixes, final_language_blockers, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
 from .source_attribution import source_body_hard_limit, source_context_name, require_source_context
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
@@ -175,6 +176,15 @@ def validate_writer_output(
         raise ValueError("Незакриті дужки/лапки")
     if re.search(r"(?:\b(?:і|й|але|або|бо|що|через|після|до|для|з|із|на|у|в|та)\s*)$", value.casefold().rstrip()):
         raise ValueError("Останнє речення обірване")
+    hard_issues = hard_editorial_blockers(value)
+    if hard_issues:
+        raise ValueError("Жорсткий QA: " + "; ".join(hard_issues[:4]))
+    language_blockers = final_language_blockers(value)
+    if language_blockers:
+        raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
+    readability = assess_rewrite(value, hard_limit=int(hard_max_chars or max_chars))
+    if not readability.publishable:
+        raise ValueError("Readability QA: " + "; ".join(readability.issues[:5]))
     issues = list(language_quality_issues(value)) + list(human_style_issues(value))
     if len(issues) >= 3:
         raise ValueError("Мовний QA: " + "; ".join(issues[:3]))
@@ -219,8 +229,12 @@ _COMMERCIAL_EDITORIAL_THRESHOLDS: dict[str, int] = {
     "commercial_case_fit": 60, "commercial_case_score": 52, "commercial_transferability": 45, "commercial_anchor": 58,
     "creative_case_fit": 65, "creative_case_score": 48, "creative_execution": 68, "creative_anchor": 52,
     "mechanism_case_fit": 70, "mechanism_case_score": 46, "mechanism": 65, "mechanism_transferability": 50,
+    # RC69 broad-audience lane. Values remain visible/editable through
+    # editorial_thresholds_json in Channel Settings.
+    "broad_interest_fit": 54, "broad_interest_score": 50,
+    "broad_general_interest": 58, "broad_retellability": 58,
+    "broad_culture_or_surprise": 55,
 }
-
 
 def _editorial_thresholds(channel: ChannelConfig) -> dict[str, int]:
     base = dict(_COMMERCIAL_EDITORIAL_THRESHOLDS if _is_commercial_editorial(channel) else _STANDARD_EDITORIAL_THRESHOLDS)
@@ -391,32 +405,43 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
 
     def _sold_value_gate(self, article: Any) -> dict[str, Any]:
-        prompt = f"""Ти COMMERCIAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit.
-Оціни 0..100 саме комерційну/маркетингову цінність: commercial_mechanism, consumer_behavior, creative_execution, measurable_result, strategic_transferability, why_now.
-Не вимагай універсального wow. Сильний конкретний кейс продукту, бренду, retail, реклами, ціноутворення, дистрибуції, поведінки споживача або продажів має проходити, якщо з нього зрозуміло «що спрацювало/не спрацювало і чому».
+        prompt = f"""Ти COMMERCIAL + BROAD-AUDIENCE EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit.
+Оціни 0..100 дві незалежні речі.
+1) Профільний commercial case: commercial_mechanism, consumer_behavior, creative_execution, measurable_result, strategic_transferability, why_now.
+2) Цікавість широкій аудиторії: general_interest, retellability, culture_signal, surprise_or_conflict, consumer_relevance.
+ВАЖЛИВО: матеріал НЕ мусить бути навчальним маркетинговим кейсом. Попкультура × бренд, мем, вірусний феномен, дивний товар/ціна, незвична колаборація, споживча поведінка, техно/культурний сюжет або брендова провокація можуть бути сильними самі по собі, якщо їх хочеться дочитати й переказати людині поза професією.
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
-Поверни ТІЛЬКИ JSON: {{"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"why_now":0,"reason":"коротко"}}"""
+Поверни ТІЛЬКИ JSON: {{"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"why_now":0,"general_interest":0,"retellability":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"reason":"коротко"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
-            for key in ("commercial_mechanism", "consumer_behavior", "creative_execution", "measurable_result", "strategic_transferability", "why_now"):
+            for key in (
+                "commercial_mechanism", "consumer_behavior", "creative_execution",
+                "measurable_result", "strategic_transferability", "why_now",
+                "general_interest", "retellability", "culture_signal",
+                "surprise_or_conflict", "consumer_relevance",
+            ):
                 obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
             return obj
 
-        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
+        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=260, timeout_seconds=25).text)
 
     @staticmethod
     def _sold_value_allowed(data: Mapping[str, Any], fit: int, thresholds: Mapping[str, int] | None = None) -> tuple[bool, str, int]:
         t = dict(_COMMERCIAL_EDITORIAL_THRESHOLDS); t.update(dict(thresholds or {}))
         mechanism = int(data.get("commercial_mechanism", 0)); behavior = int(data.get("consumer_behavior", 0)); creative = int(data.get("creative_execution", 0)); result = int(data.get("measurable_result", 0)); transfer = int(data.get("strategic_transferability", 0)); why_now = int(data.get("why_now", 0))
+        general = int(data.get("general_interest", 0)); retell = int(data.get("retellability", 0)); culture = int(data.get("culture_signal", 0)); surprise = int(data.get("surprise_or_conflict", 0)); consumer = int(data.get("consumer_relevance", 0))
         score = int(round(mechanism*.24 + behavior*.18 + creative*.16 + result*.18 + transfer*.18 + why_now*.06))
+        broad_score = int(round(general*.30 + retell*.25 + culture*.15 + surprise*.15 + consumer*.15))
+        if fit >= t["broad_interest_fit"] and broad_score >= t["broad_interest_score"] and general >= t["broad_general_interest"] and retell >= t["broad_retellability"] and max(culture, surprise, consumer) >= t["broad_culture_or_surprise"]:
+            return True, "broad_audience_commercial", broad_score
         if fit >= t["commercial_case_fit"] and score >= t["commercial_case_score"] and transfer >= t["commercial_transferability"] and max(mechanism, behavior, result) >= t["commercial_anchor"]:
             return True, "commercial_case", score
         if fit >= t["creative_case_fit"] and score >= t["creative_case_score"] and creative >= t["creative_execution"] and max(mechanism, behavior, transfer) >= t["creative_anchor"]:
             return True, "creative_commercial_case", score
         if fit >= t["mechanism_case_fit"] and score >= t["mechanism_case_score"] and mechanism >= t["mechanism"] and transfer >= t["mechanism_transferability"]:
             return True, "mechanism_case", score
-        return False, "below_sold_value", score
+        return False, "below_sold_value", max(score, broad_score)
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
@@ -470,6 +495,7 @@ EXTRA: {p.writer_extra_prompt}
 ANGLE: {selection.angle}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {body_hard_max} символів, бо система додає окремий footer джерела.
+ФОРМАТ: якщо текст має 350+ символів, розбий його на 2–4 короткі змістові абзаци. Не пиши суцільною стіною. Коротке оперативне повідомлення до 350 символів може бути одним абзацом.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
@@ -516,7 +542,7 @@ SOURCE:
             if source_context else ""
         )
         prompt = f"""Ти фінальний редактор. Виправ ТІЛЬКИ мову, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Якщо текст уже добрий, поверни його без змін.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nФОРМАТ: якщо фінальний текст має 350+ символів, він повинен мати 2–4 короткі змістові абзаци; не зливай його в один блок.\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
             value = str(raw or "").strip()

@@ -19,10 +19,12 @@ from .supervisor import SupervisorConfig
 from .update_protocol import UpdateProtocol
 
 
-LIVE_FEED_NAMES = (
+CANONICAL_LIVE_FEED_NAME = "UA_FREE_AUTOPILOT_LIVE_CURRENT"
+LEGACY_LIVE_FEED_NAMES = (
     "SUPERVISOR FEED — Autopilot V2 LIVE",
     "SUPERVISOR FEED - Autopilot V2 LIVE",
 )
+LIVE_FEED_NAMES = (CANONICAL_LIVE_FEED_NAME, *LEGACY_LIVE_FEED_NAMES)
 
 
 class _ProductionAgentFeed(AgentFeed):
@@ -343,7 +345,8 @@ class ProductionSupervisorService(AdvancedSupervisorService):
         if os.name == "nt":
             roots.extend(Path(f"{letter}:\\") for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ")
 
-        candidates: list[Path] = []
+        canonical: list[Path] = []
+        legacy: list[Path] = []
         for root in roots:
             try:
                 if not root.exists():
@@ -351,20 +354,29 @@ class ProductionSupervisorService(AdvancedSupervisorService):
             except OSError:
                 continue
             for drive_root in (root, root / "My Drive", root / "Мій диск"):
-                for name in LIVE_FEED_NAMES:
-                    candidates.append(drive_root / name)
+                canonical.append(drive_root / CANONICAL_LIVE_FEED_NAME)
+                for name in LEGACY_LIVE_FEED_NAMES:
+                    legacy.append(drive_root / name)
 
-        existing: list[Path] = []
-        for path in candidates:
-            try:
-                if path.is_dir():
-                    existing.append(path)
-            except OSError:
-                pass
-        if not existing:
-            return ""
-        existing.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
-        return str(existing[0])
+        def existing(paths: list[Path]) -> list[Path]:
+            out: list[Path] = []
+            for path in paths:
+                try:
+                    if path.is_dir():
+                        out.append(path)
+                except OSError:
+                    pass
+            out.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0.0, reverse=True)
+            return out
+
+        # RC63: one canonical telemetry folder wins unconditionally.  Legacy
+        # folders are migration fallback only; stale duplicate folders must never
+        # outrank the canonical target merely because they contain old status files.
+        primary = existing(canonical)
+        if primary:
+            return str(primary[0])
+        fallback = existing(legacy)
+        return str(fallback[0]) if fallback else ""
 
     def build_snapshot(self) -> dict[str, Any]:
         snapshot = super().build_snapshot()
@@ -385,7 +397,7 @@ class ProductionSupervisorService(AdvancedSupervisorService):
 
         self._status_sequence += 1
         snapshot["transport"] = {
-            "feed": "SUPERVISOR FEED — Autopilot V2 LIVE",
+            "feed": CANONICAL_LIVE_FEED_NAME,
             "sequence": self._status_sequence,
             "local_mirror_configured": bool(str(self.config.mirror_dir or "").strip()),
             "local_mirror_last_ok_at": self._mirror_last_ok_at,

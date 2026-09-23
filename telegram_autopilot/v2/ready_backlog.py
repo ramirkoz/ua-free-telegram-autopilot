@@ -38,7 +38,86 @@ class ReadyBacklogStore(MediaRecoveryStore):
                 int(channel["max_age_hours"] or 0),
             )
         stats["expired_stale_ready"] = expired
+        stats["released_nonrequired_media_backlog"] = self._recover_nonrequired_media_backlog()
         return stats
+
+    def _recover_nonrequired_media_backlog(self) -> int:
+        """Release legacy required-media blockers after the visible policy becomes preferred/optional.
+
+        The rule is generic and reads persisted channel policy. It never infers a channel from
+        its name or ID. Recent rows that were archived only because media was mandatory are
+        revived within that channel's normal max-age window.
+        """
+        stamp = now_iso()
+        now = datetime.now(timezone.utc)
+        changed = 0
+        recover_codes = (
+            "MEDIA_REQUIRED", "MEDIA_INCOMPLETE", "MEDIA_DOWNLOAD_FAILED",
+            "MEDIA_DOWNLOAD_RETRY", "MEDIA_REQUIRED_SKIPPED", "MEDIA_REQUIRED_EXPIRED",
+            "TELEGRAM_MEDIA_REFRESH_REQUIRED",
+        )
+        placeholders = ",".join("?" for _ in recover_codes)
+        with self.connect() as con:
+            channels = con.execute(
+                """SELECT c.id,c.max_age_hours,COALESCE(p.media_policy,'required') media_policy
+                   FROM channels c LEFT JOIN channel_policies p ON p.channel_id=c.id
+                   WHERE c.enabled=1"""
+            ).fetchall()
+
+        for channel in channels:
+            if str(channel["media_policy"] or "required").strip().casefold() == "required":
+                continue
+            cid = int(channel["id"]); hours = max(1, int(channel["max_age_hours"] or 24))
+            cutoff = (now - timedelta(hours=hours)).astimezone().isoformat(timespec="seconds")
+            with self.connect() as con:
+                cur = con.execute(
+                    f"""UPDATE articles SET blocked_by='NONE',last_error_code='',last_error_detail='',next_retry_at=''
+                       WHERE channel_id=? AND decision='PUBLISH' AND stage='READY' AND blocked_by='MEDIA'
+                         AND last_error_code IN ({placeholders})""",
+                    (cid, *recover_codes),
+                )
+                changed += int(cur.rowcount or 0)
+
+                pending_ids = [int(r[0]) for r in con.execute(
+                    f"""SELECT id FROM articles WHERE channel_id=? AND decision='PENDING' AND blocked_by='MEDIA'
+                       AND last_error_code IN ({placeholders}) AND discovered_at>=?""",
+                    (cid, *recover_codes, cutoff),
+                ).fetchall()]
+                if pending_ids:
+                    qs = ",".join("?" for _ in pending_ids)
+                    con.execute(
+                        f"UPDATE articles SET blocked_by='NONE',last_error_code='',last_error_detail='',next_retry_at='' WHERE id IN ({qs})",
+                        tuple(pending_ids),
+                    )
+                    cur = con.execute(
+                        f"""UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',
+                           error_code='',error_detail='',updated_at=? WHERE article_id IN ({qs}) AND job_type='process'""",
+                        (stamp, stamp, *pending_ids),
+                    )
+                    changed += int(cur.rowcount or 0)
+
+                archived_ids = [int(r[0]) for r in con.execute(
+                    f"""SELECT id FROM articles WHERE channel_id=? AND stage='ARCHIVED' AND decision='REJECT'
+                       AND last_error_code IN ({placeholders}) AND discovered_at>=?""",
+                    (cid, *recover_codes, cutoff),
+                ).fetchall()]
+                if archived_ids:
+                    qs = ",".join("?" for _ in archived_ids)
+                    con.execute(
+                        f"""UPDATE articles SET stage='COLLECTED',decision='PENDING',blocked_by='NONE',reject_reason='',
+                           status_detail='',last_error_code='',last_error_detail='',next_retry_at='',ready_at='',final_text=''
+                           WHERE id IN ({qs})""",
+                        tuple(archived_ids),
+                    )
+                    cur = con.execute(
+                        f"""UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',attempts=0,
+                           error_code='',error_detail='',updated_at=? WHERE article_id IN ({qs}) AND job_type='process'""",
+                        (stamp, stamp, *archived_ids),
+                    )
+                    changed += int(cur.rowcount or 0)
+        if changed:
+            event("media", "released backlog after non-required media policy", count=int(changed))
+        return int(changed)
 
     def insert_collected(
         self,

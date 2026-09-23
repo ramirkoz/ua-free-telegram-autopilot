@@ -45,7 +45,8 @@ class BoundedStrictIngestService(StrictIngestService):
         return changed
 
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
-        added = seen = errors = skipped = timed_out = 0
+        added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = 0
+        cfg = self.store.get_channel(channel_id)
 
         def beat() -> None:
             if heartbeat is not None:
@@ -79,21 +80,25 @@ class BoundedStrictIngestService(StrictIngestService):
             return {
                 "seen": seen, "added": added, "errors": errors,
                 "skipped_cooldown": skipped, "timed_out_sources": timed_out,
+                "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
             }
 
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:
             started = time.monotonic()
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
-                items = collect_strict(source)
+                items = collect_strict(source, page_prefer_feed=bool(getattr(cfg,"page_prefer_feed",False)), page_candidate_scan_limit=int(getattr(cfg,"page_candidate_scan_limit",24)), page_fetch_limit=int(getattr(cfg,"page_fetch_limit",8)))
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
-            nonlocal added, seen
+            nonlocal added, seen, known_external, known_url, sources_with_new
             seen += len(items)
             source_added = 0
             for item in items:
                 media_json = json.dumps(list(item.media_urls or []), ensure_ascii=False, separators=(",", ":"))
-                before = self._existing(channel_id, source.id, item.external_id, item.url)
+                reason = self._existing_reason(channel_id, source.id, item.external_id, item.url)
+                before = bool(reason)
+                if reason == "external_id": known_external += 1
+                elif reason == "canonical_url": known_url += 1
                 self.store.insert_collected(
                     channel_id=channel_id, source_id=source.id, external_id=item.external_id,
                     title=item.title, source_url=item.url, raw_text=item.raw_text,
@@ -105,6 +110,8 @@ class BoundedStrictIngestService(StrictIngestService):
                     added += 1
                     source_added += 1
                 beat()
+            if source_added:
+                sources_with_new += 1
             self.store.record_source_success(source.id, duration_ms)
             with self.store.connect() as con:
                 con.execute(
@@ -211,6 +218,7 @@ class BoundedStrictIngestService(StrictIngestService):
         return {
             "seen": seen, "added": added, "errors": errors,
             "skipped_cooldown": skipped, "timed_out_sources": timed_out,
+            "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
         }
 
 

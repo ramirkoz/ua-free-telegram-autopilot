@@ -66,6 +66,29 @@ def _media_json_count(value: str) -> int:
     return len(parsed) if isinstance(parsed, list) else 0
 
 
+def _telegram_video_recovery(value: str) -> str:
+    try:
+        parsed = json.loads(str(value or "{}"))
+        tg = parsed.get("telegram") if isinstance(parsed, dict) else None
+        return str(tg.get("video_recovery") or "").strip().casefold() if isinstance(tg, dict) else ""
+    except Exception:
+        return ""
+
+
+def _media_json_has_video(value: str) -> bool:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except Exception:
+        parsed = []
+    if not isinstance(parsed, list):
+        return False
+    for raw in parsed:
+        media = valid_public_media(str(raw or ""))
+        if media and str(media[0]).casefold() == "video":
+            return True
+    return False
+
+
 def _parse_datetime_value(value: str) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -169,6 +192,8 @@ CREATE TABLE IF NOT EXISTS channels (
  topic_daily_limit INTEGER NOT NULL DEFAULT 2,related_spacing_posts INTEGER NOT NULL DEFAULT 5,editorial_weights_json TEXT NOT NULL DEFAULT '[]',
  editorial_thresholds_json TEXT NOT NULL DEFAULT '{}',output_starvation_enabled INTEGER NOT NULL DEFAULT 1,output_starvation_window_hours INTEGER NOT NULL DEFAULT 4,
  output_starvation_min_processed INTEGER NOT NULL DEFAULT 20,output_starvation_min_published INTEGER NOT NULL DEFAULT 1,
+ page_prefer_feed INTEGER NOT NULL DEFAULT 0,page_candidate_scan_limit INTEGER NOT NULL DEFAULT 24,page_fetch_limit INTEGER NOT NULL DEFAULT 8,
+ input_starvation_enabled INTEGER NOT NULL DEFAULT 1,input_starvation_min_seen INTEGER NOT NULL DEFAULT 40,input_starvation_cycles INTEGER NOT NULL DEFAULT 3,
  language_mode TEXT NOT NULL DEFAULT 'ukru_to_uk',media_enrichment_mode TEXT NOT NULL DEFAULT 'auto',media_first_allowed INTEGER NOT NULL DEFAULT 1,
  media_min_text_chars INTEGER NOT NULL DEFAULT 500,legacy_config_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
@@ -273,51 +298,32 @@ class V2Store:
                 self._ensure_source_attribution_mode(con)
                 self._ensure_channel_dedupe_settings(con)
                 self._ensure_rc59_channel_runtime_settings(con)
+                self._ensure_rc62_ingest_settings(con)
+                self._ensure_rc66_operational_channel_tuning(con)
+                self._ensure_rc69_commercial_broad_audience_policy(con)
+                self._ensure_rc71_commercial_media_quality_policy(con)
+                self._ensure_rc72_channel_policy_tuning(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
 
     @staticmethod
     def _ensure_source_attribution_mode(con: sqlite3.Connection) -> None:
-        """Add RC35 channel setting and preserve RC34 behavior once for existing channels.
-
-        The name check exists only in this one-time compatibility migration. Runtime
-        behavior never derives attribution from a channel name; future channels default
-        to ``standard`` until the operator changes the visible channel setting.
-        """
+        """Keep attribution as explicit channel data; never infer it from a name."""
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
         if "source_attribution_mode" not in columns:
             con.execute("ALTER TABLE channels ADD COLUMN source_attribution_mode TEXT NOT NULL DEFAULT 'standard'")
-        key = "rc35_explicit_source_attribution_mode_v1"
-        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        if done and str(done[0] or "") == "1":
-            return
-        # SQLite lower() is ASCII-only by default, so do the one-time legacy
-        # channel-name match in Python where Unicode casefolding is deterministic.
-        rows = con.execute(
-            "SELECT id,name,channel_mode,source_attribution_mode FROM channels"
-        ).fetchall()
-        for row in rows:
-            if str(row["channel_mode"] or "").casefold() != "monitoring":
-                continue
-            if str(row["source_attribution_mode"] or "standard") != str(SourceAttributionMode.STANDARD):
-                continue
-            if "громад" not in str(row["name"] or "").casefold():
-                continue
-            con.execute(
-                "UPDATE channels SET source_attribution_mode=? WHERE id=?",
-                (str(SourceAttributionMode.NAMED_SOURCE), int(row["id"])),
-            )
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, "1"),
+            ("rc62_source_attribution_explicit_v1", "1"),
         )
 
     @staticmethod
     def _ensure_channel_dedupe_settings(con: sqlite3.Connection) -> None:
-        """Persist advanced dedupe behavior per channel without runtime name/ID heuristics.
+        """Ensure explicit per-channel dedupe fields without channel-name inference.
 
-        RC57 absorbs the live RC56 behavior into explicit database settings. Channel
-        names are consulted only by this one-time compatibility migration; all runtime
-        matching reads the stored fields afterwards.
+        Older releases used one-time name matching to guess profiles for production
+        channels.  RC61 removes that policy leak completely: the runtime and schema
+        migration know only persisted channel settings. Existing Data keeps its
+        already-saved profile values unchanged.
         """
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
         additions = {
@@ -332,57 +338,18 @@ class V2Store:
             if name not in columns:
                 con.execute(f"ALTER TABLE channels ADD COLUMN {name} {ddl}")
 
-        key = "rc57_explicit_channel_dedupe_profile_v2"
+        key = "rc61_explicit_channel_dedupe_no_name_inference_v1"
         done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         if done and str(done[0] or "") == "1":
             return
 
-        rows = con.execute(
-            """SELECT id,name,editorial_runtime_profile,dedupe_profile,dedupe_scientific_names,
-                      dedupe_compound_events,dedupe_rare_terms,published_dedupe_window_hours
-               FROM channels"""
-        ).fetchall()
-        for row in rows:
-            channel_id = int(row["id"])
-            normalized = "".join(str(row["name"] or "").casefold().split())
-            current_profile = str(row["dedupe_profile"] or str(DedupeProfile.STANDARD))
-
-            # RC56 used a 30-day ledger for every existing production channel. Keep
-            # that effective behavior explicitly, while future channels retain the
-            # schema default until the operator changes it.
-            if int(row["published_dedupe_window_hours"] or 168) <= 168:
-                con.execute(
-                    "UPDATE channels SET published_dedupe_window_hours=? WHERE id=?",
-                    (24 * 30, channel_id),
-                )
-
-            if current_profile == str(DedupeProfile.STANDARD) and (
-                "ctrl+ua" in normalized or "ctrlua" in normalized
-            ):
-                con.execute(
-                    """UPDATE channels
-                       SET dedupe_profile=?,
-                           dedupe_scientific_names=1,
-                           dedupe_compound_events=1,
-                           dedupe_rare_terms=1,
-                           published_dedupe_window_hours=?
-                       WHERE id=?""",
-                    (str(DedupeProfile.SCIENTIFIC_NEWS), 24 * 30, channel_id),
-                )
-                continue
-
-            if "продано" in normalized:
-                if current_profile == str(DedupeProfile.STANDARD):
-                    con.execute(
-                        "UPDATE channels SET dedupe_profile=?,published_dedupe_window_hours=? WHERE id=?",
-                        (str(DedupeProfile.COMMERCIAL_EDITORIAL), 24 * 30, channel_id),
-                    )
-                if str(row["editorial_runtime_profile"] or str(EditorialRuntimeProfile.STANDARD)) == str(EditorialRuntimeProfile.STANDARD):
-                    con.execute(
-                        "UPDATE channels SET editorial_runtime_profile=? WHERE id=?",
-                        (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL), channel_id),
-                    )
-
+        # Preserve the historical 30-day published ledger for channels that already
+        # existed, but do not assign any editorial/dedupe profile by channel name or ID.
+        con.execute(
+            """UPDATE channels SET published_dedupe_window_hours=?
+               WHERE published_dedupe_window_hours<=168""",
+            (24 * 30,),
+        )
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, "1"),
@@ -390,12 +357,7 @@ class V2Store:
 
     @staticmethod
     def _ensure_rc59_channel_runtime_settings(con: sqlite3.Connection) -> None:
-        """Add per-channel editorial/output controls without runtime channel-name rules.
-
-        RC59 keeps mechanisms universal.  Compatibility seeding is derived only from
-        the already persisted runtime profile; production code never consults a
-        channel name or ID to choose thresholds.
-        """
+        """Add per-channel editorial/output controls without runtime channel-name rules."""
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
         additions = {
             "editorial_thresholds_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -412,23 +374,13 @@ class V2Store:
         done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         if done and str(done[0] or "") == "1":
             return
-
-        # Seed a more permissive but still evidence-driven commercial profile as
-        # channel data.  This is profile-based compatibility data, not a runtime
-        # special case for any particular channel.
         commercial = {
-            "commercial_case_fit": 58,
-            "commercial_case_score": 46,
-            "commercial_transferability": 40,
-            "commercial_anchor": 52,
-            "creative_case_fit": 62,
-            "creative_case_score": 44,
-            "creative_execution": 62,
-            "creative_anchor": 48,
-            "mechanism_case_fit": 64,
-            "mechanism_case_score": 42,
-            "mechanism": 58,
-            "mechanism_transferability": 44,
+            "commercial_case_fit": 58, "commercial_case_score": 46,
+            "commercial_transferability": 40, "commercial_anchor": 52,
+            "creative_case_fit": 62, "creative_case_score": 44,
+            "creative_execution": 62, "creative_anchor": 48,
+            "mechanism_case_fit": 64, "mechanism_case_score": 42,
+            "mechanism": 58, "mechanism_transferability": 44,
         }
         payload = json.dumps(commercial, ensure_ascii=False, separators=(",", ":"))
         con.execute(
@@ -437,6 +389,339 @@ class V2Store:
                  AND (editorial_thresholds_json='' OR editorial_thresholds_json='{}')""",
             (payload, str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL)),
         )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+    @staticmethod
+    def _ensure_rc62_ingest_settings(con: sqlite3.Connection) -> None:
+        """Add visible per-channel ingest controls; runtime stays channel-agnostic."""
+        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
+        additions = {
+            "page_prefer_feed": "INTEGER NOT NULL DEFAULT 0",
+            "page_candidate_scan_limit": "INTEGER NOT NULL DEFAULT 24",
+            "page_fetch_limit": "INTEGER NOT NULL DEFAULT 8",
+            "input_starvation_enabled": "INTEGER NOT NULL DEFAULT 1",
+            "input_starvation_min_seen": "INTEGER NOT NULL DEFAULT 40",
+            "input_starvation_cycles": "INTEGER NOT NULL DEFAULT 3",
+        }
+        for name, ddl in additions.items():
+            if name not in columns:
+                con.execute(f"ALTER TABLE channels ADD COLUMN {name} {ddl}")
+        key = "rc62_ingest_settings_seed_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        # One-time data-driven seed: page-heavy channels get deeper feed-first discovery.
+        # No channel IDs, names or editorial labels are consulted.
+        for row in con.execute("SELECT id FROM channels").fetchall():
+            cid = int(row["id"])
+            counts = con.execute(
+                "SELECT COUNT(*) AS total, SUM(CASE WHEN kind='page' THEN 1 ELSE 0 END) AS pages FROM sources WHERE channel_id=? AND enabled=1",
+                (cid,),
+            ).fetchone()
+            total = int(counts["total"] or 0) if counts else 0
+            pages = int(counts["pages"] or 0) if counts else 0
+            if total >= 3 and pages * 2 >= total:
+                con.execute(
+                    "UPDATE channels SET page_prefer_feed=1,page_candidate_scan_limit=48,page_fetch_limit=16 WHERE id=?",
+                    (cid,),
+                )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+
+    @staticmethod
+    def _ensure_rc66_operational_channel_tuning(con: sqlite3.Connection) -> None:
+        """One-time explicit channel-setting tune based on persisted roles, never names/IDs.
+
+        Existing commercial-editorial and monitoring channels are the only rows touched.
+        Every changed value is normal persisted channel/policy data and remains visible/editable
+        in the channel settings UI. Future channels are not auto-tuned by this migration.
+        """
+        key = "rc66_operational_channel_tuning_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+
+        # Commercial/editorial channels: prefer real source media when present but do
+        # not hold an otherwise publishable story forever. For page-heavy source sets,
+        # search somewhat deeper for fresh URLs while keeping hard bounded limits.
+        commercial_rows = con.execute(
+            "SELECT id FROM channels WHERE editorial_runtime_profile=?",
+            (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL),),
+        ).fetchall()
+        for row in commercial_rows:
+            cid = int(row["id"])
+            counts = con.execute(
+                "SELECT COUNT(*) total, SUM(CASE WHEN kind='page' THEN 1 ELSE 0 END) pages FROM sources WHERE channel_id=? AND enabled=1",
+                (cid,),
+            ).fetchone()
+            total = int(counts["total"] or 0) if counts else 0
+            pages = int(counts["pages"] or 0) if counts else 0
+            con.execute(
+                """UPDATE channels SET
+                       max_posts_per_cycle=MAX(max_posts_per_cycle,4),
+                       output_starvation_enabled=1,output_starvation_window_hours=2,
+                       output_starvation_min_processed=5,output_starvation_min_published=1,
+                       input_starvation_enabled=1,input_starvation_min_seen=40,input_starvation_cycles=2
+                   WHERE id=?""",
+                (cid,),
+            )
+            if total >= 3 and pages * 2 >= total:
+                con.execute(
+                    """UPDATE channels SET page_prefer_feed=1,
+                           page_candidate_scan_limit=MAX(page_candidate_scan_limit,72),
+                           page_fetch_limit=MAX(page_fetch_limit,20) WHERE id=?""",
+                    (cid,),
+                )
+            con.execute(
+                "UPDATE channel_policies SET media_policy='preferred',updated_at=? WHERE channel_id=?",
+                (now_iso(), cid),
+            )
+
+        # Monitoring channels: five-minute polling is still near-real-time but avoids
+        # repeatedly re-reading hundreds of already-known Telegram items. Preserve
+        # source media/albums when present, but allow exact text-only source posts.
+        monitoring_rows = con.execute(
+            "SELECT id FROM channels WHERE channel_mode=?",
+            (str(ChannelMode.MONITORING),),
+        ).fetchall()
+        for row in monitoring_rows:
+            cid = int(row["id"])
+            counts = con.execute(
+                "SELECT COUNT(*) total, SUM(CASE WHEN kind='page' THEN 1 ELSE 0 END) pages FROM sources WHERE channel_id=? AND enabled=1",
+                (cid,),
+            ).fetchone()
+            total = int(counts["total"] or 0) if counts else 0
+            pages = int(counts["pages"] or 0) if counts else 0
+            con.execute(
+                """UPDATE channels SET
+                       poll_interval_minutes=MAX(poll_interval_minutes,5),
+                       max_posts_per_cycle=MAX(max_posts_per_cycle,5),
+                       output_starvation_enabled=1,output_starvation_window_hours=1,
+                       output_starvation_min_processed=1,output_starvation_min_published=1,
+                       input_starvation_enabled=1,input_starvation_min_seen=40,input_starvation_cycles=3
+                   WHERE id=?""",
+                (cid,),
+            )
+            if total >= 3 and pages * 2 >= total:
+                con.execute(
+                    """UPDATE channels SET page_prefer_feed=1,
+                           page_candidate_scan_limit=MAX(page_candidate_scan_limit,64),
+                           page_fetch_limit=MAX(page_fetch_limit,16) WHERE id=?""",
+                    (cid,),
+                )
+            con.execute(
+                "UPDATE channel_policies SET media_policy='preferred',updated_at=? WHERE channel_id=?",
+                (now_iso(), cid),
+            )
+
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+    @staticmethod
+    def _ensure_rc69_commercial_broad_audience_policy(con: sqlite3.Connection) -> None:
+        """Persist broad-audience commercial policy in visible channel settings.
+
+        The runtime remains channel-name/ID agnostic. Only channels explicitly using
+        the commercial_editorial profile receive this one-time visible policy seed,
+        and users can edit every resulting rule/threshold in Channel Settings.
+        """
+        key = "rc69_commercial_broad_audience_policy_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        rows = con.execute(
+            """SELECT c.id,c.editorial_thresholds_json,p.selection_rules,p.rejection_rules,
+                      p.selector_extra_prompt,p.writer_extra_prompt
+                 FROM channels c JOIN channel_policies p ON p.channel_id=c.id
+                WHERE c.editorial_runtime_profile=?""",
+            (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL),),
+        ).fetchall()
+        selection_block = (
+            "[BROAD_AUDIENCE_RC69]\n"
+            "Пріоритет: історії, цікаві широкій аудиторії навіть без професійного інтересу до маркетингу. "
+            "Включай незвичні продукти й ціни, бренди у попкультурі, вірусні явища, меми, колаборації, "
+            "споживчу поведінку, технології у повсякденному житті, рекламні провокації, факапи, дивні продажі "
+            "та культурні феномени з брендовим/комерційним кутом. Професійний кейс допустимий, але не є базовим форматом."
+        )
+        rejection_block = (
+            "[BROAD_AUDIENCE_RC69]\n"
+            "Відхиляй рутинні B2B/agency case study, галузеві звіти, award/campaign recap і матеріали, "
+            "цінність яких зрозуміла лише маркетологу. Якщо звичайна людина не захоче дочитати або переказати "
+            "історію без пояснення професійної користі, це слабкий матеріал."
+        )
+        selector_block = (
+            "[BROAD_AUDIENCE_RC69] General-audience interest FIRST, marketing relevance SECOND. "
+            "Не вимагай, щоб історія була навчальним маркетинговим кейсом. Оціни, чи є в ній людський сюжет, "
+            "сюрприз, культурний сигнал, споживчий конфлікт, дивний продукт/ціна, viral/meme/pop-culture або "
+            "брендова поведінка, якою захочеться поділитися."
+        )
+        writer_block = (
+            "[BROAD_AUDIENCE_RC69] Пиши для розумної широкої аудиторії, не для маркетингової конференції. "
+            "Починай з найцікавішого факту/конфлікту; мінімізуй trade jargon, не пояснюй 'урок для маркетологів', "
+            "якщо він не потрібен для розуміння самої історії."
+        )
+        for row in rows:
+            def add_once(value: str, block: str) -> str:
+                base = str(value or "").strip()
+                if "[BROAD_AUDIENCE_RC69]" in base:
+                    return base
+                return (base + "\n\n" + block).strip() if base else block
+            try:
+                thresholds = json.loads(str(row["editorial_thresholds_json"] or "{}"))
+            except Exception:
+                thresholds = {}
+            if not isinstance(thresholds, dict):
+                thresholds = {}
+            defaults = {
+                "broad_interest_fit": 54,
+                "broad_interest_score": 50,
+                "broad_general_interest": 58,
+                "broad_retellability": 58,
+                "broad_culture_or_surprise": 55,
+            }
+            for k, v in defaults.items():
+                thresholds.setdefault(k, v)
+            con.execute(
+                """UPDATE channels SET editorial_thresholds_json=?,updated_at=? WHERE id=?""",
+                (json.dumps(thresholds, ensure_ascii=False, separators=(",", ":")), now_iso(), int(row["id"])),
+            )
+            con.execute(
+                """UPDATE channel_policies SET selection_rules=?,rejection_rules=?,selector_extra_prompt=?,writer_extra_prompt=?,updated_at=? WHERE channel_id=?""",
+                (
+                    add_once(row["selection_rules"], selection_block),
+                    add_once(row["rejection_rules"], rejection_block),
+                    add_once(row["selector_extra_prompt"], selector_block),
+                    add_once(row["writer_extra_prompt"], writer_block),
+                    now_iso(), int(row["id"]),
+                ),
+            )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+    @staticmethod
+    def _ensure_rc71_commercial_media_quality_policy(con: sqlite3.Connection) -> None:
+        """Require trustworthy media for explicitly commercial-editorial channels.
+
+        This remains ordinary visible per-channel policy data.  The runtime contains no
+        channel name/ID rule; existing channels explicitly configured with the
+        commercial_editorial profile receive the one-time seed and users can edit it.
+        """
+        key = "rc71_commercial_media_quality_policy_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        rows = con.execute(
+            "SELECT id FROM channels WHERE editorial_runtime_profile=?",
+            (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL),),
+        ).fetchall()
+        stamp = now_iso()
+        for row in rows:
+            con.execute(
+                "UPDATE channel_policies SET media_policy='required',updated_at=? WHERE channel_id=?",
+                (stamp, int(row["id"])),
+            )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+    @staticmethod
+    def _ensure_rc72_channel_policy_tuning(con: sqlite3.Connection) -> None:
+        """One-time visible policy tuning for explicit persisted channel roles.
+
+        No channel names or IDs are used. Commercial-editorial channels get a
+        broad-audience-first mix while preserving required media. Monitoring
+        channels keep their existing policy; VIDEO_PENDING retry cadence is
+        derived at runtime from their visible poll interval.
+        """
+        key = "rc72_channel_policy_tuning_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+
+        rows = con.execute(
+            """SELECT c.id,c.editorial_thresholds_json,p.selection_rules,p.rejection_rules,p.selector_extra_prompt,p.writer_extra_prompt
+                 FROM channels c JOIN channel_policies p ON p.channel_id=c.id
+                WHERE c.editorial_runtime_profile=?""",
+            (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL),),
+        ).fetchall()
+        selection_block = (
+            "[BROAD_AUDIENCE_RC72]\n"
+            "Редакційний пріоритет каналу: приблизно 70–80% матеріалів мають бути цікавими широкій аудиторії, "
+            "а не лише професійним маркетологам. Перевага: дивні товари/ціни, бренди у попкультурі, меми, viral, "
+            "споживчі звички, технології у повсякденному житті, культурні конфлікти, незвичні колаборації, факапи, "
+            "провокації та історії, які хочеться переказати. Профільний case study — максимум другорядний формат і "
+            "має проходити лише коли сюжет цікавий поза професією."
+        )
+        rejection_block = (
+            "[BROAD_AUDIENCE_RC72]\n"
+            "Жорсткіше відхиляй рутинні agency/B2B кейси, award recap, KPI-only campaign reports, retail/marketing trade news "
+            "і 'бренд зробив кампанію' без людського сюжету, сюрпризу або широкого consumer/culture relevance."
+        )
+        selector_block = (
+            "[BROAD_AUDIENCE_RC72] Broad-audience lane is the DEFAULT preference. A professional commercial case should lose "
+            "to a weaker-but-interesting general-audience story unless the case has a genuinely unusual human/cultural/consumer hook. "
+            "Do not reward trade jargon, campaign mechanics or measurable uplift by themselves."
+        )
+        writer_block = (
+            "[BROAD_AUDIENCE_RC72] Подавай як цікаву історію для людини поза професією. Не перетворюй текст на case-study summary, "
+            "не додавай 'уроки для маркетологів' і не починай з професійної механіки, якщо є сильніший людський факт."
+        )
+
+        def add_once(value: str, block: str) -> str:
+            base = str(value or "").strip()
+            if "[BROAD_AUDIENCE_RC72]" in base:
+                return base
+            return (base + "\n\n" + block).strip() if base else block
+
+        stamp = now_iso()
+        for row in rows:
+            try:
+                thresholds = json.loads(str(row["editorial_thresholds_json"] or "{}"))
+            except Exception:
+                thresholds = {}
+            if not isinstance(thresholds, dict):
+                thresholds = {}
+            # Make broad-interest easier than professional case lanes; keep every
+            # value in the ordinary channel JSON so the operator can edit it.
+            thresholds.update({
+                "broad_interest_fit": 48,
+                "broad_interest_score": 44,
+                "broad_general_interest": 50,
+                "broad_retellability": 50,
+                "broad_culture_or_surprise": 45,
+                "commercial_case_score": 60,
+                "commercial_transferability": 55,
+                "commercial_anchor": 65,
+                "creative_case_score": 56,
+                "mechanism_case_score": 55,
+            })
+            con.execute(
+                "UPDATE channels SET editorial_thresholds_json=?,updated_at=? WHERE id=?",
+                (json.dumps(thresholds, ensure_ascii=False, separators=(",", ":")), stamp, int(row["id"])),
+            )
+            con.execute(
+                """UPDATE channel_policies SET selection_rules=?,rejection_rules=?,selector_extra_prompt=?,writer_extra_prompt=?,
+                           media_policy='required',updated_at=? WHERE channel_id=?""",
+                (
+                    add_once(row["selection_rules"], selection_block),
+                    add_once(row["rejection_rules"], rejection_block),
+                    add_once(row["selector_extra_prompt"], selector_block),
+                    add_once(row["writer_extra_prompt"], writer_block),
+                    stamp, int(row["id"]),
+                ),
+            )
+
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, "1"),
@@ -655,6 +940,12 @@ class V2Store:
             output_starvation_window_hours=max(1,int(_row_get(row,"output_starvation_window_hours",4) or 4)),
             output_starvation_min_processed=max(1,int(_row_get(row,"output_starvation_min_processed",20) or 20)),
             output_starvation_min_published=max(0,int(_row_get(row,"output_starvation_min_published",1) or 0)),
+            page_prefer_feed=_bool(_row_get(row,"page_prefer_feed",0),False),
+            page_candidate_scan_limit=max(8,min(120,int(_row_get(row,"page_candidate_scan_limit",24) or 24))),
+            page_fetch_limit=max(4,min(40,int(_row_get(row,"page_fetch_limit",8) or 8))),
+            input_starvation_enabled=_bool(_row_get(row,"input_starvation_enabled",1),True),
+            input_starvation_min_seen=max(1,int(_row_get(row,"input_starvation_min_seen",40) or 40)),
+            input_starvation_cycles=max(1,int(_row_get(row,"input_starvation_cycles",3) or 3)),
             language_mode=str(row["language_mode"] or "ukru_to_uk"),media_enrichment_mode=str(row["media_enrichment_mode"] or "auto"),
             media_first_allowed=_bool(row["media_first_allowed"],True),media_min_text_chars=int(row["media_min_text_chars"] or 500),policy=policy,
         )
@@ -664,8 +955,8 @@ class V2Store:
         with self.transaction() as con:
             try:
                 con.execute("BEGIN IMMEDIATE")
-                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,editorial_runtime_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,dedupe_profile=?,dedupe_scientific_names=?,dedupe_compound_events=?,dedupe_rare_terms=?,published_dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,editorial_thresholds_json=?,output_starvation_enabled=?,output_starvation_window_hours=?,output_starvation_min_processed=?,output_starvation_min_published=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,updated_at=? WHERE id=?""",
-                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,str(cfg.editorial_runtime_profile),int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),str(cfg.dedupe_profile),int(cfg.dedupe_scientific_names),int(cfg.dedupe_compound_events),int(cfg.dedupe_rare_terms),int(cfg.published_dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.editorial_thresholds_json,int(cfg.output_starvation_enabled),int(cfg.output_starvation_window_hours),int(cfg.output_starvation_min_processed),int(cfg.output_starvation_min_published),cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),stamp,int(cfg.id)))
+                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,editorial_runtime_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,dedupe_profile=?,dedupe_scientific_names=?,dedupe_compound_events=?,dedupe_rare_terms=?,published_dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,editorial_thresholds_json=?,output_starvation_enabled=?,output_starvation_window_hours=?,output_starvation_min_processed=?,output_starvation_min_published=?,page_prefer_feed=?,page_candidate_scan_limit=?,page_fetch_limit=?,input_starvation_enabled=?,input_starvation_min_seen=?,input_starvation_cycles=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,updated_at=? WHERE id=?""",
+                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,str(cfg.editorial_runtime_profile),int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),str(cfg.dedupe_profile),int(cfg.dedupe_scientific_names),int(cfg.dedupe_compound_events),int(cfg.dedupe_rare_terms),int(cfg.published_dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.editorial_thresholds_json,int(cfg.output_starvation_enabled),int(cfg.output_starvation_window_hours),int(cfg.output_starvation_min_processed),int(cfg.output_starvation_min_published),int(cfg.page_prefer_feed),int(cfg.page_candidate_scan_limit),int(cfg.page_fetch_limit),int(cfg.input_starvation_enabled),int(cfg.input_starvation_min_seen),int(cfg.input_starvation_cycles),cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),stamp,int(cfg.id)))
                 p=cfg.policy
                 con.execute("""INSERT INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,media_policy,target_min_chars,target_max_chars,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled,purpose=excluded.purpose,audience=excluded.audience,selection_rules=excluded.selection_rules,rejection_rules=excluded.rejection_rules,writing_rules=excluded.writing_rules,style_rules=excluded.style_rules,positive_examples=excluded.positive_examples,negative_examples=excluded.negative_examples,extra_instructions=excluded.extra_instructions,selector_extra_prompt=excluded.selector_extra_prompt,writer_extra_prompt=excluded.writer_extra_prompt,media_policy=excluded.media_policy,target_min_chars=excluded.target_min_chars,target_max_chars=excluded.target_max_chars,updated_at=excluded.updated_at""",
                     (cfg.id,int(p.enabled),p.purpose,p.audience,p.selection_rules,p.rejection_rules,p.writing_rules,p.style_rules,p.positive_examples,p.negative_examples,p.extra_instructions,p.selector_extra_prompt,p.writer_extra_prompt,p.media_policy,int(p.target_min_chars),int(p.target_max_chars),stamp))
@@ -800,7 +1091,12 @@ class V2Store:
                         media_ready = _media_json_count(refreshed_media) > 0
                         clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
                         prior_error = str(row["last_error_code"] or "")
-                        clear_media_block = (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot) or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
+                        refreshed_video_ok = _telegram_video_recovery(refreshed_layout) in {"direct_video", "exact_post_video"} and _media_json_has_video(refreshed_media)
+                        clear_media_block = (
+                            (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot)
+                            or (prior_error == "TELEGRAM_VIDEO_PENDING" and refreshed_video_ok)
+                            or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
+                        )
                         clear_flag = 1 if clear_media_block else 0
                         con.execute(
                             "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
