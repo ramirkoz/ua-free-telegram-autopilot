@@ -1,7 +1,4 @@
-UA FREE Telegram Autopilot 2.0.0-rc78 — MANUAL TEST
-
-Data\   — only user/editorial/runtime data.
-Tools\  — LanguageTool, portable JRE and Codex runtime (downloaded when needed).
-
-On first launch choose whether to import the necessary data from an older Autopilot folder/Data.
-Do not copy the old Data folder over the new one.
+UA FREE Telegram Autopilot v2.0.0-rc79 — MANUAL TEST
+Data = user/editorial/runtime data only. Tools = LanguageTool/JRE/Codex.
+On first launch use the selective importer instead of copying the old Data folder.
+If startup fails, see Data\logs\bootstrap_error.log.
