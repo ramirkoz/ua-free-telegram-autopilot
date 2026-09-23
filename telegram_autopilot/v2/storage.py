@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS channels (
  page_prefer_feed INTEGER NOT NULL DEFAULT 0,page_candidate_scan_limit INTEGER NOT NULL DEFAULT 24,page_fetch_limit INTEGER NOT NULL DEFAULT 8,
  input_starvation_enabled INTEGER NOT NULL DEFAULT 1,input_starvation_min_seen INTEGER NOT NULL DEFAULT 40,input_starvation_cycles INTEGER NOT NULL DEFAULT 3,
  language_mode TEXT NOT NULL DEFAULT 'ukru_to_uk',media_enrichment_mode TEXT NOT NULL DEFAULT 'auto',media_first_allowed INTEGER NOT NULL DEFAULT 1,
- media_min_text_chars INTEGER NOT NULL DEFAULT 500,legacy_config_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+ media_min_text_chars INTEGER NOT NULL DEFAULT 500,facebook_page_ids_json TEXT NOT NULL DEFAULT '[]',legacy_config_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS channel_policies (
  channel_id INTEGER PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 1,purpose TEXT NOT NULL DEFAULT '',
@@ -269,6 +269,13 @@ CREATE TABLE IF NOT EXISTS feedback_editor_reactions (
  PRIMARY KEY(article_id,admin_peer_id)
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_editor_channel_checked ON feedback_editor_reactions(channel_id,checked_at DESC);
+CREATE TABLE IF NOT EXISTS facebook_reposts (
+ article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+ page_id TEXT NOT NULL,telegram_message_id TEXT NOT NULL DEFAULT '',telegram_post_url TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'PENDING',
+ attempts INTEGER NOT NULL DEFAULT 0,next_retry_at TEXT NOT NULL DEFAULT '',facebook_post_id TEXT NOT NULL DEFAULT '',last_error TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(article_id,page_id)
+);
+CREATE INDEX IF NOT EXISTS idx_facebook_reposts_ready ON facebook_reposts(channel_id,state,next_retry_at,updated_at);
 CREATE TABLE IF NOT EXISTS audit_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,stream TEXT NOT NULL,event TEXT NOT NULL,channel_id INTEGER,article_id INTEGER,
  provider TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}'
@@ -296,6 +303,7 @@ class V2Store:
             with self.connect() as con:
                 con.executescript(SCHEMA)
                 self._ensure_source_attribution_mode(con)
+                self._ensure_facebook_channel_settings(con)
                 self._ensure_channel_dedupe_settings(con)
                 self._ensure_rc59_channel_runtime_settings(con)
                 self._ensure_rc62_ingest_settings(con)
@@ -314,6 +322,17 @@ class V2Store:
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             ("rc62_source_attribution_explicit_v1", "1"),
+        )
+
+    @staticmethod
+    def _ensure_facebook_channel_settings(con: sqlite3.Connection) -> None:
+        """Persist only selected Facebook Page IDs per channel; tokens stay encrypted."""
+        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
+        if "facebook_page_ids_json" not in columns:
+            con.execute("ALTER TABLE channels ADD COLUMN facebook_page_ids_json TEXT NOT NULL DEFAULT '[]'")
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("rc77_facebook_crosspost_schema_v1", "1"),
         )
 
     @staticmethod
@@ -921,6 +940,11 @@ class V2Store:
             editorial_runtime_profile=EditorialRuntimeProfile(str(_row_get(row,"editorial_runtime_profile","standard") or "standard"))
         except Exception:
             editorial_runtime_profile=EditorialRuntimeProfile.STANDARD
+        try:
+            raw_facebook_page_ids = json.loads(str(_row_get(row,"facebook_page_ids_json","[]") or "[]"))
+        except Exception:
+            raw_facebook_page_ids = []
+        facebook_page_ids = [str(x).strip() for x in raw_facebook_page_ids if str(x).strip()] if isinstance(raw_facebook_page_ids, list) else []
         return ChannelConfig(
             id=int(row["id"]),name=str(row["name"]),telegram_chat_id=str(row["telegram_chat_id"] or ""),enabled=_bool(row["enabled"],True),mode=mode,
             editorial_profile=str(row["editorial_profile"] or ""),editorial_runtime_profile=editorial_runtime_profile,include_source_link=_bool(row["include_source_link"],True),source_link_required=_bool(row["source_link_required"],True),
@@ -947,7 +971,8 @@ class V2Store:
             input_starvation_min_seen=max(1,int(_row_get(row,"input_starvation_min_seen",40) or 40)),
             input_starvation_cycles=max(1,int(_row_get(row,"input_starvation_cycles",3) or 3)),
             language_mode=str(row["language_mode"] or "ukru_to_uk"),media_enrichment_mode=str(row["media_enrichment_mode"] or "auto"),
-            media_first_allowed=_bool(row["media_first_allowed"],True),media_min_text_chars=int(row["media_min_text_chars"] or 500),policy=policy,
+            media_first_allowed=_bool(row["media_first_allowed"],True),media_min_text_chars=int(row["media_min_text_chars"] or 500),
+            facebook_page_ids=facebook_page_ids,policy=policy,
         )
 
     def save_channel(self, cfg: ChannelConfig) -> None:
@@ -955,13 +980,80 @@ class V2Store:
         with self.transaction() as con:
             try:
                 con.execute("BEGIN IMMEDIATE")
-                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,editorial_runtime_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,dedupe_profile=?,dedupe_scientific_names=?,dedupe_compound_events=?,dedupe_rare_terms=?,published_dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,editorial_thresholds_json=?,output_starvation_enabled=?,output_starvation_window_hours=?,output_starvation_min_processed=?,output_starvation_min_published=?,page_prefer_feed=?,page_candidate_scan_limit=?,page_fetch_limit=?,input_starvation_enabled=?,input_starvation_min_seen=?,input_starvation_cycles=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,updated_at=? WHERE id=?""",
-                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,str(cfg.editorial_runtime_profile),int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),str(cfg.dedupe_profile),int(cfg.dedupe_scientific_names),int(cfg.dedupe_compound_events),int(cfg.dedupe_rare_terms),int(cfg.published_dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.editorial_thresholds_json,int(cfg.output_starvation_enabled),int(cfg.output_starvation_window_hours),int(cfg.output_starvation_min_processed),int(cfg.output_starvation_min_published),int(cfg.page_prefer_feed),int(cfg.page_candidate_scan_limit),int(cfg.page_fetch_limit),int(cfg.input_starvation_enabled),int(cfg.input_starvation_min_seen),int(cfg.input_starvation_cycles),cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),stamp,int(cfg.id)))
+                con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,editorial_runtime_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,dedupe_profile=?,dedupe_scientific_names=?,dedupe_compound_events=?,dedupe_rare_terms=?,published_dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,editorial_thresholds_json=?,output_starvation_enabled=?,output_starvation_window_hours=?,output_starvation_min_processed=?,output_starvation_min_published=?,page_prefer_feed=?,page_candidate_scan_limit=?,page_fetch_limit=?,input_starvation_enabled=?,input_starvation_min_seen=?,input_starvation_cycles=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,facebook_page_ids_json=?,updated_at=? WHERE id=?""",
+                    (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,str(cfg.editorial_runtime_profile),int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),str(cfg.dedupe_profile),int(cfg.dedupe_scientific_names),int(cfg.dedupe_compound_events),int(cfg.dedupe_rare_terms),int(cfg.published_dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.editorial_thresholds_json,int(cfg.output_starvation_enabled),int(cfg.output_starvation_window_hours),int(cfg.output_starvation_min_processed),int(cfg.output_starvation_min_published),int(cfg.page_prefer_feed),int(cfg.page_candidate_scan_limit),int(cfg.page_fetch_limit),int(cfg.input_starvation_enabled),int(cfg.input_starvation_min_seen),int(cfg.input_starvation_cycles),cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),json.dumps(list(dict.fromkeys(str(x).strip() for x in (cfg.facebook_page_ids or []) if str(x).strip())),ensure_ascii=False,separators=(",",":")),stamp,int(cfg.id)))
                 p=cfg.policy
                 con.execute("""INSERT INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,media_policy,target_min_chars,target_max_chars,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled,purpose=excluded.purpose,audience=excluded.audience,selection_rules=excluded.selection_rules,rejection_rules=excluded.rejection_rules,writing_rules=excluded.writing_rules,style_rules=excluded.style_rules,positive_examples=excluded.positive_examples,negative_examples=excluded.negative_examples,extra_instructions=excluded.extra_instructions,selector_extra_prompt=excluded.selector_extra_prompt,writer_extra_prompt=excluded.writer_extra_prompt,media_policy=excluded.media_policy,target_min_chars=excluded.target_min_chars,target_max_chars=excluded.target_max_chars,updated_at=excluded.updated_at""",
                     (cfg.id,int(p.enabled),p.purpose,p.audience,p.selection_rules,p.rejection_rules,p.writing_rules,p.style_rules,p.positive_examples,p.negative_examples,p.extra_instructions,p.selector_extra_prompt,p.writer_extra_prompt,p.media_policy,int(p.target_min_chars),int(p.target_max_chars),stamp))
                 con.commit()
             except Exception: con.rollback(); raise
+
+    def queue_facebook_reposts(
+        self, article_id: int, channel_id: int, page_ids: list[str] | tuple[str, ...],
+        *, telegram_message_id: str, telegram_post_url: str,
+    ) -> int:
+        page_ids = list(dict.fromkeys(str(x).strip() for x in page_ids if str(x).strip()))
+        if not page_ids or not str(telegram_post_url or "").strip():
+            return 0
+        stamp = now_iso()
+        with self.transaction() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                for page_id in page_ids:
+                    con.execute(
+                        """INSERT INTO facebook_reposts(article_id,channel_id,page_id,telegram_message_id,telegram_post_url,state,attempts,next_retry_at,facebook_post_id,last_error,created_at,updated_at)
+                           VALUES(?,?,?,?,?,'PENDING',0,'','','',?,?)
+                           ON CONFLICT(article_id,page_id) DO UPDATE SET
+                             telegram_message_id=excluded.telegram_message_id,telegram_post_url=excluded.telegram_post_url,
+                             state=CASE WHEN facebook_reposts.facebook_post_id<>'' THEN 'DONE' ELSE facebook_reposts.state END,
+                             updated_at=excluded.updated_at""",
+                        (int(article_id),int(channel_id),page_id,str(telegram_message_id or ""),str(telegram_post_url or ""),stamp,stamp),
+                    )
+                con.commit()
+            except Exception:
+                con.rollback(); raise
+        return len(page_ids)
+
+    def pending_facebook_reposts(self, channel_id: int, *, limit: int = 12) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return list(con.execute(
+                """SELECT r.*,a.final_text,a.title,a.published_at,c.name AS channel_name,c.telegram_chat_id
+                   FROM facebook_reposts r
+                   JOIN articles a ON a.id=r.article_id
+                   JOIN channels c ON c.id=r.channel_id
+                   WHERE r.channel_id=? AND r.state<>'DONE'
+                     AND (r.next_retry_at='' OR datetime(r.next_retry_at)<=datetime('now'))
+                   ORDER BY r.updated_at ASC LIMIT ?""",
+                (int(channel_id),max(1,int(limit))),
+            ))
+
+    def mark_facebook_repost_done(self, article_id: int, page_id: str, facebook_post_id: str) -> None:
+        with self.connect() as con:
+            con.execute(
+                "UPDATE facebook_reposts SET state='DONE',facebook_post_id=?,last_error='',next_retry_at='',updated_at=? WHERE article_id=? AND page_id=?",
+                (str(facebook_post_id or ""),now_iso(),int(article_id),str(page_id)),
+            )
+
+    def mark_facebook_repost_failed(self, article_id: int, page_id: str, error_text: str, *, retryable: bool = True) -> str:
+        with self.connect() as con:
+            row=con.execute("SELECT attempts FROM facebook_reposts WHERE article_id=? AND page_id=?",(int(article_id),str(page_id))).fetchone()
+            attempts=int(row[0] or 0)+1 if row else 1
+            if retryable:
+                minutes=min(360, max(5, 5 * (2 ** min(6, attempts - 1))))
+                next_retry=(datetime.now(timezone.utc)+timedelta(minutes=minutes)).isoformat(timespec="seconds")
+                state='RETRY'
+            else:
+                next_retry=(datetime.now(timezone.utc)+timedelta(hours=6)).isoformat(timespec="seconds")
+                state='BLOCKED'
+            con.execute(
+                "UPDATE facebook_reposts SET state=?,attempts=?,next_retry_at=?,last_error=?,updated_at=? WHERE article_id=? AND page_id=?",
+                (state,attempts,next_retry,str(error_text or "")[:1600],now_iso(),int(article_id),str(page_id)),
+            )
+        return next_retry
+
+    def facebook_repost_rows(self, article_id: int) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return list(con.execute("SELECT * FROM facebook_reposts WHERE article_id=? ORDER BY page_id",(int(article_id),)))
 
     def sources_for_channel(self, channel_id: int, *, enabled_only: bool=True) -> list[sqlite3.Row]:
         clause=" AND enabled=1" if enabled_only else ""
