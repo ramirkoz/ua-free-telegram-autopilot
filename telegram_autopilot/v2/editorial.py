@@ -9,6 +9,8 @@ from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from ..evidence_pack import build_evidence_pack
 from ..fact_guard import validate_fact_guard
 from ..language import looks_ukrainian
+from ..grammar_guard import hard_grammar_blockers, needs_grammar_polish, preserves_content
+from ..language_tool_local import apply_local_languagetool_detailed
 from ..rewrite_verifier import assess_rewrite, hard_editorial_blockers
 from ..ukrainian_quality import apply_safe_ukrainian_fixes, final_language_blockers, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
@@ -138,6 +140,61 @@ def _number_tokens(text: str) -> set[str]:
 
 
 TELEGRAM_BODY_SAFE_MAX = 880
+TRUSTED_EDITOR_PROVIDERS = ("codex", "gemini")
+
+
+_ABSENCE_FILLER_RE = re.compile(
+    r"\b(?:додатков\w*\s+інформац\w*|детал\w*|термін\w*|строк\w*)[^.!?]{0,55}\b(?:не\s+надан\w*|відсутн\w*|невідом\w*)",
+    re.I,
+)
+_GENERIC_ADVICE_RE = re.compile(
+    r"\b(?:зберігайте\s+спокій(?:но)?|стежте\s+за\s+своїми\s+речами|слідкуйте\s+за\s+своїми\s+речами|бережіть\s+себе|будьте\s+уважн\w*)\b",
+    re.I,
+)
+
+
+def _source_text(article: Any) -> str:
+    return " ".join(str(_v(article, "raw_text", "") or "").split()).strip()
+
+
+def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int) -> tuple[int, int, int]:
+    """Do not force a tiny community notice to grow into a synthetic article."""
+    p = channel.policy
+    configured_max = max(120, min(int(p.target_max_chars), int(body_hard_max)))
+    configured_min = max(80, min(int(p.target_min_chars), configured_max))
+    if channel.mode != ChannelMode.MONITORING:
+        return configured_min, configured_max, int(body_hard_max)
+
+    source_len = len(_source_text(article))
+    if source_len <= 220:
+        effective_min = 80
+        effective_max = min(configured_max, max(180, source_len + 100))
+    elif source_len <= 420:
+        effective_min = min(configured_min, max(90, int(source_len * 0.42)))
+        effective_max = min(configured_max, max(260, source_len + 120))
+    elif source_len <= 650:
+        effective_min = min(configured_min, max(120, int(source_len * 0.46)))
+        effective_max = min(configured_max, max(360, source_len + 100))
+    else:
+        effective_min = configured_min
+        effective_max = configured_max
+    effective_max = max(effective_min, min(effective_max, int(body_hard_max)))
+    return effective_min, effective_max, effective_max
+
+
+def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
+    """Block common padding that states things the source never said."""
+    source = _source_text(article).casefold()
+    text = str(value or "")
+    issues: list[str] = []
+    for match in _ABSENCE_FILLER_RE.finditer(text):
+        fragment = " ".join(match.group(0).split()).casefold()
+        if fragment not in source and not any(token in source for token in ("не надан", "відсутн", "невідом")):
+            issues.append("додано службову фразу про відсутні деталі/терміни, якої немає у джерелі")
+            break
+    if _GENERIC_ADVICE_RE.search(text) and not _GENERIC_ADVICE_RE.search(source):
+        issues.append("додано загальну пораду/мораль, якої немає у джерелі")
+    return tuple(dict.fromkeys(issues))
 
 
 def validate_writer_output(
@@ -192,6 +249,9 @@ def validate_writer_output(
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
+    grammar_blockers = hard_grammar_blockers(value)
+    if grammar_blockers:
+        raise ValueError("Жорсткий граматичний QA: " + "; ".join(grammar_blockers[:4]))
     readability = assess_rewrite(value, hard_limit=int(hard_max_chars or max_chars))
     if not readability.publishable:
         raise ValueError("Readability QA: " + "; ".join(readability.issues[:5]))
@@ -485,8 +545,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         body_hard_max = source_body_hard_limit(
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
-        effective_max = max(120, min(int(p.target_max_chars), body_hard_max))
-        effective_min = max(80, min(int(p.target_min_chars), effective_max))
+        effective_min, effective_max, validation_hard_max = _monitoring_limits(channel, article, body_hard_max)
+        if channel.mode == ChannelMode.MONITORING:
+            event(
+                "editorial", "monitoring dynamic length", channel_id=channel.id,
+                article_id=int(_v(article, "id", 0) or 0), source_chars=len(_source_text(article)),
+                configured_min=int(p.target_min_chars), effective_min=effective_min, effective_max=effective_max,
+            )
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
         style_memory = self.learning.style_memory_block(channel.id, article)
@@ -496,7 +561,17 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             'Не замінюй її безликим описом джерела.\n'
             if source_context else ""
         )
-        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
+        monitoring_rule = (
+            "\nКОРОТКЕ ДЖЕРЕЛО: не добирай обсяг штучно. Якщо SOURCE містить лише 1–2 факти, напиши короткий пост і завершуй. "
+            "Не додавай фрази про те, що деталі/терміни не надані, якщо SOURCE цього прямо не каже. "
+            "Не додавай від себе порад, моралей, застережень або загальних фраз. "
+            if channel.mode == ChannelMode.MONITORING else ""
+        )
+        named_source_style = (
+            "\nНАЗВА ДЖЕРЕЛА: вживи її природно; не починай канцелярським шаблоном «[назва] повідомляє, що». "
+            if source_context else ""
+        )
+        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -504,7 +579,7 @@ EXTRA: {p.writer_extra_prompt}
 {style_memory}
 ANGLE: {selection.angle}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
-Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {body_hard_max} символів, бо система додає окремий footer джерела.
+Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 ФОРМАТ: якщо текст має 350+ символів, розбий його на 2–4 короткі змістові абзаци. Не пиши суцільною стіною. Коротке оперативне повідомлення до 350 символів може бути одним абзацом.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
@@ -516,65 +591,111 @@ SOURCE:
         def prepared_text(raw: str) -> str:
             value = str(raw or "").strip()
             if channel.mode == ChannelMode.MONITORING:
-                value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
+                value = restore_practical_literals(article, value, hard_max_chars=validation_hard_max)
             return value
 
         slop_profile = _anti_slop_profile(channel)
 
         def validator(raw: str) -> None:
+            candidate = prepared_text(raw)
+            if channel.mode == ChannelMode.MONITORING:
+                grounding = _monitoring_grounding_blockers(article, candidate)
+                if grounding:
+                    raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
             validate_writer_output(
-                article, prepared_text(raw), min_chars=effective_min, max_chars=effective_max,
-                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
+                article, candidate, min_chars=effective_min, max_chars=effective_max,
+                hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
         result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
         draft = validate_writer_output(
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
-            hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
+            hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
-        if result.provider == "local":
-            final = draft
-            event("ai", "CPU local final-edit pass skipped", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
+        quality = assess_rewrite(draft, hard_limit=validation_hard_max)
+        needs_trusted_editor = (
+            channel.mode == ChannelMode.MONITORING
+            or str(result.provider or "").casefold() not in TRUSTED_EDITOR_PROVIDERS
+            or quality.needs_second_candidate
+            or bool(language_quality_issues(draft))
+            or bool(human_style_issues(draft))
+            or needs_grammar_polish(draft)
+        )
+        if needs_trusted_editor:
+            event(
+                "editorial", "trusted final editor required", channel_id=channel.id,
+                article_id=int(_v(article, "id", 0) or 0), generator=result.provider,
+                monitoring=channel.mode == ChannelMode.MONITORING, quality=quality.score,
+            )
+            final = self._final_edit(
+                channel, article, draft, min_chars=effective_min, max_chars=effective_max,
+                hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
+            )
         else:
-            final = self._final_edit(channel, article, draft, min_chars=effective_min, max_chars=effective_max)
+            final = draft
+
+        lt = apply_local_languagetool_detailed(final, timeout=1.2, max_changes=18, require_ready=False)
+        if lt.changes and preserves_content(final, lt.text):
+            candidate = prepared_text(lt.text)
+            validator(candidate)
+            final = validate_writer_output(
+                article, candidate, min_chars=effective_min, max_chars=effective_max,
+                hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
+            )
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
-    def _final_edit(self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int) -> str:
+    def _final_edit(
+        self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int,
+        hard_max_chars: int | None = None, trusted_only: bool = False, fail_closed: bool = False,
+    ) -> str:
         p = channel.policy
         source_context = source_context_name(channel, article)
         body_hard_max = source_body_hard_limit(
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
+        final_hard_max = min(body_hard_max, int(hard_max_chars or body_hard_max))
         style_memory = self.learning.style_memory_block(channel.id, article)
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
             if source_context else ""
         )
-        prompt = f"""Ти фінальний редактор. Виправ ТІЛЬКИ мову, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Якщо текст уже добрий, поверни його без змін.
+        prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. Якщо текст уже добрий, поверни його без змін.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nФОРМАТ: якщо фінальний текст має 350+ символів, він повинен мати 2–4 короткі змістові абзаци; не зливай його в один блок.\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
             value = str(raw or "").strip()
             if channel.mode == ChannelMode.MONITORING:
-                value = restore_practical_literals(article, value, hard_max_chars=body_hard_max)
+                value = restore_practical_literals(article, value, hard_max_chars=final_hard_max)
             return value
 
         slop_profile = _anti_slop_profile(channel)
 
         def validator(raw: str) -> None:
+            candidate = prepared_text(raw)
+            if channel.mode == ChannelMode.MONITORING:
+                grounding = _monitoring_grounding_blockers(article, candidate)
+                if grounding:
+                    raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
             validate_writer_output(
-                article, prepared_text(raw), min_chars=min_chars, max_chars=max_chars,
-                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
+                article, candidate, min_chars=min_chars, max_chars=max_chars,
+                hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
         try:
-            result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28)
+            result = self.gateway.run(
+                prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28,
+                allowed_providers=TRUSTED_EDITOR_PROVIDERS if trusted_only else None,
+            )
+            candidate = prepared_text(result.text)
+            validator(candidate)
             return validate_writer_output(
-                article, prepared_text(result.text), min_chars=min_chars, max_chars=max_chars,
-                hard_max_chars=body_hard_max, required_context=source_context, slop_profile=slop_profile,
+                article, candidate, min_chars=min_chars, max_chars=max_chars,
+                hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
         except GatewayExhausted:
+            if fail_closed:
+                raise
             return draft
 
     def process_article(self, article_id: int, heartbeat: Callable[[], None] | None = None) -> EditorialOutcome:
