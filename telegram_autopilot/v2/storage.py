@@ -12,7 +12,7 @@ from typing import Any, Iterator, Mapping
 
 from . import V2_SCHEMA_VERSION
 from ..media import encode_media, media_identity, valid_public_media
-from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, DedupeProfile, EditorialRuntimeProfile, ProviderHealth, ProviderState, SourceAttributionMode, Stage
+from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, DedupeProfile, EditorialRuntimeProfile, ProviderHealth, ProviderState, SourceAttributionMode, SourceBodyAttributionMode, Stage
 from .urlnorm import normalize_url
 
 
@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS channel_policies (
  channel_id INTEGER PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 1,purpose TEXT NOT NULL DEFAULT '',
  audience TEXT NOT NULL DEFAULT '',selection_rules TEXT NOT NULL DEFAULT '',rejection_rules TEXT NOT NULL DEFAULT '',writing_rules TEXT NOT NULL DEFAULT '',
  style_rules TEXT NOT NULL DEFAULT '',positive_examples TEXT NOT NULL DEFAULT '',negative_examples TEXT NOT NULL DEFAULT '',extra_instructions TEXT NOT NULL DEFAULT '',
- selector_extra_prompt TEXT NOT NULL DEFAULT '',writer_extra_prompt TEXT NOT NULL DEFAULT '',media_policy TEXT NOT NULL DEFAULT 'required',
+ selector_extra_prompt TEXT NOT NULL DEFAULT '',writer_extra_prompt TEXT NOT NULL DEFAULT '',source_body_attribution_mode TEXT NOT NULL DEFAULT 'footer_only',source_body_attribution_marker TEXT NOT NULL DEFAULT '',media_policy TEXT NOT NULL DEFAULT 'required',
  target_min_chars INTEGER NOT NULL DEFAULT 300,target_max_chars INTEGER NOT NULL DEFAULT 750,updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sources (
@@ -303,6 +303,7 @@ class V2Store:
             with self.connect() as con:
                 con.executescript(SCHEMA)
                 self._ensure_source_attribution_mode(con)
+                self._ensure_source_body_attribution_policy(con)
                 self._ensure_facebook_channel_settings(con)
                 self._ensure_channel_dedupe_settings(con)
                 self._ensure_rc59_channel_runtime_settings(con)
@@ -925,6 +926,7 @@ class V2Store:
             selection_rules=str(_row_get(p,"selection_rules","") or ""),rejection_rules=str(_row_get(p,"rejection_rules","") or ""),writing_rules=str(_row_get(p,"writing_rules","") or ""),
             style_rules=str(_row_get(p,"style_rules","") or ""),positive_examples=str(_row_get(p,"positive_examples","") or ""),negative_examples=str(_row_get(p,"negative_examples","") or ""),
             extra_instructions=str(_row_get(p,"extra_instructions","") or ""),selector_extra_prompt=str(_row_get(p,"selector_extra_prompt","") or ""),writer_extra_prompt=str(_row_get(p,"writer_extra_prompt","") or ""),
+            source_body_attribution_mode=SourceBodyAttributionMode(str(_row_get(p,"source_body_attribution_mode","footer_only") or "footer_only")),source_body_attribution_marker=str(_row_get(p,"source_body_attribution_marker","") or ""),
             media_policy=str(_row_get(p,"media_policy","required") or "required"),target_min_chars=int(_row_get(p,"target_min_chars",300) or 300),target_max_chars=int(_row_get(p,"target_max_chars",750) or 750),
         )
         mode=ChannelMode.MONITORING if str(row["channel_mode"]).casefold()=="monitoring" else ChannelMode.EDITORIAL
@@ -983,8 +985,8 @@ class V2Store:
                 con.execute("""UPDATE channels SET name=?,telegram_chat_id=?,enabled=?,channel_mode=?,editorial_profile=?,editorial_runtime_profile=?,include_source_link=?,source_link_required=?,source_attribution_mode=?,poll_interval_minutes=?,poll_immediate=?,min_publish_interval_minutes=?,dedupe_window_hours=?,dedupe_profile=?,dedupe_scientific_names=?,dedupe_compound_events=?,dedupe_rare_terms=?,published_dedupe_window_hours=?,max_age_hours=?,max_posts_per_cycle=?,publish_24h=?,publish_start=?,publish_end=?,publish_immediately=?,topic_balance_enabled=?,topic_daily_limit=?,related_spacing_posts=?,editorial_weights_json=?,editorial_thresholds_json=?,output_starvation_enabled=?,output_starvation_window_hours=?,output_starvation_min_processed=?,output_starvation_min_published=?,page_prefer_feed=?,page_candidate_scan_limit=?,page_fetch_limit=?,input_starvation_enabled=?,input_starvation_min_seen=?,input_starvation_cycles=?,language_mode=?,media_enrichment_mode=?,media_first_allowed=?,media_min_text_chars=?,facebook_page_ids_json=?,updated_at=? WHERE id=?""",
                     (cfg.name,cfg.telegram_chat_id,int(cfg.enabled),str(cfg.mode),cfg.editorial_profile,str(cfg.editorial_runtime_profile),int(cfg.include_source_link),int(cfg.source_link_required),str(cfg.source_attribution_mode),int(cfg.poll_interval_minutes),int(cfg.poll_immediate),int(cfg.min_publish_interval_minutes),int(cfg.dedupe_window_hours),str(cfg.dedupe_profile),int(cfg.dedupe_scientific_names),int(cfg.dedupe_compound_events),int(cfg.dedupe_rare_terms),int(cfg.published_dedupe_window_hours),int(cfg.max_age_hours),int(cfg.max_posts_per_cycle),int(cfg.publish_24h),cfg.publish_start,cfg.publish_end,int(cfg.publish_immediately),int(cfg.topic_balance_enabled),int(cfg.topic_daily_limit),int(cfg.related_spacing_posts),cfg.editorial_weights_json,cfg.editorial_thresholds_json,int(cfg.output_starvation_enabled),int(cfg.output_starvation_window_hours),int(cfg.output_starvation_min_processed),int(cfg.output_starvation_min_published),int(cfg.page_prefer_feed),int(cfg.page_candidate_scan_limit),int(cfg.page_fetch_limit),int(cfg.input_starvation_enabled),int(cfg.input_starvation_min_seen),int(cfg.input_starvation_cycles),cfg.language_mode,cfg.media_enrichment_mode,int(cfg.media_first_allowed),int(cfg.media_min_text_chars),json.dumps(list(dict.fromkeys(str(x).strip() for x in (cfg.facebook_page_ids or []) if str(x).strip())),ensure_ascii=False,separators=(",",":")),stamp,int(cfg.id)))
                 p=cfg.policy
-                con.execute("""INSERT INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,media_policy,target_min_chars,target_max_chars,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled,purpose=excluded.purpose,audience=excluded.audience,selection_rules=excluded.selection_rules,rejection_rules=excluded.rejection_rules,writing_rules=excluded.writing_rules,style_rules=excluded.style_rules,positive_examples=excluded.positive_examples,negative_examples=excluded.negative_examples,extra_instructions=excluded.extra_instructions,selector_extra_prompt=excluded.selector_extra_prompt,writer_extra_prompt=excluded.writer_extra_prompt,media_policy=excluded.media_policy,target_min_chars=excluded.target_min_chars,target_max_chars=excluded.target_max_chars,updated_at=excluded.updated_at""",
-                    (cfg.id,int(p.enabled),p.purpose,p.audience,p.selection_rules,p.rejection_rules,p.writing_rules,p.style_rules,p.positive_examples,p.negative_examples,p.extra_instructions,p.selector_extra_prompt,p.writer_extra_prompt,p.media_policy,int(p.target_min_chars),int(p.target_max_chars),stamp))
+                con.execute("""INSERT INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,source_body_attribution_mode,source_body_attribution_marker,media_policy,target_min_chars,target_max_chars,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id) DO UPDATE SET enabled=excluded.enabled,purpose=excluded.purpose,audience=excluded.audience,selection_rules=excluded.selection_rules,rejection_rules=excluded.rejection_rules,writing_rules=excluded.writing_rules,style_rules=excluded.style_rules,positive_examples=excluded.positive_examples,negative_examples=excluded.negative_examples,extra_instructions=excluded.extra_instructions,selector_extra_prompt=excluded.selector_extra_prompt,writer_extra_prompt=excluded.writer_extra_prompt,source_body_attribution_mode=excluded.source_body_attribution_mode,source_body_attribution_marker=excluded.source_body_attribution_marker,media_policy=excluded.media_policy,target_min_chars=excluded.target_min_chars,target_max_chars=excluded.target_max_chars,updated_at=excluded.updated_at""",
+                    (cfg.id,int(p.enabled),p.purpose,p.audience,p.selection_rules,p.rejection_rules,p.writing_rules,p.style_rules,p.positive_examples,p.negative_examples,p.extra_instructions,p.selector_extra_prompt,p.writer_extra_prompt,str(p.source_body_attribution_mode),p.source_body_attribution_marker,p.media_policy,int(p.target_min_chars),int(p.target_max_chars),stamp))
                 con.commit()
             except Exception: con.rollback(); raise
 
