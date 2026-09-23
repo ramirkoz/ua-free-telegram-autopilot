@@ -34,6 +34,11 @@ class SecretConfig:
     google_client_secret: str = ""
     google_refresh_token: str = ""
     google_account_email: str = ""
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
+    facebook_user_access_token: str = ""
+    facebook_graph_version: str = "v26.0"
+    facebook_pages: list[dict[str, str]] = field(default_factory=list)
 
     def normalized(self) -> "SecretConfig":
         try:
@@ -60,6 +65,19 @@ class SecretConfig:
             google_client_secret=str(self.google_client_secret or "").strip(),
             google_refresh_token=str(self.google_refresh_token or "").strip(),
             google_account_email=str(self.google_account_email or "").strip(),
+            facebook_app_id=str(self.facebook_app_id or "").strip(),
+            facebook_app_secret=str(self.facebook_app_secret or "").strip(),
+            facebook_user_access_token=str(self.facebook_user_access_token or "").strip(),
+            facebook_graph_version=(str(self.facebook_graph_version or "v26.0").strip() or "v26.0"),
+            facebook_pages=[
+                {
+                    "id": str(item.get("id") or "").strip(),
+                    "name": str(item.get("name") or item.get("id") or "").strip(),
+                    "access_token": str(item.get("access_token") or "").strip(),
+                }
+                for item in (self.facebook_pages or [])
+                if isinstance(item, dict) and str(item.get("id") or "").strip() and str(item.get("access_token") or "").strip()
+            ],
         )
 
 
