@@ -174,6 +174,16 @@ def validate_writer_output(
         raise ValueError("AI додав число, якого немає у джерелі: " + ", ".join(invented[:10]))
     if value.count("(") != value.count(")") or value.count("«") != value.count("»"):
         raise ValueError("Незакриті дужки/лапки")
+    paragraphs = [" ".join(part.split()).strip() for part in re.split(r"\n+", value) if part.strip()]
+    if len(value) >= 350 and len(paragraphs) < 2:
+        raise ValueError("Редакційний QA: суцільна стіна тексту без абзаців")
+    paragraph_limit = 420 if (hard_max_chars or max_chars) <= 900 else 620
+    if any(len(part) > paragraph_limit for part in paragraphs):
+        raise ValueError("Редакційний QA: надто довгий абзац")
+    if re.search(r"(?iu)([A-Za-zА-Яа-яІіЇїЄєҐґ])\1{7,}", value):
+        raise ValueError("Редакційний QA: пошкоджений повтор символу")
+    if re.search(r"([!?.,:;])\1{5,}", value):
+        raise ValueError("Редакційний QA: пошкоджена серія пунктуації")
     if re.search(r"(?:\b(?:і|й|але|або|бо|що|через|після|до|для|з|із|на|у|в|та)\s*)$", value.casefold().rstrip()):
         raise ValueError("Останнє речення обірване")
     hard_issues = hard_editorial_blockers(value)
