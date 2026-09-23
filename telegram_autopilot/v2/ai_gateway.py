@@ -50,15 +50,15 @@ class CandidateRejected(RuntimeError):
 # diagnostics, but a newly exposed remote model never becomes an unattended writer
 # until it is explicitly reviewed here.
 PRODUCTION_SLOTS: tuple[legacy_ai.Slot, ...] = (
-    legacy_ai.Slot(1, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
-    legacy_ai.Slot(2, "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash / Google", "gemini"),
-    legacy_ai.Slot(3, "nvidia", "nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra 550B / NVIDIA"),
-    legacy_ai.Slot(4, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
-    legacy_ai.Slot(5, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
-    legacy_ai.Slot(6, "groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B / Groq"),
-    legacy_ai.Slot(7, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
-    legacy_ai.Slot(8, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
-    legacy_ai.Slot(9, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
+    legacy_ai.Slot(1, "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash / Google", "gemini"),
+    legacy_ai.Slot(2, "nvidia", "nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra 550B / NVIDIA"),
+    legacy_ai.Slot(3, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
+    legacy_ai.Slot(4, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
+    legacy_ai.Slot(5, "groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B / Groq"),
+    legacy_ai.Slot(6, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
+    legacy_ai.Slot(7, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
+    legacy_ai.Slot(8, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
+    legacy_ai.Slot(9, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
 )
 
 
