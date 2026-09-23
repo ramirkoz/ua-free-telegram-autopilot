@@ -7,14 +7,17 @@ from typing import Any, Callable, Mapping
 
 from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from ..evidence_pack import build_evidence_pack
-from ..fact_guard import validate_fact_guard
+from ..fact_guard import actionable_source_urls, source_urls_in_text, validate_fact_guard
 from ..language import looks_ukrainian
 from ..grammar_guard import hard_grammar_blockers, needs_grammar_polish, preserves_content
 from ..language_tool_local import apply_local_languagetool_detailed
 from ..rewrite_verifier import assess_rewrite, hard_editorial_blockers
 from ..ukrainian_quality import apply_safe_ukrainian_fixes, final_language_blockers, human_style_issues, language_quality_issues
 from .ai_gateway import AIGateway, GatewayExhausted
-from .source_attribution import source_body_hard_limit, source_context_name, require_source_context
+from .source_attribution import (
+    require_source_context, source_body_attribution_issues, source_body_context_name,
+    source_body_hard_limit, source_context_name,
+)
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
 from .loghub import event
 from .learning import LearningEngine
@@ -106,6 +109,7 @@ def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> 
 def extract_actionable_facts(article: Any) -> list[str]:
     raw = str(_v(article, "raw_text", "") or "")
     source = str(_v(article, "title", "") or "") + "\n" + raw
+    source_name = str(_v(article, "source_name", "") or "")
     out: list[str] = []
 
     def add(label: str, value: str) -> None:
@@ -114,8 +118,8 @@ def extract_actionable_facts(article: Any) -> list[str]:
         if item and item not in out:
             out.append(item[:420])
 
-    for url in re.findall(r"https?://[^\s<>()\]\[{}\"']+", source, flags=re.I):
-        add("URL", url.rstrip(".,;:!?"))
+    for url in actionable_source_urls(source, source_name=source_name):
+        add("URL", url)
     for email in re.findall(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source, flags=re.I):
         add("EMAIL", email)
     for phone in re.findall(r"(?<!\d)(?:\+?\d[\d\s()\-]{7,}\d)(?!\d)", source):
@@ -194,6 +198,20 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
             break
     if _GENERIC_ADVICE_RE.search(text) and not _GENERIC_ADVICE_RE.search(source):
         issues.append("додано загальну пораду/мораль, якої немає у джерелі")
+    return tuple(dict.fromkeys(issues))
+
+
+def _source_body_policy_issues(channel: ChannelConfig, article: Any, value: str) -> tuple[str, ...]:
+    issues = list(source_body_attribution_issues(channel, article, value))
+    if channel.mode == ChannelMode.MONITORING:
+        source = str(_v(article, "raw_text", "") or "")
+        source_name = str(_v(article, "source_name", "") or "")
+        actionable = set(actionable_source_urls(source, source_name=source_name))
+        source_urls = set(source_urls_in_text(source))
+        candidate_urls = set(source_urls_in_text(str(value or "")))
+        redundant = sorted((candidate_urls & source_urls) - actionable)
+        if redundant:
+            issues.append("у тіло повернуто непрактичне посилання на матеріал/джерело, яке дублює footer")
     return tuple(dict.fromkeys(issues))
 
 
@@ -325,14 +343,10 @@ def _editorial_thresholds(channel: ChannelConfig) -> dict[str, int]:
 
 def _practical_literals(article: Any) -> list[tuple[str, str]]:
     source = str(_v(article, "raw_text", "") or "")
-    canonical = str(_v(article, "canonical_source_url", "") or "").strip().rstrip("/.,;:!?")
-    root = str(_v(article, "source_root_url", "") or "").strip().rstrip("/.,;:!?")
+    source_name = str(_v(article, "source_name", "") or "")
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for url in re.findall(r"https?://[^\s<>()\]\[{}\"']+", source, flags=re.I):
-        value = url.rstrip(".,;:!?")
-        if value.rstrip("/") in {canonical.rstrip("/"), root.rstrip("/")}:
-            continue
+    for value in actionable_source_urls(source, source_name=source_name):
         if value not in seen:
             seen.add(value); out.append(("Деталі/реєстрація", value))
     for email in re.findall(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source, flags=re.I):
@@ -541,7 +555,8 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 
     def write(self, channel: ChannelConfig, article: Any, selection: EditorialOutcome) -> EditorialOutcome:
         p = channel.policy
-        source_context = source_context_name(channel, article)
+        source_name = source_context_name(channel, article)
+        source_context = source_body_context_name(channel, article)
         body_hard_max = source_body_hard_limit(
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
@@ -568,8 +583,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if channel.mode == ChannelMode.MONITORING else ""
         )
         named_source_style = (
-            "\nНАЗВА ДЖЕРЕЛА: вживи її природно; не починай канцелярським шаблоном «[назва] повідомляє, що». "
-            if source_context else ""
+            "\nГРОМАДА-ДЖЕРЕЛО: природно вживи назву громади в тексті; не починай механічним шаблоном «[назва] повідомляє, що». "
+            if source_context else (
+                "\nНЕ-ГРОМАДСЬКЕ ДЖЕРЕЛО: не представляй SOURCE NAME у тілі як джерело повідомлення. "
+                "Не пиши «за інформацією SOURCE NAME», «SOURCE NAME повідомляє/інформує/пише» або «детальніше інформує SOURCE NAME». "
+                "Не вставляй URL самого матеріалу/видання: назву й посилання на джерело система додасть у footer. "
+                if source_name else ""
+            )
         )
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
@@ -602,6 +622,9 @@ SOURCE:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
                     raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
+            source_policy = _source_body_policy_issues(channel, article, candidate)
+            if source_policy:
+                raise ValueError("Source-body QA: " + "; ".join(source_policy))
             validate_writer_output(
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
@@ -649,7 +672,8 @@ SOURCE:
         hard_max_chars: int | None = None, trusted_only: bool = False, fail_closed: bool = False,
     ) -> str:
         p = channel.policy
-        source_context = source_context_name(channel, article)
+        source_name = source_context_name(channel, article)
+        source_context = source_body_context_name(channel, article)
         body_hard_max = source_body_hard_limit(
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
@@ -660,7 +684,16 @@ SOURCE:
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
             if source_context else ""
         )
-        prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. Якщо текст уже добрий, поверни його без змін.
+        source_attribution_instruction = (
+            "Назву громади-джерела можна природно лишити в тілі. "
+            if source_context else (
+                "SOURCE NAME не є громадою: прибери з тіла будь-яке представлення цього медіа/джерела як автора повідомлення; "
+                "не пиши «за інформацією», «повідомляє», «інформує», «пише» з SOURCE NAME і не залишай URL самого матеріалу/видання. "
+                "Footer джерела додасть система. "
+                if source_name else ""
+            )
+        )
+        prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nФОРМАТ: якщо фінальний текст має 350+ символів, він повинен мати 2–4 короткі змістові абзаци; не зливай його в один блок.\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
@@ -677,6 +710,9 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
                     raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
+            source_policy = _source_body_policy_issues(channel, article, candidate)
+            if source_policy:
+                raise ValueError("Source-body QA: " + "; ".join(source_policy))
             validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
