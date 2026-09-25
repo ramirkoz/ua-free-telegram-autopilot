@@ -97,6 +97,9 @@ def test_supervisor_output_starvation_is_config_driven(tmp_path: Path) -> None:
         "operational_states": {"7": {"state": "DEGRADED", "reasons": ["output starvation"], "output_starved": True}},
     }
     incidents = service.evaluate(snapshot, SupervisorConfig())
+    assert not any(x.code == "CHANNEL_OUTPUT_STARVATION_7" for x in incidents)
+    service._first_seen["CHANNEL_OUTPUT_STARVATION_7"] = 0.0
+    incidents = service.evaluate(snapshot, SupervisorConfig())
     assert any(x.code == "CHANNEL_OUTPUT_STARVATION_7" for x in incidents)
 
 
