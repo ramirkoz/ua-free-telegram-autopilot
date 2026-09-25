@@ -302,6 +302,7 @@ class V2Store:
         with self._init_lock:
             with self.connect() as con:
                 con.executescript(SCHEMA)
+                self._ensure_base_channel_columns(con)
                 self._ensure_source_attribution_mode(con)
                 self._ensure_source_body_attribution_policy(con)
                 self._ensure_facebook_channel_settings(con)
@@ -315,6 +316,24 @@ class V2Store:
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
+
+    @staticmethod
+    def _ensure_base_channel_columns(con: sqlite3.Connection) -> None:
+        """Backfill base channel columns before later feature migrations run.
+
+        CREATE TABLE IF NOT EXISTS does not add columns to an already existing
+        pre-V2/early-V2 channels table. Later migrations must therefore never
+        assume these long-lived base fields already exist.
+        """
+        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
+        additions = {
+            "poll_interval_minutes": "INTEGER NOT NULL DEFAULT 15",
+            "max_posts_per_cycle": "INTEGER NOT NULL DEFAULT 3",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, ddl in additions.items():
+            if name not in columns:
+                con.execute(f"ALTER TABLE channels ADD COLUMN {name} {ddl}")
 
     @staticmethod
     def _ensure_rc85_polling_baseline(con: sqlite3.Connection) -> None:
