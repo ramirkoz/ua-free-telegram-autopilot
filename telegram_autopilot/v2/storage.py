@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
  id INTEGER PRIMARY KEY,name TEXT NOT NULL,telegram_chat_id TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 1,
  channel_mode TEXT NOT NULL DEFAULT 'editorial',editorial_profile TEXT NOT NULL DEFAULT '',editorial_runtime_profile TEXT NOT NULL DEFAULT 'standard',include_source_link INTEGER NOT NULL DEFAULT 1,
- source_link_required INTEGER NOT NULL DEFAULT 1,source_attribution_mode TEXT NOT NULL DEFAULT 'standard',poll_interval_minutes INTEGER NOT NULL DEFAULT 5,poll_immediate INTEGER NOT NULL DEFAULT 0,
+ source_link_required INTEGER NOT NULL DEFAULT 1,source_attribution_mode TEXT NOT NULL DEFAULT 'standard',poll_interval_minutes INTEGER NOT NULL DEFAULT 15,poll_immediate INTEGER NOT NULL DEFAULT 0,
  min_publish_interval_minutes INTEGER NOT NULL DEFAULT 10,dedupe_window_hours INTEGER NOT NULL DEFAULT 72,
  dedupe_profile TEXT NOT NULL DEFAULT 'standard',dedupe_scientific_names INTEGER NOT NULL DEFAULT 0,dedupe_compound_events INTEGER NOT NULL DEFAULT 0,
  dedupe_rare_terms INTEGER NOT NULL DEFAULT 0,published_dedupe_window_hours INTEGER NOT NULL DEFAULT 168,max_age_hours INTEGER NOT NULL DEFAULT 24,
@@ -312,7 +312,25 @@ class V2Store:
                 self._ensure_rc69_commercial_broad_audience_policy(con)
                 self._ensure_rc71_commercial_media_quality_policy(con)
                 self._ensure_rc72_channel_policy_tuning(con)
+                self._ensure_rc85_polling_baseline(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
+
+    @staticmethod
+    def _ensure_rc85_polling_baseline(con: sqlite3.Connection) -> None:
+        """One-time migration from aggressive 5-minute polling to 15 minutes.
+
+        Existing channels below 15 minutes are raised once. Operators may later
+        explicitly choose another value in channel settings.
+        """
+        key = "rc85_poll_interval_15m_v1"
+        row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if row:
+            return
+        con.execute("UPDATE channels SET poll_interval_minutes=15,updated_at=? WHERE poll_interval_minutes<15", (now_iso(),))
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
 
     @staticmethod
     def _ensure_source_attribution_mode(con: sqlite3.Connection) -> None:
@@ -542,7 +560,7 @@ class V2Store:
             pages = int(counts["pages"] or 0) if counts else 0
             con.execute(
                 """UPDATE channels SET
-                       poll_interval_minutes=MAX(poll_interval_minutes,5),
+                       poll_interval_minutes=MAX(poll_interval_minutes,15),
                        max_posts_per_cycle=MAX(max_posts_per_cycle,5),
                        output_starvation_enabled=1,output_starvation_window_hours=1,
                        output_starvation_min_processed=1,output_starvation_min_published=1,
@@ -973,7 +991,7 @@ class V2Store:
             id=int(row["id"]),name=str(row["name"]),telegram_chat_id=str(row["telegram_chat_id"] or ""),enabled=_bool(row["enabled"],True),mode=mode,
             editorial_profile=str(row["editorial_profile"] or ""),editorial_runtime_profile=editorial_runtime_profile,include_source_link=_bool(row["include_source_link"],True),source_link_required=_bool(row["source_link_required"],True),
             source_attribution_mode=source_attribution_mode,
-            poll_interval_minutes=int(row["poll_interval_minutes"] or 5),poll_immediate=_bool(row["poll_immediate"],False),min_publish_interval_minutes=int(row["min_publish_interval_minutes"] or 10),
+            poll_interval_minutes=int(row["poll_interval_minutes"] or 15),poll_immediate=_bool(row["poll_immediate"],False),min_publish_interval_minutes=int(row["min_publish_interval_minutes"] or 10),
             dedupe_window_hours=int(row["dedupe_window_hours"] or 72),dedupe_profile=dedupe_profile,
             dedupe_scientific_names=_bool(_row_get(row,"dedupe_scientific_names",0),False),
             dedupe_compound_events=_bool(_row_get(row,"dedupe_compound_events",0),False),
