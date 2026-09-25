@@ -331,15 +331,15 @@ class Publisher:
         if channel is None:
             raise ValueError("CHANNEL_MISSING")
         current_text = str(article["final_text"] or "").strip()
-        suppress_publication_links = self.store.source_suppress_publication_links(int(article["source_id"]))
-        if suppress_publication_links:
+        strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
+        if strip_body_links:
             sanitized = _strip_all_publication_links(current_text)
             if sanitized != current_text:
                 current_text = sanitized
                 self.store.update_article(article_id, final_text=current_text)
                 article = self.store.get_article(article_id) or article
                 event(
-                    "publish", "source link policy removed URLs from body",
+                    "publish", "source setting removed URLs from article body",
                     channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
                 )
         if channel.mode == ChannelMode.MONITORING:
@@ -382,15 +382,11 @@ class Publisher:
             source_urls=source_urls,
         )
 
-        if suppress_publication_links:
-            attribution_urls = []
-            attribution_labels = None
-
         bundle = build_publication_media_bundle(channel, article)
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
-        if (not suppress_publication_links) and bundle.video_link and bundle.video_link not in attribution_urls:
+        if bundle.video_link and bundle.video_link not in attribution_urls:
             if attribution_labels is None:
                 count = len(attribution_urls)
                 attribution_labels = [
@@ -409,16 +405,13 @@ class Publisher:
                 event("media", "VIDEO_EXPECTED_BUT_NOT_FOUND", level=30, channel_id=channel_id, article_id=article_id, source_url=source_url)
 
         text = str(article["final_text"] or "").strip()
-        publication_source_url = "" if suppress_publication_links else source_url
-        publication_source_urls = [] if suppress_publication_links else attribution_urls
-        publication_source_labels = None if suppress_publication_links else attribution_labels
         try:
             post_text = build_attributed_post_text(
                 text,
-                source_url=publication_source_url,
-                source_urls=publication_source_urls,
-                source_labels=publication_source_labels,
-                include_source_link=not suppress_publication_links,
+                source_url=source_url,
+                source_urls=attribution_urls,
+                source_labels=attribution_labels,
+                include_source_link=True,
                 hard_limit=900,
             )
         except TelegramError as exc:
@@ -473,9 +466,9 @@ class Publisher:
                     token,
                     channel.telegram_chat_id,
                     post_text,
-                    source_url=publication_source_url,
-                    source_urls=publication_source_urls,
-                    source_labels=publication_source_labels,
+                    source_url=source_url,
+                    source_urls=source_urls,
+                    source_labels=attribution_labels,
                     timeout=45.0,
                 )
             except TelegramError as exc:
@@ -526,9 +519,9 @@ class Publisher:
                     token,
                     channel.telegram_chat_id,
                     post_text,
-                    source_url=publication_source_url,
-                    source_urls=publication_source_urls,
-                    source_labels=publication_source_labels,
+                    source_url=source_url,
+                    source_urls=source_urls,
+                    source_labels=attribution_labels,
                     timeout=45.0,
                 )
             except TelegramError as exc:
@@ -580,9 +573,9 @@ class Publisher:
                             channel.telegram_chat_id,
                             post_text,
                             chunk[0],
-                            source_url=publication_source_url,
-                            source_urls=publication_source_urls,
-                            source_labels=publication_source_labels,
+                            source_url=source_url,
+                            source_urls=source_urls,
+                            source_labels=attribution_labels,
                             timeout=75.0,
                         )
                     else:
@@ -593,9 +586,9 @@ class Publisher:
                         channel.telegram_chat_id,
                         chunk,
                         caption=post_text if is_final_chunk else "",
-                        source_url=publication_source_url if is_final_chunk else "",
-                        source_urls=publication_source_urls if is_final_chunk else None,
-                        source_labels=publication_source_labels if is_final_chunk else None,
+                        source_url=source_url if is_final_chunk else "",
+                        source_urls=source_urls if is_final_chunk else None,
+                        source_labels=attribution_labels if is_final_chunk else None,
                         timeout=90.0,
                     )
             except TelegramError as exc:
@@ -612,9 +605,9 @@ class Publisher:
                             token,
                             channel.telegram_chat_id,
                             post_text,
-                            source_url=publication_source_url,
-                            source_urls=publication_source_urls,
-                            source_labels=publication_source_labels,
+                            source_url=source_url,
+                            source_urls=source_urls,
+                            source_labels=attribution_labels,
                             timeout=45.0,
                         )
                     except TelegramError as text_exc:
