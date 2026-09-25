@@ -119,7 +119,7 @@ class ChannelConfig:
     include_source_link: bool = True
     source_link_required: bool = True
     source_attribution_mode: SourceAttributionMode = SourceAttributionMode.STANDARD
-    poll_interval_minutes: int = 5
+    poll_interval_minutes: int = 15
     poll_immediate: bool = False
     min_publish_interval_minutes: int = 10
     dedupe_window_hours: int = 72
