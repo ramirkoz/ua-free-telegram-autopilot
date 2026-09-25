@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from .dedupe import DedupeEngine, DedupeResult, _merge_media, _same_event, _title_words
@@ -192,6 +193,60 @@ def _community_notice_same_event(current: Any, candidate: Any) -> tuple[bool, st
     )
 
 
+_INCIDENT_ACTION_GROUPS = {
+    "attack": ("атак","удар","обстр","прильот","влуч","дрон","шахед","ракет","strike","attack","shell","drone","missile"),
+    "damage": ("пошкод","зруйн","руйнув","вибит","damage","destroy"),
+    "fire": ("пожеж","займан","fire","burn"),
+    "casualty": ("поран","постраж","загин","евакую","injur","wound","evacuat","killed"),
+}
+_INCIDENT_TARGET_GROUPS = {
+    "medical": ("медич","лікар","лікарн","шпитал","клінік","hospital","medical","clinic"),
+    "residential": ("житлов","будин","квартир","residential","house","apartment"),
+    "infrastructure": ("інфраструкт","енерг","підстанц","об'єкт","об’єкт","infrastructure","energy"),
+    "education": ("школ","універс","освіт","school","university","education"),
+}
+_INCIDENT_GENERIC = {"російськ","росіян","ворож","військ","міст","област","район","сьогодні","вранц","зранк","наслідк","інформац","уточню","служб","місц","людин","допомог","атака","удар","обстріл"}
+
+def _incident_groups(value: str, groups: dict[str, tuple[str, ...]]) -> set[str]:
+    low = str(value or "").casefold()
+    return {name for name, roots in groups.items() if any(root in low for root in roots)}
+
+def _incident_time(row: Any) -> datetime | None:
+    raw = str(_value(row, "source_published_at", "") or _value(row, "discovered_at", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+def _breaking_incident_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
+    same_source = int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1)
+    left = str(_value(current, "title", "")) + "\n" + str(_value(current, "raw_text", ""))[:2200]
+    right = str(_value(candidate, "title", "")) + "\n" + str(_value(candidate, "raw_text", ""))[:2200]
+    shared_actions = _incident_groups(left, _INCIDENT_ACTION_GROUPS) & _incident_groups(right, _INCIDENT_ACTION_GROUPS)
+    shared_targets = _incident_groups(left, _INCIDENT_TARGET_GROUPS) & _incident_groups(right, _INCIDENT_TARGET_GROUPS)
+    if not shared_actions or not shared_targets:
+        return False, "incident action/target mismatch"
+    ta, tb = _incident_time(current), _incident_time(candidate)
+    if ta is not None and tb is not None and abs((ta - tb).total_seconds()) > 3 * 3600:
+        return False, "incident outside three-hour clustering window"
+    ca = set(_concept_sequence(str(_value(current, "title", "")) + " " + str(_value(current, "raw_text", ""))[:1800]))
+    cb = set(_concept_sequence(str(_value(candidate, "title", "")) + " " + str(_value(candidate, "raw_text", ""))[:1800]))
+    shared = {x for x in (ca & cb) if len(x) >= 5 and x not in _INCIDENT_GENERIC and not any(x.startswith(g) for g in _INCIDENT_GENERIC)}
+    required = 3 if same_source else 2
+    if len(shared) >= required:
+        return True, (
+            "breaking-incident cluster "
+            f"actions={','.join(sorted(shared_actions))} targets={','.join(sorted(shared_targets))} "
+            f"anchors={','.join(sorted(shared)[:6])}"
+        )
+    return False, f"incident anchors insufficient: {len(shared)}"
+
+
 def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     """High-precision event matching layered on top of the RC31 deterministic guard.
 
@@ -204,6 +259,10 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
         return True, reason
     if reason.startswith("conflicting strong event/version/product codes"):
         return False, reason
+
+    incident_same, incident_reason = _breaking_incident_same_event(current, candidate)
+    if incident_same:
+        return True, incident_reason
 
     same_source = int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1)
     if same_source:
