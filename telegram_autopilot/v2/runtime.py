@@ -32,6 +32,9 @@ class ChannelRuntimeState:
     jobs_rejected: int = 0
     jobs_duplicates: int = 0
     jobs_expired: int = 0
+    pre_ai_duplicates: int = 0
+    cluster_updates: int = 0
+    ai_calls_saved: int = 0
     collect_cycles: int = 0
     last_collect_duration_seconds: float = 0.0
     last_collect_completed_at: str = ""
@@ -322,6 +325,10 @@ class RuntimeEngine:
                 if duplicate.relation == "DUPLICATE":
                     self.store.finish_job(job_id)
                     state.processed += 1
+                    state.pre_ai_duplicates += 1
+                    state.ai_calls_saved += 1
+                    if str(getattr(duplicate, "reason", "") or "").startswith("breaking-incident cluster"):
+                        state.cluster_updates += 1
                     self._job_activity(state, "duplicate")
                     self._job_activity(state, "completed")
                     return True
@@ -393,6 +400,9 @@ class RuntimeEngine:
                     "jobs_rejected": state.jobs_rejected,
                     "jobs_duplicates": state.jobs_duplicates,
                     "jobs_expired": state.jobs_expired,
+                    "pre_ai_duplicates": state.pre_ai_duplicates,
+                    "cluster_updates": state.cluster_updates,
+                    "ai_calls_saved": state.ai_calls_saved,
                     "last_job_activity_at": state.last_job_activity_at,
                     "collect_cycles": state.collect_cycles,
                     "last_collect_duration_seconds": state.last_collect_duration_seconds,
