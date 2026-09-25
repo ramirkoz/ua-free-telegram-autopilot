@@ -1,10 +1,9 @@
-UA FREE Telegram Autopilot v2.0.0-rc88 — MANUAL TEST
+UA FREE Telegram Autopilot v2.0.0-rc89 — REMOTE UPDATE CANDIDATE
 
-RC88 fixes the actual RC85 -> newer V2 migration path.
+RC89 is based on RC88.
 
-- When an old portable/Data contains both telegram_autopilot.sqlite3 and telegram_autopilot_v2.sqlite3, V2 now always wins.
-- Current V2 databases are carried forward as an exact SQLite snapshot, not reinterpreted through the legacy converter.
-- Channels, sources, queue/history, published records, feedback/learning and current settings stay intact.
-- The source database is never modified.
-- True old legacy databases still use the legacy converter.
-- RC86 source text-link cleanup and duplicate fixes are retained.
+- Repairs RC88 partial credential migration: when the current Data has no configured AI route, the app validates sibling Autopilot encrypted secret pairs and restores only missing secret fields from the best valid previous Data.
+- Existing non-empty current secrets are never overwritten.
+- Repairs the carried-forward 5-minute polling regression with one explicit 15-minute migration pass; later operator edits remain authoritative.
+- Keeps the RC88 V2 database carry-forward fix.
+- Keeps RC86 source text-only cleanup and cross-source duplicate protection.
