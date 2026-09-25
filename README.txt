@@ -1,11 +1,10 @@
-UA FREE Telegram Autopilot v2.0.0-rc85 — MANUAL TEST
+UA FREE Telegram Autopilot v2.0.0-rc86 — MANUAL TEST
 
-RC85 keeps the accepted RC84 runtime and adds:
-- 15-minute collection baseline to reduce duplicate processing and AI quota burn;
-- pre-AI breaking-incident clustering for fast-moving updates without a named facility/object;
-- “Редакторська черга” for rewritten editorial materials that did not reach air;
-- local learning from editor approve/reject/edit/publish actions, not only Telegram reactions;
-- telemetry counters for pre-AI duplicates, clustered updates and saved AI calls.
+RC86 is based on RC85.
 
-Anti-slop and all RC84 channel-policy mechanisms are retained.
-MANUAL TEST builds keep auto-update disabled.
+Changes:
+- adds a generic per-source setting “Заборонити посилання у публікації з цього джерела”;
+- when enabled, URLs are removed from the article body and no source/footer/video link is added to the Telegram publication;
+- existing ZaBor sources are seeded with this flag once during upgrade, then the operator setting remains authoritative;
+- internal canonical source URLs remain available for dedupe, evidence and media handling;
+- RC85 polling, incident clustering, editorial review and local learning remain unchanged.
