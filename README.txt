@@ -1,8 +1,11 @@
-UA FREE Telegram Autopilot v2.0.0-rc84 — MANUAL TEST
+UA FREE Telegram Autopilot v2.0.0-rc85 — MANUAL TEST
 
-Stability build based on RC83.
-- Import from RC83 Data.
-- Preserves durable Supervisor mirror/Telegram-report target only; old runtime state is not copied.
-- Monitoring body sanitizer removes source/canonical/already-attached-media URLs before publish while preserving real action links.
-- Supervisor reports Drive API and Telegram-report status in the UI.
-- GitHub/Drive release sync is intentionally disabled until Windows validation.
+RC85 keeps the accepted RC84 runtime and adds:
+- 15-minute collection baseline to reduce duplicate processing and AI quota burn;
+- pre-AI breaking-incident clustering for fast-moving updates without a named facility/object;
+- “Редакторська черга” for rewritten editorial materials that did not reach air;
+- local learning from editor approve/reject/edit/publish actions, not only Telegram reactions;
+- telemetry counters for pre-AI duplicates, clustered updates and saved AI calls.
+
+Anti-slop and all RC84 channel-policy mechanisms are retained.
+MANUAL TEST builds keep auto-update disabled.
