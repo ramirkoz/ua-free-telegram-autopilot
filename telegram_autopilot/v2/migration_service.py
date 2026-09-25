@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .legacy_credentials import import_legacy_secrets
-from .migration import build_export_bundle, import_legacy_data
+from .migration import build_export_bundle, import_legacy_data, locate_legacy_database
 from .storage import V2Store, now_iso
 
 
@@ -84,9 +84,25 @@ class MigrationManager:
         temp.unlink(missing_ok=True)
 
         backup: Path | None = None
+        legacy_snapshot: Path | None = None
         try:
+            # RC87: never run the importer directly against the selected legacy DB.
+            # First take an SQLite-consistent snapshot into a private temp file.
+            # This avoids Windows readonly/WAL/lock interactions and also makes
+            # source==target safe when the user accidentally selects the current Data.
+            legacy_db = locate_legacy_database(legacy_path).resolve()
+            snap_fd, snap_name = tempfile.mkstemp(
+                prefix="ua_free_legacy_snapshot.",
+                suffix=".sqlite3",
+            )
+            os.close(snap_fd)
+            legacy_snapshot = Path(snap_name)
+            legacy_snapshot.unlink(missing_ok=True)
+            self._sqlite_backup(legacy_db, legacy_snapshot)
+            self._validate_legacy_snapshot(legacy_snapshot)
+
             temp_store = V2Store(temp)
-            report = import_legacy_data(legacy_path, temp_store)
+            report = import_legacy_data(legacy_snapshot, temp_store)
             self._validate_database(temp)
 
             if self.target_db.exists():
@@ -143,3 +159,8 @@ class MigrationManager:
                 temp.unlink(missing_ok=True)
             except OSError:
                 pass
+            if legacy_snapshot is not None:
+                try:
+                    legacy_snapshot.unlink(missing_ok=True)
+                except OSError:
+                    pass
