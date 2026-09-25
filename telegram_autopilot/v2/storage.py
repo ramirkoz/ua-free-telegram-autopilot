@@ -313,6 +313,7 @@ class V2Store:
                 self._ensure_rc71_commercial_media_quality_policy(con)
                 self._ensure_rc72_channel_policy_tuning(con)
                 self._ensure_rc85_polling_baseline(con)
+                self._ensure_rc86_source_link_policy(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
 
     @staticmethod
@@ -1100,6 +1101,42 @@ class V2Store:
     def sources_for_channel(self, channel_id: int, *, enabled_only: bool=True) -> list[sqlite3.Row]:
         clause=" AND enabled=1" if enabled_only else ""
         with self.connect() as con: return list(con.execute(f"SELECT * FROM sources WHERE channel_id=?{clause} ORDER BY priority,id",(int(channel_id),)))
+
+    def source_suppress_publication_links(self, source_id: int) -> bool:
+        with self.connect() as con:
+            row = con.execute("SELECT legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
+        if row is None:
+            return False
+        try:
+            payload = json.loads(str(row["legacy_config_json"] or "{}"))
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            return False
+        publication = payload.get("publication")
+        return bool(publication.get("suppress_links")) if isinstance(publication, dict) else False
+
+    def set_source_suppress_publication_links(self, source_id: int, enabled: bool) -> None:
+        with self.connect() as con:
+            row = con.execute("SELECT legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
+            if row is None:
+                raise KeyError(source_id)
+            try:
+                payload = json.loads(str(row["legacy_config_json"] or "{}"))
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            publication = payload.get("publication")
+            if not isinstance(publication, dict):
+                publication = {}
+            publication["suppress_links"] = bool(enabled)
+            payload["publication"] = publication
+            con.execute(
+                "UPDATE sources SET legacy_config_json=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), int(source_id)),
+            )
+
 
     def get_article(self, article_id: int) -> sqlite3.Row | None:
         with self.connect() as con: return con.execute("SELECT a.*,s.name AS source_name,s.url AS source_root_url FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.id=?",(int(article_id),)).fetchone()
