@@ -99,23 +99,35 @@ def _load_or_create_key() -> bytes:
     return raw
 
 
-def load_secrets() -> SecretConfig:
-    path = secrets_path()
-    if not path.exists():
-        return SecretConfig()
-    raw = path.read_bytes()
+def load_secrets_from_files(key_path, secure_path) -> SecretConfig:
+    key_file = os.fspath(key_path)
+    secure_file = os.fspath(secure_path)
+    key = open(key_file, "rb").read()
+    if len(key) != 32:
+        raise RuntimeError("Файл ключа секретів пошкоджено.")
+    raw = open(secure_file, "rb").read()
     if not raw.startswith(_HEADER):
         raise RuntimeError("Файл секретів має неправильний формат.")
     payload = raw[len(_HEADER):]
     if len(payload) < 13:
         raise RuntimeError("Файл секретів пошкоджено.")
     nonce, ciphertext = payload[:12], payload[12:]
-    plain = AESGCM(_load_or_create_key()).decrypt(nonce, ciphertext, _AAD)
+    plain = AESGCM(key).decrypt(nonce, ciphertext, _AAD)
     data = json.loads(plain.decode("utf-8"))
     if not isinstance(data, dict):
         raise RuntimeError("Файл секретів має неправильний формат.")
     allowed = set(SecretConfig.__dataclass_fields__)
     return SecretConfig(**{k: data[k] for k in data if k in allowed}).normalized()
+
+
+def load_secrets() -> SecretConfig:
+    path = secrets_path()
+    if not path.exists():
+        return SecretConfig()
+    key_path = secret_key_path()
+    if not key_path.exists():
+        _load_or_create_key()
+    return load_secrets_from_files(key_path, path)
 
 
 def save_secrets(value: SecretConfig) -> None:
