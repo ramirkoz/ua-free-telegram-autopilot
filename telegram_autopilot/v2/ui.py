@@ -17,7 +17,8 @@ from .learning import LearningEngine, audience_performance_score, audience_raw_r
 from .migration_service import MigrationManager
 from .runtime import RuntimeEngine
 from .storage import V2Store
-from .supervisor import SupervisorConfig, SupervisorService
+from .supervisor import SupervisorConfig
+from .local_supervisor import LocalOnlyProductionSupervisorService
 
 
 STAGE_UA = {
@@ -154,7 +155,6 @@ class ChannelDialog(tk.Toplevel):
         self._check(p, 9, "Публікація 24/7", cfg.publish_24h)
         self._entry(p, 10, "Початок публікацій", cfg.publish_start)
         self._entry(p, 11, "Кінець публікацій", cfg.publish_end)
-        self._check(p, 12, "Публікувати готове одразу (але не обходити мінімальний інтервал)", cfg.publish_immediately)
         self._combo(p, 13, "Мова", cfg.language_mode, ["ukru_to_uk", "uk_to_uk", "ru_to_uk", "en_to_uk", "ukru_to_en"])
         self._combo(p, 14, "Медіа-збагачення", cfg.media_enrichment_mode, ["auto", "off"])
         self._check(p, 15, "Дозволити media-first", cfg.media_first_allowed)
@@ -354,7 +354,7 @@ class ChannelDialog(tk.Toplevel):
                 publish_24h=bool(self._get("Публікація 24/7")),
                 publish_start=self._get("Початок публікацій"),
                 publish_end=self._get("Кінець публікацій"),
-                publish_immediately=bool(self._get("Публікувати готове одразу (але не обходити мінімальний інтервал)")),
+                publish_immediately=False,
                 topic_balance_enabled=old.topic_balance_enabled,
                 topic_daily_limit=old.topic_daily_limit,
                 related_spacing_posts=old.related_spacing_posts,
@@ -501,11 +501,10 @@ class MainWindow(tk.Tk):
         self.title("UA FREE Telegram Autopilot V2")
         self.geometry("1320x820")
         self.migration = MigrationManager(store.path)
-        self.supervisor = SupervisorService(store, runtime, logs_dir)
+        self.supervisor = LocalOnlyProductionSupervisorService(store, runtime, logs_dir)
         self.feedback = FeedbackService(store)
         self.feedback_runtime = FeedbackRuntime(self.feedback, store)
         self.learning = LearningEngine(store)
-        self._install_windows_edit_support()
         self._running = False
         self._startup_ready = True
         self._feedback_ready = False
@@ -539,101 +538,6 @@ class MainWindow(tk.Tk):
         self.supervisor.start()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(800, self.refresh_all)
-
-    @staticmethod
-    def _edit_action(event: tk.Event) -> str:
-        keysym = str(getattr(event, "keysym", "") or "").casefold()
-        keycode = int(getattr(event, "keycode", 0) or 0)
-        by_symbol = {"v": "paste", "c": "copy", "x": "cut", "a": "select_all"}
-        if keysym in by_symbol:
-            return by_symbol[keysym]
-        # Windows virtual-key codes remain V/C/X/A even under Ukrainian layout.
-        return {86: "paste", 67: "copy", 88: "cut", 65: "select_all"}.get(keycode, "")
-
-    @staticmethod
-    def _is_editable_widget(widget: tk.Widget) -> bool:
-        return isinstance(widget, (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox))
-
-    def _install_windows_edit_support(self) -> None:
-        # Bind once at application level so every current and future Entry/Text in
-        # V2 dialogs gets standard Windows editing behaviour. This fixes Ctrl+V
-        # under non-Latin layouts and restores the right-click context menu.
-        self.bind_all("<Control-KeyPress>", self._control_edit_shortcut, add="+")
-        self.bind_all("<Shift-Insert>", self._paste_shortcut, add="+")
-        self.bind_all("<Button-3>", self._show_edit_menu, add="+")
-
-    def _control_edit_shortcut(self, event: tk.Event):
-        widget = event.widget
-        if not self._is_editable_widget(widget):
-            return None
-        action = self._edit_action(event)
-        if not action:
-            return None
-        if action == "select_all":
-            self._select_all_widget(widget)
-        elif action == "paste":
-            self._paste_widget(widget)
-        else:
-            widget.event_generate({"copy": "<<Copy>>", "cut": "<<Cut>>"}[action])
-        return "break"
-
-    def _paste_shortcut(self, event: tk.Event):
-        if not self._is_editable_widget(event.widget):
-            return None
-        self._paste_widget(event.widget)
-        return "break"
-
-    def _paste_widget(self, widget: tk.Widget) -> None:
-        try:
-            value = self.clipboard_get()
-        except tk.TclError:
-            return
-        try:
-            if isinstance(widget, tk.Text):
-                try:
-                    widget.delete("sel.first", "sel.last")
-                except tk.TclError:
-                    pass
-                widget.insert("insert", value)
-            else:
-                try:
-                    first = widget.index("sel.first")
-                    last = widget.index("sel.last")
-                    widget.delete(first, last)
-                except tk.TclError:
-                    pass
-                widget.insert("insert", value)
-        except (tk.TclError, AttributeError):
-            pass
-
-    @staticmethod
-    def _select_all_widget(widget: tk.Widget) -> None:
-        try:
-            if isinstance(widget, tk.Text):
-                widget.tag_add("sel", "1.0", "end-1c")
-                widget.mark_set("insert", "1.0")
-                widget.see("insert")
-            else:
-                widget.selection_range(0, "end")
-                widget.icursor("end")
-        except tk.TclError:
-            pass
-
-    def _show_edit_menu(self, event: tk.Event):
-        widget = event.widget
-        if not self._is_editable_widget(widget):
-            return None
-        menu = tk.Menu(self, tearoff=False)
-        menu.add_command(label="Вирізати", command=lambda: widget.event_generate("<<Cut>>"))
-        menu.add_command(label="Копіювати", command=lambda: widget.event_generate("<<Copy>>"))
-        menu.add_command(label="Вставити", command=lambda: self._paste_widget(widget))
-        menu.add_separator()
-        menu.add_command(label="Виділити все", command=lambda: self._select_all_widget(widget))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-        return "break"
 
     def _build_home(self):
         self.home_text = tk.Text(self.tabs["home"], wrap="word", state="disabled", font=("TkDefaultFont", 11))
@@ -1137,8 +1041,8 @@ class MainWindow(tk.Tk):
         info = (
             "Нагляд працює окремим фоновим потоком усередині V2: формує status.json, incident.json "
             "та recent_events.json, ловить AI/worker/queue/SQLite/disk/media аварії й відправляє telemetry "
-            "напряму через Google Drive API. Локальна папка Google Drive Desktop лишається тільки резервним fallback. "
-            "Telegram-оповіщення та окремий агент прибрані: діагностика читається напряму з Drive feed."
+            "напряму через Google Drive API. Локальна папка Google Drive Desktop лишається резервним fallback. "
+            "Окремий remote-agent вимкнений, але локальний Supervisor може надсилати компактний стан у налаштований приватний Telegram-чат."
         )
         ttk.Label(p, text=info, wraplength=1120, justify="left").grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(12, 8))
         self.sup_enabled = tk.BooleanVar(value=cfg.enabled)
@@ -1242,9 +1146,13 @@ class MainWindow(tk.Tk):
         else:
             telemetry = "очікує першого успішного API heartbeat"
         incident_text = "; ".join(f"{i.get('severity')} {i.get('code')}: {i.get('title')}" for i in incidents) or "немає"
+        local_report = dict(snap.get("local_telegram_report") or {})
+        report_status = str(local_report.get("status") or "не перевірено")
+        report_error = str(local_report.get("error") or "").strip()
+        telegram_text = report_status + (f" · {report_error[:120]}" if report_error else "")
         self.supervisor_status.set(
             f"Supervisor thread: {'працює' if summary.get('thread_alive') else 'не працює'} · "
-            f"Drive telemetry: {telemetry} · "
+            f"Drive telemetry: {telemetry} · Telegram report: {telegram_text} · "
             f"AI {ai.get('healthy', 0)}/{ai.get('total', 0)} · active jobs {q.get('active', 0)} · "
             f"last publish {q.get('last_publish') or 'немає'} · incidents: {incident_text} · "
             f"mirror: {cfg.get('mirror_dir') or 'не задано'}"
@@ -1252,7 +1160,7 @@ class MainWindow(tk.Tk):
 
     def _build_migration(self):
         p = self.tabs["migration"]
-        text = "Імпорт читає стару Data ТІЛЬКИ read-only. Перед заміною V2 БД створюється backup. Переносяться канали, правила, ваги, джерела, published history, dedupe/feedback та зашифровані credentials. Не переносяться cooldown, retry, worker state, RC markers та transient errors. Codex SDK не переноситься зі старої Data: його можна встановити/оновити окремо у Tools\\Codex на вкладці «AI»."
+        text = "Імпорт читає стару Data ТІЛЬКИ read-only. Перед заміною V2 БД створюється backup. Переносяться канали, правила, ваги, джерела, published history, dedupe/feedback та зашифровані credentials. Не переносяться cooldown, retry, worker state, RC markers та transient errors. Codex SDK входить до самого portable і не залежить від старої Data."
         ttk.Label(p, text=text, wraplength=980, justify="left").pack(anchor="w", padx=12, pady=12)
         self.migration_status = tk.StringVar(value="")
         ttk.Button(p, text="Імпортувати стару Data", command=self.import_legacy).pack(anchor="w", padx=12, pady=5)
@@ -1366,13 +1274,8 @@ class MainWindow(tk.Tk):
                     msg = f"Codex: SDK встановлено · авторизовано{account} · версія {status.version or 'невідома'}"
                 else:
                     msg = f"Codex: SDK встановлено · версія {status.version or 'невідома'} · потрібен вхід через ChatGPT"
-                try:
-                    self.runtime.gateway.probe_all()
-                except Exception:
-                    pass
             except Exception as exc:
                 msg = f"Codex: помилка встановлення: {exc}"
-
             def done():
                 self.codex_status.set(msg)
                 if button is not None:
@@ -1382,7 +1285,6 @@ class MainWindow(tk.Tk):
                         pass
                 self.refresh_ai()
                 self.refresh_home()
-
             self.after(0, done)
 
         threading.Thread(target=work, daemon=True, name="V2-Codex-Install").start()
@@ -1394,10 +1296,6 @@ class MainWindow(tk.Tk):
             try:
                 login_chatgpt()
                 msg = "Codex: вхід через ChatGPT завершено"
-                try:
-                    self.runtime.gateway.probe_all()
-                except Exception:
-                    pass
             except Exception as exc:
                 msg = f"Codex: помилка входу: {exc}"
             self.after(0, lambda: (self.codex_status.set(msg), self.refresh_codex_status(), self.refresh_ai(), self.refresh_home()))
@@ -1410,10 +1308,6 @@ class MainWindow(tk.Tk):
         def work():
             try:
                 msg = test_codex()
-                try:
-                    self.runtime.gateway.probe_all()
-                except Exception:
-                    pass
             except Exception as exc:
                 msg = f"Стан Codex: ручний тест не пройдено: {exc}"
             self.after(0, lambda: (self.codex_status.set(msg), self.refresh_ai(), self.refresh_home()))

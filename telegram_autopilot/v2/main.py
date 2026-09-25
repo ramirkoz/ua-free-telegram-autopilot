@@ -6,17 +6,17 @@ import tkinter.messagebox as messagebox
 from pathlib import Path
 
 from ..instance_lock import AlreadyRunning, InstanceLock
-from ..language_tool_local import shutdown_languagetool
 from ..paths import data_dir
 from . import V2_VERSION
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
 from .bounded_ingest import BoundedStrictIngestService
 from .loghub import LogHub, event
-from .first_run_import import maybe_import_legacy_data
 from .provider_compat import install_provider_compat
 from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
 from .ui_hardening import FastMainWindow as MainWindow
 from .update_protocol import UpdateProtocol
+from .first_run_import import maybe_import_legacy_data
+from ..language_tool_local import shutdown_languagetool
 
 
 def v2_database_path() -> Path:
@@ -25,7 +25,6 @@ def v2_database_path() -> Path:
 def _manual_test_build() -> bool:
     roots = [Path(sys.executable).resolve().parent, Path(__file__).resolve().parents[2]]
     return any((root / "MANUAL_TEST_BUILD.txt").is_file() for root in roots)
-
 
 def main() -> int:
     logs = data_dir() / "logs" / "v2"
@@ -37,13 +36,11 @@ def main() -> int:
             import_root = None
             try:
                 import tkinter as tk
-                import_root = tk.Tk()
-                import_root.withdraw()
+                import_root = tk.Tk(); import_root.withdraw()
                 maybe_import_legacy_data(import_root)
             finally:
                 try:
-                    if import_root is not None:
-                        import_root.destroy()
+                    if import_root is not None: import_root.destroy()
                 except Exception:
                     pass
             store = HardenedV2Store(v2_database_path())
@@ -126,8 +123,6 @@ def main() -> int:
             pass
         return 1
     finally:
-        # Defensive last line of shutdown: never leave the portable LanguageTool JVM
-        # locking an old Autopilot directory after the UI has closed.
         shutdown_languagetool()
     return 0
 

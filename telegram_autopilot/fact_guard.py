@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dataclasses import dataclass
 from sqlite3 import Row
 
@@ -98,12 +100,20 @@ _ATTRIBUTION_LINK_CUES = (
 
 
 def _local_url_context(text: str, start: int, end: int, radius: int = 220) -> str:
-    """Return the URL line plus its immediately preceding text line when needed."""
+    """Return the URL line plus its immediately preceding text line when needed.
+
+    Telegram posts often put a URL on a separate line after «за посиланням:» or
+    «детальніше ...:».  Looking only at the URL line loses exactly the distinction
+    we need between reader-action links and source/article attribution links.
+    """
     value = str(text or "")
     line_start = value.rfind("\n", 0, start) + 1
     line_end = value.find("\n", end)
     if line_end < 0:
         line_end = len(value)
+
+    # If the URL is effectively alone on its line, include the previous non-empty
+    # line, where Telegram captions normally keep the cue introducing that link.
     before_on_line = value[line_start:start].strip()
     if not before_on_line and line_start > 0:
         prev_end = line_start - 1
@@ -111,6 +121,7 @@ def _local_url_context(text: str, start: int, end: int, radius: int = 220) -> st
             prev_end -= 1
         prev_start = value.rfind("\n", 0, prev_end) + 1
         line_start = max(prev_start, start - radius)
+
     return value[max(0, line_start):min(len(value), max(line_end, end))]
 
 
@@ -123,14 +134,84 @@ def source_urls_in_text(source: str) -> list[str]:
     return result[:24]
 
 
-def actionable_source_urls(source: str, *, source_name: str = "") -> list[str]:
+_TRACKING_QUERY_KEYS = {
+    "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igshid",
+    "yclid", "srsltid", "vero_conv", "vero_id",
+}
+
+
+def _url_identity(value: str) -> str:
+    raw = str(value or "").strip().rstrip(".,;:!?©®™")
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        if parts.scheme.casefold() not in {"http", "https"} or not parts.netloc:
+            return raw.casefold()
+        path = re.sub(r"/{2,}", "/", parts.path or "/").rstrip("/") or "/"
+        query_pairs = []
+        for key, val in parse_qsl(parts.query, keep_blank_values=True):
+            low = key.casefold()
+            if low.startswith("utm_") or low in _TRACKING_QUERY_KEYS:
+                continue
+            query_pairs.append((key, val))
+        query_pairs.sort(key=lambda item: (item[0].casefold(), item[1]))
+        query = urlencode(query_pairs, doseq=True)
+        return urlunsplit((parts.scheme.casefold(), parts.netloc.casefold(), path, query, ""))
+    except Exception:
+        return raw.casefold()
+
+
+def article_non_actionable_urls(article) -> set[str]:
+    """URLs that identify the source/article or media already attached to the post.
+
+    These must never be reinserted into body text as reader-action links.
+    """
+    result: set[str] = set()
+    for key in ("source_url", "canonical_source_url"):
+        value = _row_text(article, key)
+        ident = _url_identity(value)
+        if ident:
+            result.add(ident)
+    try:
+        raw_media = json.loads(_row_text(article, "media_json") or "[]")
+    except Exception:
+        raw_media = []
+    if isinstance(raw_media, list):
+        for item in raw_media:
+            raw = str(item or "").strip()
+            if "|" in raw and raw.split("|", 1)[0].casefold() in {"image", "video"}:
+                raw = raw.split("|", 1)[1]
+            ident = _url_identity(raw)
+            if ident:
+                result.add(ident)
+    try:
+        layout = json.loads(_row_text(article, "article_layout_json") or "{}")
+    except Exception:
+        layout = {}
+    if isinstance(layout, dict):
+        blocks = layout.get("blocks")
+        if isinstance(blocks, list):
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                ident = _url_identity(str(block.get("url") or ""))
+                if ident:
+                    result.add(ident)
+    return result
+
+
+def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=()) -> list[str]:
     """Return only reader-action URLs, excluding plain attribution/article links."""
     text = str(source or "")
     name = " ".join(str(source_name or "").split()).casefold()
+    excluded = {_url_identity(value) for value in excluded_urls if _url_identity(value)}
     result: list[str] = []
     for match in _URL_RE.finditer(text):
         url = match.group(0).rstrip(".,;:!?")
         if not url:
+            continue
+        if _url_identity(url) in excluded:
             continue
         context = _local_url_context(text, match.start(), match.end()).casefold()
         attribution = any(cue in context for cue in _ATTRIBUTION_LINK_CUES)
@@ -145,8 +226,77 @@ def actionable_source_urls(source: str, *, source_name: str = "") -> list[str]:
     return result[:12]
 
 
+# Compatibility for older callers/tests.
 def _actionable_source_urls(source: str) -> list[str]:
     return actionable_source_urls(source)
+
+
+_ORPHAN_SOURCE_LABEL_RE = re.compile(
+    r"(?iu)^\s*(?:детальніше|деталі(?:\s*/\s*реєстрація)?|джерело|посилання|читати|більше)\s*[:：-]?\s*[©®™]*\s*$"
+)
+
+
+def strip_non_actionable_article_urls(article, text: str) -> str:
+    """Remove source/canonical/already-attached-media URLs from body text.
+
+    Reader-action URLs are preserved. Matching is identity-based, so tracking
+    parameters, trailing slash differences and harmless suffix symbols cannot
+    reintroduce the source URL under a slightly different spelling.
+    """
+    value = str(text or "")
+    if not value.strip():
+        return value.strip()
+    excluded = article_non_actionable_urls(article)
+    if not excluded:
+        return value.strip()
+    source = " ".join((_row_text(article, "source_name"), _row_text(article, "title"), _row_text(article, "raw_text")))
+    actionable = {
+        _url_identity(url)
+        for url in actionable_source_urls(
+            source,
+            source_name=_row_text(article, "source_name"),
+            excluded_urls=excluded,
+        )
+        if _url_identity(url)
+    }
+
+    out: list[str] = []
+    last = 0
+    seen_preserved: set[str] = set()
+    for match in _URL_RE.finditer(value):
+        out.append(value[last:match.start()])
+        raw = match.group(0)
+        ident = _url_identity(raw)
+        end = match.end()
+        if ident in excluded and ident not in actionable:
+            while end < len(value) and value[end] in "©®™":
+                end += 1
+            # URL intentionally omitted.
+        else:
+            # Do not duplicate identical actionable URLs in the generated body.
+            if ident and ident in seen_preserved:
+                while end < len(value) and value[end] in "©®™":
+                    end += 1
+            else:
+                out.append(raw.rstrip("©®™"))
+                if ident:
+                    seen_preserved.add(ident)
+        last = end
+    out.append(value[last:])
+    cleaned = "".join(out)
+
+    lines: list[str] = []
+    for raw_line in cleaned.splitlines():
+        line = raw_line.rstrip()
+        if _ORPHAN_SOURCE_LABEL_RE.match(line):
+            continue
+        # A removed URL may leave only punctuation/symbol noise on the line.
+        if re.fullmatch(r"\s*[©®™:：;,.!?-]*\s*", line):
+            continue
+        lines.append(line)
+    cleaned = "\n".join(lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
 
 
 def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
@@ -165,7 +315,7 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     # Reader-action links are protected facts too. A canonical source footer does
     # not satisfy this contract because it forces the reader to hunt for the actual
     # registration/form/payment target in somebody else's post.
-    missing_action_urls = [url for url in actionable_source_urls(source, source_name=_row_text(article, "source_name")) if url not in output_text]
+    missing_action_urls = [url for url in actionable_source_urls(source, source_name=_row_text(article, "source_name"), excluded_urls=article_non_actionable_urls(article)) if url not in output_text]
     if missing_action_urls:
         raise FactGuardError(
             "AI прибрав практичне посилання з джерела: " + ", ".join(missing_action_urls[:4])

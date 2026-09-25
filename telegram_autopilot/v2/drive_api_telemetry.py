@@ -122,6 +122,9 @@ def _content_config_candidates() -> list[Path]:
     ]
     seen: set[str] = set()
     out: list[Path] = []
+    # Search at most two directory levels. This covers Desktop/Downloads folders
+    # such as "актуальні програми/UA_FREE_Content_Tool..." without walking an
+    # entire drive or the user's profile tree.
     for base in bases:
         try:
             resolved = str(base.expanduser().absolute())
@@ -133,16 +136,29 @@ def _content_config_candidates() -> list[Path]:
         try:
             if not base.is_dir():
                 continue
-            for item in base.iterdir():
+            first_level = []
+            for item in list(base.iterdir())[:240]:
                 try:
                     if not item.is_dir():
                         continue
                 except OSError:
                     continue
+                first_level.append(item)
                 name = item.name.casefold()
-                if not name.startswith("ua_free_content_tool"):
+                if name.startswith("ua_free_content_tool"):
+                    out.append(item / "Data" / "config.portable")
+            for parent in first_level[:120]:
+                try:
+                    for item in list(parent.iterdir())[:160]:
+                        try:
+                            if not item.is_dir():
+                                continue
+                        except OSError:
+                            continue
+                        if item.name.casefold().startswith("ua_free_content_tool"):
+                            out.append(item / "Data" / "config.portable")
+                except OSError:
                     continue
-                out.append(item / "Data" / "config.portable")
         except OSError:
             continue
 

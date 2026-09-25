@@ -38,14 +38,10 @@ def runtime_dir() -> Path:
     override = os.environ.get("UA_FREE_TELEGRAM_AUTOPILOT_ROOT")
     if override:
         return Path(override).expanduser().absolute()
-    exe = Path(sys.executable).resolve()
-    if getattr(sys, "frozen", False) or exe.name.casefold().startswith("ua_free_telegram_autopilot"):
-        return exe.parent
-    # Source tree or packaged _runtime/telegram_autopilot layout.
-    candidate = Path(__file__).resolve().parents[1]
-    if candidate.name == "_runtime":
-        return candidate.parent
-    return candidate
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    base = Path(__file__).resolve().parents[1]
+    return base.parent if base.name == "_runtime" else base
 
 
 @lru_cache(maxsize=1)
@@ -58,9 +54,7 @@ def data_dir() -> Path:
     return root
 
 
-
 def tools_dir() -> Path:
-    """Heavy reproducible runtimes live beside the portable app, never in Data."""
     path = runtime_dir() / TOOLS_DIR_NAME
     _reject_reparse_chain(path.parent)
     path.mkdir(parents=True, exist_ok=True)
@@ -78,6 +72,7 @@ def migration_dir() -> Path:
     path = data_dir() / "migration"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
 
 def database_path() -> Path:
     return data_dir() / "telegram_autopilot.sqlite3"

@@ -102,6 +102,13 @@ def source_body_attribution_issues(
     if not name:
         return ()
     body = str(text or "")
+    generic_attribution = re.compile(
+        r"(?iu)(?:\bза\s+(?:інформацією|даними|матеріалами)\b"
+        r"|\b(?:джерело|редакція|видання|канал|сторінка)\s+(?:повідомляє|інформує|пише)\b"
+        r"|\b(?:повідомляє|інформує|пише)\s+(?:джерело|редакція|видання|канал|сторінка)\b)"
+    )
+    if generic_attribution.search(body):
+        return ("правила каналу забороняють атрибуцію джерела в тілі; джерело має лишатися тільки у footer",)
     for alias in _source_aliases(name):
         pattern = r"(?iu)(?<![\w’'-])" + r"\s+".join(re.escape(part) for part in alias.split()) + r"(?![\w’'-])"
         if re.search(pattern, body):

@@ -326,6 +326,28 @@ class V2Store:
         )
 
     @staticmethod
+    def _ensure_source_body_attribution_policy(con: sqlite3.Connection) -> None:
+        """Move body-attribution behavior into visible per-channel policy data.
+
+        The one-time compatibility seed preserves the previous named-source behavior,
+        but the runtime itself is marker-agnostic: operators can edit mode/marker per channel.
+        """
+        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channel_policies)").fetchall()}
+        added_mode = False
+        if "source_body_attribution_mode" not in columns:
+            con.execute("ALTER TABLE channel_policies ADD COLUMN source_body_attribution_mode TEXT NOT NULL DEFAULT 'footer_only'")
+            added_mode = True
+        if "source_body_attribution_marker" not in columns:
+            con.execute("ALTER TABLE channel_policies ADD COLUMN source_body_attribution_marker TEXT NOT NULL DEFAULT ''")
+        # RC81: schema only.  Concrete marker values are channel settings and are
+        # never seeded from core code. Existing RC80 values are preserved by normal
+        # database migration/import; fresh channels start with footer_only.
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("rc81_source_body_attribution_schema_only_v1", "1"),
+        )
+
+    @staticmethod
     def _ensure_facebook_channel_settings(con: sqlite3.Connection) -> None:
         """Persist only selected Facebook Page IDs per channel; tokens stay encrypted."""
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
