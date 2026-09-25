@@ -400,8 +400,8 @@ class SourceDialog(tk.Toplevel):
         self.geometry("820x460")
         self.transient(master)
         self.grab_set()
-        self.tree = ttk.Treeview(self, columns=("id", "kind", "name", "url", "enabled", "error"), show="headings")
-        for col, label, width in (("id", "ID", 55), ("kind", "Тип", 90), ("name", "Назва", 170), ("url", "URL", 300), ("enabled", "Увімк.", 65), ("error", "Остання помилка", 220)):
+        self.tree = ttk.Treeview(self, columns=("id", "kind", "name", "url", "links", "enabled", "error"), show="headings")
+        for col, label, width in (("id", "ID", 55), ("kind", "Тип", 90), ("name", "Назва", 170), ("url", "URL", 270), ("links", "Посилання", 105), ("enabled", "Увімк.", 65), ("error", "Остання помилка", 200)):
             self.tree.heading(col, text=label)
             self.tree.column(col, width=width, anchor="w")
         self.tree.pack(fill="both", expand=True, padx=10, pady=10)
@@ -419,7 +419,8 @@ class SourceDialog(tk.Toplevel):
         wanted = selected[0] if selected else ""
         self.tree.delete(*self.tree.get_children())
         for row in self.store.sources_for_channel(self.channel_id, enabled_only=False):
-            self.tree.insert("", "end", iid=str(row["id"]), values=(row["id"], row["kind"], row["name"], row["url"], "так" if row["enabled"] else "ні", str(row["last_error"] or "")[:160]))
+            links = "заборонені" if self.store.source_suppress_publication_links(int(row["id"])) else "дозволені"
+            self.tree.insert("", "end", iid=str(row["id"]), values=(row["id"], row["kind"], row["name"], row["url"], links, "так" if row["enabled"] else "ні", str(row["last_error"] or "")[:160]))
         children = self.tree.get_children()
         target = wanted if wanted in children else (children[0] if children else "")
         if target:
@@ -439,21 +440,37 @@ class SourceDialog(tk.Toplevel):
             vars[label] = var
             widget = ttk.Combobox(win, textvariable=var, values=["rss", "page", "telegram"], state="readonly") if label == "Тип" else ttk.Entry(win, textvariable=var, width=60)
             widget.grid(row=i, column=1, sticky="ew", padx=8, pady=6)
+        suppress_links = tk.BooleanVar(
+            value=self.store.source_suppress_publication_links(int(row["id"])) if row else False
+        )
+        ttk.Checkbutton(
+            win,
+            text="Заборонити посилання у публікації з цього джерела",
+            variable=suppress_links,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4))
+        ttk.Label(
+            win,
+            text="Прибирає URL із тексту та не додає footer-посилання на джерело.",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 8))
+
         saved = {"ok": False}
 
         def save():
             try:
                 with self.store.connect() as con:
                     if row:
-                        con.execute("UPDATE sources SET kind=?,name=?,url=?,priority=? WHERE id=?", (vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get()), int(row["id"])))
+                        source_id = int(row["id"])
+                        con.execute("UPDATE sources SET kind=?,name=?,url=?,priority=? WHERE id=?", (vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get()), source_id))
                     else:
-                        con.execute("INSERT INTO sources(channel_id,kind,name,url,enabled,priority) VALUES(?,?,?,?,1,?)", (self.channel_id, vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get())))
+                        cursor = con.execute("INSERT INTO sources(channel_id,kind,name,url,enabled,priority) VALUES(?,?,?,?,1,?)", (self.channel_id, vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get())))
+                        source_id = int(cursor.lastrowid)
+                self.store.set_source_suppress_publication_links(source_id, bool(suppress_links.get()))
                 saved["ok"] = True
                 win.destroy()
             except Exception as exc:
                 messagebox.showerror("Помилка", str(exc), parent=win)
 
-        ttk.Button(win, text="Зберегти", command=save).grid(row=5, column=1, sticky="e", padx=8, pady=8)
+        ttk.Button(win, text="Зберегти", command=save).grid(row=6, column=1, sticky="e", padx=8, pady=8)
         self.wait_window(win)
         return saved["ok"]
 
