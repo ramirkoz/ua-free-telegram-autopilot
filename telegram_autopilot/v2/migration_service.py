@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .legacy_credentials import import_legacy_secrets
+from .domain import MigrationReport
 from .migration import build_export_bundle, import_legacy_data, locate_legacy_database
 from .storage import V2Store, now_iso
 
@@ -136,16 +137,13 @@ class MigrationManager:
                 temp_store = V2Store(temp)  # initialize/upgrade current schema in-place
                 self._validate_database(temp)
                 with temp_store.connect() as con:
-                    report = type("V2CarryForwardReport", (), {})()
-                    report.source = str(source_db)
+                    report = MigrationReport(source=str(source_db))
                     report.channels_total = report.channels_imported = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
                     report.sources_total = report.sources_imported = int(con.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
                     report.articles_total = report.articles_imported = int(con.execute("SELECT COUNT(*) FROM articles").fetchone()[0])
                     report.published_imported = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED'").fetchone()[0])
                     report.pending_reevaluation = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage<>'PUBLISHED' AND decision='PENDING'").fetchone()[0])
                     report.archived_unpublished = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='ARCHIVED' AND published_at=''").fetchone()[0])
-                    report.warnings = []
-                    report.skipped_runtime_state = []
             else:
                 temp_store = V2Store(temp)
                 report = import_legacy_data(legacy_snapshot, temp_store)
