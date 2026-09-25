@@ -1,10 +1,13 @@
-UA FREE Telegram Autopilot v2.0.0-rc86 — MANUAL TEST
+UA FREE Telegram Autopilot v2.0.0-rc87 — MANUAL TEST
 
-RC86 is based on RC85.
+RC87 is based on RC86.
 
-Changes:
-- adds a generic per-source setting “Заборонити посилання у публікації з цього джерела”;
-- when enabled, URLs are removed from the article body and no source/footer/video link is added to the Telegram publication;
-- existing ZaBor sources are seeded with this flag once during upgrade, then the operator setting remains authoritative;
-- internal canonical source URLs remain available for dedupe, evidence and media handling;
-- RC85 polling, incident clustering, editorial review and local learning remain unchanged.
+Migration repair:
+- legacy Data is first copied through SQLite online backup into a private temporary snapshot;
+- the importer never works directly against the selected RC85 database;
+- source==target is safe because import reads the private snapshot;
+- current RC85 channel settings, dedupe settings, attribution settings, Facebook page selections and source legacy_config_json are preserved;
+- channel policy source-body attribution settings are preserved;
+- migration remains transactional and restores the previous V2 database if destination replacement fails.
+
+RC86 source text-link cleanup and cross-source duplicate fixes are retained.
