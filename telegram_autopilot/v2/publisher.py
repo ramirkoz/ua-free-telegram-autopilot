@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
@@ -87,6 +88,32 @@ def _web_media_provenance(article: Any) -> str:
         return ""
     meta = layout.get("featured_meta")
     return str(meta.get("provenance") or "") if isinstance(meta, dict) else ""
+
+
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:https?://|www\.)[^)]+\)", re.IGNORECASE)
+_BARE_LINK_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
+_EMPTY_PROMO_LINE_RE = re.compile(
+    r"(?iu)^\s*(?:детальніше|детали|деталі(?:/реєстрація)?|реєстрація|registration|read more|посилання)\s*[:：-]?\s*$"
+)
+
+
+def _strip_all_publication_links(text: str) -> str:
+    """Remove clickable/bare URLs while preserving useful linked anchor text."""
+    value = _MARKDOWN_LINK_RE.sub(lambda match: str(match.group(1) or "").strip(), str(text or ""))
+    value = _BARE_LINK_RE.sub("", value)
+    lines: list[str] = []
+    for raw in value.splitlines():
+        line = raw.strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if _EMPTY_PROMO_LINE_RE.fullmatch(line):
+            continue
+        lines.append(line)
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def _source_urls(article: Any) -> list[str]:
@@ -304,6 +331,17 @@ class Publisher:
         if channel is None:
             raise ValueError("CHANNEL_MISSING")
         current_text = str(article["final_text"] or "").strip()
+        suppress_publication_links = self.store.source_suppress_publication_links(int(article["source_id"]))
+        if suppress_publication_links:
+            sanitized = _strip_all_publication_links(current_text)
+            if sanitized != current_text:
+                current_text = sanitized
+                self.store.update_article(article_id, final_text=current_text)
+                article = self.store.get_article(article_id) or article
+                event(
+                    "publish", "source link policy removed URLs from body",
+                    channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
+                )
         if channel.mode == ChannelMode.MONITORING:
             sanitized = strip_non_actionable_article_urls(article, current_text)
             if sanitized != current_text:
@@ -344,11 +382,15 @@ class Publisher:
             source_urls=source_urls,
         )
 
+        if suppress_publication_links:
+            attribution_urls = []
+            attribution_labels = None
+
         bundle = build_publication_media_bundle(channel, article)
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
-        if bundle.video_link and bundle.video_link not in attribution_urls:
+        if (not suppress_publication_links) and bundle.video_link and bundle.video_link not in attribution_urls:
             if attribution_labels is None:
                 count = len(attribution_urls)
                 attribution_labels = [
@@ -367,13 +409,16 @@ class Publisher:
                 event("media", "VIDEO_EXPECTED_BUT_NOT_FOUND", level=30, channel_id=channel_id, article_id=article_id, source_url=source_url)
 
         text = str(article["final_text"] or "").strip()
+        publication_source_url = "" if suppress_publication_links else source_url
+        publication_source_urls = [] if suppress_publication_links else attribution_urls
+        publication_source_labels = None if suppress_publication_links else attribution_labels
         try:
             post_text = build_attributed_post_text(
                 text,
-                source_url=source_url,
-                source_urls=attribution_urls,
-                source_labels=attribution_labels,
-                include_source_link=True,
+                source_url=publication_source_url,
+                source_urls=publication_source_urls,
+                source_labels=publication_source_labels,
+                include_source_link=not suppress_publication_links,
                 hard_limit=900,
             )
         except TelegramError as exc:
@@ -428,9 +473,9 @@ class Publisher:
                     token,
                     channel.telegram_chat_id,
                     post_text,
-                    source_url=source_url,
-                    source_urls=attribution_urls,
-                    source_labels=attribution_labels,
+                    source_url=publication_source_url,
+                    source_urls=publication_source_urls,
+                    source_labels=publication_source_labels,
                     timeout=45.0,
                 )
             except TelegramError as exc:
@@ -481,9 +526,9 @@ class Publisher:
                     token,
                     channel.telegram_chat_id,
                     post_text,
-                    source_url=source_url,
-                    source_urls=attribution_urls,
-                    source_labels=attribution_labels,
+                    source_url=publication_source_url,
+                    source_urls=publication_source_urls,
+                    source_labels=publication_source_labels,
                     timeout=45.0,
                 )
             except TelegramError as exc:
@@ -535,9 +580,9 @@ class Publisher:
                             channel.telegram_chat_id,
                             post_text,
                             chunk[0],
-                            source_url=source_url,
-                            source_urls=attribution_urls,
-                            source_labels=attribution_labels,
+                            source_url=publication_source_url,
+                            source_urls=publication_source_urls,
+                            source_labels=publication_source_labels,
                             timeout=75.0,
                         )
                     else:
@@ -548,9 +593,9 @@ class Publisher:
                         channel.telegram_chat_id,
                         chunk,
                         caption=post_text if is_final_chunk else "",
-                        source_url=source_url if is_final_chunk else "",
-                        source_urls=attribution_urls if is_final_chunk else None,
-                        source_labels=attribution_labels if is_final_chunk else None,
+                        source_url=publication_source_url if is_final_chunk else "",
+                        source_urls=publication_source_urls if is_final_chunk else None,
+                        source_labels=publication_source_labels if is_final_chunk else None,
                         timeout=90.0,
                     )
             except TelegramError as exc:
@@ -567,9 +612,9 @@ class Publisher:
                             token,
                             channel.telegram_chat_id,
                             post_text,
-                            source_url=source_url,
-                            source_urls=attribution_urls,
-                            source_labels=attribution_labels,
+                            source_url=publication_source_url,
+                            source_urls=publication_source_urls,
+                            source_labels=publication_source_labels,
                             timeout=45.0,
                         )
                     except TelegramError as text_exc:
