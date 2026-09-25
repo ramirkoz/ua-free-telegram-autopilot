@@ -21,6 +21,7 @@ class FastMainWindow(ProductionMainWindow):
 
     _TREE_VIEWS = {
         "queue": "queue_tree",
+        "editorial": "editorial_tree",
         "history": "history_tree",
         "ai": "ai_tree",
     }
@@ -286,6 +287,7 @@ class FastMainWindow(ProductionMainWindow):
             "home": 7.5,
             "channels": 30.0,
             "queue": 30.0,
+            "editorial": 20.0,
             "history": 60.0,
             "ai": 30.0,
             "learning": 90.0,
@@ -299,6 +301,7 @@ class FastMainWindow(ProductionMainWindow):
                     "home": self.refresh_home,
                     "channels": self.refresh_channels,
                     "queue": self.refresh_queue,
+                    "editorial": self.refresh_editorial_review,
                     "history": self.refresh_history,
                     "ai": self.refresh_ai,
                     "learning": self.refresh_learning,

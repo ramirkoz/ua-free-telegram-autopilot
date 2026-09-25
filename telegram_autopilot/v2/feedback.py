@@ -622,6 +622,16 @@ class FeedbackService:
                     );
                     CREATE INDEX IF NOT EXISTS idx_feedback_editor_channel_checked
                         ON feedback_editor_reactions(channel_id, checked_at DESC);
+                    CREATE TABLE IF NOT EXISTS editorial_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                        channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                        action TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',
+                        before_text TEXT NOT NULL DEFAULT '',after_text TEXT NOT NULL DEFAULT '',
+                        detail TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_editorial_actions_channel_time
+                        ON editorial_actions(channel_id, created_at DESC, id DESC);
                     """
                 )
                 con.commit()
@@ -674,7 +684,40 @@ class FeedbackService:
                    ORDER BY datetime(f.published_at) DESC LIMIT ?""",
                 (int(channel_id), f"-{max(1, int(days))} days", max(1, min(500, int(limit)))),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        try:
+            with self.store.connect() as con:
+                actions = con.execute(
+                    """SELECT ea.*,a.source_id,a.raw_text,a.event_summary,a.canonical_source_url
+                       FROM editorial_actions ea JOIN articles a ON a.id=ea.article_id
+                       WHERE ea.channel_id=? AND datetime(ea.created_at)>=datetime('now',?)
+                       ORDER BY datetime(ea.created_at) DESC LIMIT ?""",
+                    (int(channel_id), f"-{max(1, int(days))} days", max(1, min(500, int(limit)))),
+                ).fetchall()
+            for row in actions:
+                action = str(row["action"] or "")
+                approved = action in {"approve","publish_now","edit"}
+                rejected = action == "reject"
+                result.append({
+                    "article_id": int(row["article_id"]), "channel_id": int(row["channel_id"]),
+                    "telegram_message_id": "", "checked_at": str(row["created_at"] or ""),
+                    "published_at": str(row["created_at"] or ""), "views": 0, "forwards": 0, "replies": 0,
+                    "likes": 2 if approved else 0, "dislikes": 2 if rejected else 0,
+                    "fires": 1 if action == "edit" else 0, "other_reactions": 0,
+                    "editor_admin_count": 1, "editor_reacted_count": 1,
+                    "editor_coverage": "editorial_action", "reactor_scan_complete": 1, "reactor_scanned": 1,
+                    "audience_reactions_json": "{}", "audience_total": 0, "audience_positive": 0,
+                    "audience_negative": 0, "audience_fires": 0, "audience_other": 0,
+                    "source_id": int(row["source_id"] or 0), "title": str(row["title"] or ""),
+                    "raw_text": str(row["raw_text"] or ""), "event_summary": str(row["event_summary"] or ""),
+                    "final_text": str(row["after_text"] or row["before_text"] or ""),
+                    "canonical_source_url": str(row["canonical_source_url"] or ""),
+                    "editorial_action": action,
+                })
+        except Exception:
+            pass
+        result.sort(key=lambda item: str(item.get("published_at") or item.get("checked_at") or ""), reverse=True)
+        return result[:max(1, min(500, int(limit)))]
 
     def stats(self, channel_id: int) -> dict[str, Any]:
         with self.store.connect() as con:

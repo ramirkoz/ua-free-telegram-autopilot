@@ -198,7 +198,7 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                         (
                             cid,str(d.get("name") or f"Канал {cid}"),str(d.get("telegram_chat_id") or ""),_bool(d.get("enabled"),True),_legacy_mode(d),
                             str(d.get("editorial_profile") or ""),_bool(d.get("include_source_link"),True),1,
-                            _int(d.get("poll_interval_minutes"),5),_bool(d.get("poll_immediate"),False),_int(d.get("min_publish_interval_minutes"),10),
+                            _int(d.get("poll_interval_minutes"),15),_bool(d.get("poll_immediate"),False),_int(d.get("min_publish_interval_minutes"),10),
                             _int(d.get("dedupe_window_hours"),72),_int(d.get("max_age_hours"),24),_int(d.get("max_posts_per_cycle"),3),
                             _bool(d.get("publish_24h"),False),str(d.get("publish_start") or "07:00"),str(d.get("publish_end") or "00:00"),_bool(d.get("publish_immediately"),False),
                             _bool(d.get("topic_balance_enabled"),True),_int(d.get("topic_daily_limit"),2),_int(d.get("related_spacing_posts"),5),

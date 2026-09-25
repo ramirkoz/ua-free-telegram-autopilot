@@ -14,6 +14,7 @@ from ..secrets_store import load_secrets, save_secrets
 from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode, SourceBodyAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
+from .editorial_review import EditorialReviewService
 from .migration_service import MigrationManager
 from .runtime import RuntimeEngine
 from .storage import V2Store
@@ -505,6 +506,8 @@ class MainWindow(tk.Tk):
         self.feedback = FeedbackService(store)
         self.feedback_runtime = FeedbackRuntime(self.feedback, store)
         self.learning = LearningEngine(store)
+        self.review = EditorialReviewService(store)
+        self.review.ensure_schema()
         self._running = False
         self._startup_ready = True
         self._feedback_ready = False
@@ -521,13 +524,14 @@ class MainWindow(tk.Tk):
         self.book = ttk.Notebook(self)
         self.book.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.tabs = {}
-        for key, title in (("home", "Головна"), ("channels", "Канали"), ("queue", "Черга"), ("history", "Історія"), ("ai", "AI"), ("facebook", "Facebook"), ("learning", "Статистика / навчання"), ("supervisor", "Нагляд"), ("migration", "Міграція"), ("logs", "Журнали")):
+        for key, title in (("home", "Головна"), ("channels", "Канали"), ("queue", "Черга"), ("editorial", "Редакторська черга"), ("history", "Історія"), ("ai", "AI"), ("facebook", "Facebook"), ("learning", "Статистика / навчання"), ("supervisor", "Нагляд"), ("migration", "Міграція"), ("logs", "Журнали")):
             frame = ttk.Frame(self.book)
             self.book.add(frame, text=title)
             self.tabs[key] = frame
         self._build_home()
         self._build_channels()
         self._build_queue()
+        self._build_editorial_review()
         self._build_history()
         self._build_ai()
         self._build_facebook_settings()
@@ -568,6 +572,76 @@ class MainWindow(tk.Tk):
         ttk.Combobox(filterbar, textvariable=self.queue_filter, state="readonly", values=["Усі", "Очікує", "Готово", "Заблоковано AI", "Заблоковано джерелом", "Заблоковано медіа", "Проблема якості"], width=28).pack(side="left", padx=6)
         self.queue_filter.trace_add("write", lambda *_: self.refresh_queue())
         self.queue_tree = self._tree(self.tabs["queue"], [("id", "ID", 60), ("channel", "Канал", 180), ("stage", "Етап", 125), ("decision", "Рішення", 120), ("blocked", "Блокер", 125), ("title", "Матеріал", 420), ("detail", "Деталі", 420)])
+
+
+    def _build_editorial_review(self):
+        panel = self.tabs["editorial"]
+        bar = ttk.Frame(panel); bar.pack(fill="x", padx=8, pady=6)
+        ttk.Label(bar, text="Готові рерайти редакційних каналів, які ще не вийшли в ефір.").pack(side="left")
+        ttk.Button(bar, text="Оновити", command=self.refresh_editorial_review).pack(side="right")
+        self.editorial_tree = self._tree(panel, [
+            ("id","ID",60),("channel","Канал",180),("stage","Етап",110),
+            ("blocked","Чому не в ефірі",150),("title","Матеріал",360),
+            ("reason","Причина",420),("source","Джерело",180),
+        ])
+        self.editorial_tree.bind("<Double-1>", lambda _e: self.editorial_edit())
+        actions=ttk.Frame(panel); actions.pack(fill="x", padx=8, pady=(0,8))
+        ttk.Button(actions,text="Редагувати текст",command=self.editorial_edit).pack(side="left")
+        ttk.Button(actions,text="Погодити в READY",command=self.editorial_approve).pack(side="left",padx=6)
+        ttk.Button(actions,text="Опублікувати зараз",command=self.editorial_publish_now).pack(side="left",padx=6)
+        ttk.Button(actions,text="Відхилити",command=self.editorial_reject).pack(side="left",padx=6)
+
+    def _selected_editorial_article(self) -> int | None:
+        selected=self.editorial_tree.selection() if hasattr(self,"editorial_tree") else ()
+        if not selected: return None
+        try: return int(selected[0])
+        except Exception: return None
+
+    def editorial_edit(self):
+        article_id=self._selected_editorial_article()
+        if article_id is None: return
+        row=self.store.get_article(article_id)
+        if row is None: return
+        dialog=tk.Toplevel(self); dialog.title(f"Редагування #{article_id}"); dialog.geometry("900x620")
+        box=tk.Text(dialog,wrap="word",font=("TkDefaultFont",11)); box.insert("1.0",str(row["final_text"] or "")); box.pack(fill="both",expand=True,padx=10,pady=10)
+        def save():
+            try:
+                self.review.edit(article_id,box.get("1.0","end").strip())
+                dialog.destroy(); self.refresh_editorial_review(); self.refresh_learning()
+            except Exception as exc: messagebox.showerror("Редакторська черга",str(exc),parent=dialog)
+        footer=ttk.Frame(dialog); footer.pack(fill="x",padx=10,pady=(0,10))
+        ttk.Button(footer,text="Зберегти і погодити",command=save).pack(side="right")
+        ttk.Button(footer,text="Скасувати",command=dialog.destroy).pack(side="right",padx=6)
+
+    def editorial_approve(self):
+        article_id=self._selected_editorial_article()
+        if article_id is None: return
+        try:
+            self.review.approve(article_id); self.refresh_editorial_review(); self.refresh_queue(); self.refresh_learning()
+        except Exception as exc: messagebox.showerror("Редакторська черга",str(exc),parent=self)
+
+    def editorial_reject(self):
+        article_id=self._selected_editorial_article()
+        if article_id is None: return
+        if not messagebox.askyesno("Редакторська черга",f"Відхилити матеріал #{article_id}?",parent=self): return
+        try:
+            self.review.reject(article_id); self.refresh_editorial_review(); self.refresh_history(); self.refresh_learning()
+        except Exception as exc: messagebox.showerror("Редакторська черга",str(exc),parent=self)
+
+    def editorial_publish_now(self):
+        article_id=self._selected_editorial_article()
+        if article_id is None: return
+        try: self.review.approve(article_id)
+        except Exception as exc:
+            messagebox.showerror("Редакторська черга",str(exc),parent=self); return
+        self.status.set(f"Публікую #{article_id} вручну…")
+        def work():
+            try:
+                result=self.runtime.publisher.publish_one(article_id); self.review.record_publish_now(article_id,result)
+                msg=f"Матеріал #{article_id}: {result}"
+            except Exception as exc: msg=f"Помилка ручної публікації #{article_id}: {exc}"
+            self.after(0,lambda:(self.status.set(msg),self.refresh_editorial_review(),self.refresh_history(),self.refresh_learning()))
+        threading.Thread(target=work,daemon=True,name=f"V2-Editorial-Publish-{article_id}").start()
 
     def _build_history(self):
         self.history_tree = self._tree(self.tabs["history"], [("id", "ID", 60), ("channel", "Канал", 180), ("status", "Статус", 120), ("title", "Матеріал", 430), ("published", "Опубліковано", 170), ("source", "Джерело", 320)])
@@ -1325,6 +1399,7 @@ class MainWindow(tk.Tk):
             self.refresh_home()
             self.refresh_channels()
             self.refresh_queue()
+            self.refresh_editorial_review()
             self.refresh_history()
             self.refresh_ai()
             self.refresh_learning()
@@ -1418,6 +1493,20 @@ class MainWindow(tk.Tk):
             rows = con.execute(f"SELECT a.*,c.name channel_name FROM articles a JOIN channels c ON c.id=a.channel_id WHERE {where} ORDER BY a.id DESC LIMIT 500", args).fetchall()
         for row in rows:
             self.queue_tree.insert("", "end", iid=str(row["id"]), values=(row["id"], row["channel_name"], STAGE_UA.get(row["stage"], row["stage"]), DECISION_UA.get(row["decision"], row["decision"]), BLOCK_UA.get(row["blocked_by"], row["blocked_by"]), str(row["title"] or "")[:240], str(row["last_error_detail"] or row["status_detail"] or "")[:260]))
+
+
+    def refresh_editorial_review(self):
+        if not hasattr(self,"editorial_tree"): return
+        selected=self.editorial_tree.selection(); wanted=selected[0] if selected else ""
+        self.editorial_tree.delete(*self.editorial_tree.get_children())
+        for item in self.review.candidates(limit=300):
+            reason=item.reason or ("готовий, але ще не опублікований" if item.stage=="READY" else "очікує редакторського рішення")
+            self.editorial_tree.insert("","end",iid=str(item.article_id),values=(
+                item.article_id,item.channel_name,STAGE_UA.get(item.stage,item.stage),
+                BLOCK_UA.get(item.blocked_by,item.blocked_by),item.title[:220],reason[:260],item.source_name[:120]))
+        children=self.editorial_tree.get_children()
+        if wanted in children:
+            self.editorial_tree.selection_set(wanted); self.editorial_tree.focus(wanted)
 
     def refresh_history(self):
         self.history_tree.delete(*self.history_tree.get_children())
