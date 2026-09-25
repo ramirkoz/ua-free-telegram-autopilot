@@ -7,7 +7,7 @@ from typing import Any, Callable, Mapping
 
 from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from ..evidence_pack import build_evidence_pack
-from ..fact_guard import actionable_source_urls, source_urls_in_text, validate_fact_guard
+from ..fact_guard import actionable_source_urls, article_non_actionable_urls, source_urls_in_text, strip_non_actionable_article_urls, validate_fact_guard
 from ..language import looks_ukrainian
 from ..grammar_guard import hard_grammar_blockers, needs_grammar_polish, preserves_content
 from ..language_tool_local import apply_local_languagetool_detailed
@@ -144,7 +144,7 @@ def _number_tokens(text: str) -> set[str]:
 
 
 TELEGRAM_BODY_SAFE_MAX = 880
-TRUSTED_EDITOR_PROVIDERS = ("codex", "gemini")
+TRUSTED_EDITOR_PROVIDERS = ("gemini", "nvidia", "groq", "cloudflare", "codex")
 
 
 _ABSENCE_FILLER_RE = re.compile(
@@ -154,6 +154,36 @@ _ABSENCE_FILLER_RE = re.compile(
 _GENERIC_ADVICE_RE = re.compile(
     r"\b(?:зберігайте\s+спокій(?:но)?|стежте\s+за\s+своїми\s+речами|слідкуйте\s+за\s+своїми\s+речами|бережіть\s+себе|будьте\s+уважн\w*)\b",
     re.I,
+)
+
+# Factual-monitoring is allowed to paraphrase facts, but not invent an editorial
+# conclusion around them. These are generic discourse patterns, never channel names.
+# A phrase is blocked only when the source itself contains no matching signal.
+_MONITORING_COMMENTARY_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
+    (re.compile(r"\b(?:це|такий|така|таке|такі)\s+(?:свідчить|свідчать|демонструє|демонструють|показує|показують|підкреслює|підкреслюють|підтверджує|підтверджують|нагадує|нагадують)\b", re.I),
+     ("свідч", "демонстр", "показує", "показують", "підкресл", "підтвердж", "нагадує", "нагадують"),
+     "додано редакційний висновок/інтерпретацію, якої немає у джерелі"),
+    (re.compile(r"\bважлив\w*\s+(?:крок|сигнал|нагадування|приклад|підтвердження)\b", re.I),
+     ("важлив", "крок", "сигнал", "нагадув", "приклад", "підтвердж"),
+     "додано оцінку важливості, якої немає у джерелі"),
+    (re.compile(r"\bце\s+(?:ще\s+раз\s+)?(?:доводить|показує|підтверджує|нагадує)\b", re.I),
+     ("довод", "показує", "підтвердж", "нагадує"),
+     "додано авторський підсумок, якого немає у джерелі"),
+    (re.compile(r"\b(?:продовжує|продовжують)\s+(?:працювати|підтримувати|допомагати|розвивати|дбати)\b", re.I),
+     ("продовжує", "продовжують"),
+     "додано узагальнення про тривалу діяльність, якого немає у джерелі"),
+    (re.compile(r"\b(?:це|такий|така|таке|такі|подібн\w*)(?:\s+[А-Яа-яІіЇїЄєҐґ'’.-]+){0,3}\s+(?:допомагає|допомагають|дозволяє|дозволяють|сприяє|сприяють|покращує|покращують|посилює|посилюють|зміцнює|зміцнюють|створює|створюють)\b", re.I),
+     ("допомага", "дозволя", "сприя", "покращ", "посил", "зміцн", "створю"),
+     "додано пояснення ефекту/користі, якого немає у джерелі"),
+    (re.compile(r"\b(?:важливо|показово|символічно|цінно|принципово|особливо\s+важливо)\b", re.I),
+     ("важлив", "показов", "символіч", "цінн", "принципов"),
+     "додано оцінне судження, якого немає у джерелі"),
+    (re.compile(r"\b(?:отже|таким\s+чином|зрештою)\b", re.I),
+     ("отже", "таким чином", "зрештою"),
+     "додано авторський висновок, якого немає у джерелі"),
+    (re.compile(r"\b(?:це|такий|така|таке|такі)\s+(?:приклад|нагадування|свідчення|підтвердження|можливість|ознака)\b", re.I),
+     ("приклад", "нагадув", "свідчен", "підтвердж", "можлив", "ознака"),
+     "додано редакційну рамку/оцінку, якої немає у джерелі"),
 )
 
 
@@ -198,6 +228,11 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
             break
     if _GENERIC_ADVICE_RE.search(text) and not _GENERIC_ADVICE_RE.search(source):
         issues.append("додано загальну пораду/мораль, якої немає у джерелі")
+    for pattern, source_signals, message in _MONITORING_COMMENTARY_RULES:
+        if not pattern.search(text):
+            continue
+        if not any(signal in source for signal in source_signals):
+            issues.append(message)
     return tuple(dict.fromkeys(issues))
 
 
@@ -206,10 +241,14 @@ def _source_body_policy_issues(channel: ChannelConfig, article: Any, value: str)
     if channel.mode == ChannelMode.MONITORING:
         source = str(_v(article, "raw_text", "") or "")
         source_name = str(_v(article, "source_name", "") or "")
-        actionable = set(actionable_source_urls(source, source_name=source_name))
+        excluded = set(article_non_actionable_urls(article))
+        actionable = set(actionable_source_urls(source, source_name=source_name, excluded_urls=excluded))
         source_urls = set(source_urls_in_text(source))
         candidate_urls = set(source_urls_in_text(str(value or "")))
-        redundant = sorted((candidate_urls & source_urls) - actionable)
+        # Canonical/source-message/media URLs are attribution or already attached media,
+        # never reader-action links. Block them even when the model inserted the URL
+        # itself and raw_text did not contain it literally.
+        redundant = sorted((candidate_urls & (source_urls | excluded)) - actionable)
         if redundant:
             issues.append("у тіло повернуто непрактичне посилання на матеріал/джерело, яке дублює footer")
     return tuple(dict.fromkeys(issues))
@@ -346,7 +385,7 @@ def _practical_literals(article: Any) -> list[tuple[str, str]]:
     source_name = str(_v(article, "source_name", "") or "")
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for value in actionable_source_urls(source, source_name=source_name):
+    for value in actionable_source_urls(source, source_name=source_name, excluded_urls=article_non_actionable_urls(article)):
         if value not in seen:
             seen.add(value); out.append(("Деталі/реєстрація", value))
     for email in re.findall(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source, flags=re.I):
@@ -371,6 +410,34 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
             f"AI прибрав практичні контакти/URL, а відновлення перевищує ліміт {int(hard_max_chars)}"
         )
     return value + suffix
+
+
+def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -> tuple[str, ...]:
+    """Final deterministic gate at the publication boundary.
+
+    It intentionally performs no AI work.  READY rows imported from an older
+    build or created before a channel-rule change must still satisfy the current
+    channel policy immediately before Telegram sees them.
+    """
+    value = str(text or "").strip()
+    issues: list[str] = []
+    if not value:
+        return ("порожній final_text",)
+    source_policy = _source_body_policy_issues(channel, article, value)
+    issues.extend(source_policy)
+    if channel.mode == ChannelMode.MONITORING:
+        issues.extend(_monitoring_grounding_blockers(article, value))
+    try:
+        body_hard_max = source_body_hard_limit(channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX)
+        effective_min, effective_max, validation_hard_max = _monitoring_limits(channel, article, body_hard_max)
+        validate_writer_output(
+            article, value, min_chars=effective_min, max_chars=effective_max,
+            hard_max_chars=validation_hard_max, required_context=source_body_context_name(channel, article),
+            slop_profile=_anti_slop_profile(channel),
+        )
+    except Exception as exc:
+        issues.append(str(exc))
+    return tuple(dict.fromkeys(item for item in issues if str(item).strip()))
 
 
 @dataclass(slots=True)
@@ -414,7 +481,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             obj = _parse_json(raw)
             return bool(obj.get("included", True)), bool(obj.get("excluded", False)), _clean(obj.get("reason"), 500)
 
-        result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22)
+        result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22, purpose="monitoring_selector")
         included, excluded, reason = parse(result.text)
         rejected = excluded or (bool(inclusion) and not included)
         return EditorialOutcome(
@@ -451,7 +518,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
                 raise ValueError("invalid decision")
             return obj
 
-        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=210, timeout_seconds=25)
+        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=210, timeout_seconds=25, purpose="editorial_selector")
         fit = parse_fit(fit_result.text)
         raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
         # RC54: a categorical PUBLISH with fit=9 is internally contradictory. For
@@ -508,7 +575,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
                 obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
             return obj
 
-        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=260, timeout_seconds=25).text)
+        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=260, timeout_seconds=25, purpose="commercial_value_gate").text)
 
     @staticmethod
     def _sold_value_allowed(data: Mapping[str, Any], fit: int, thresholds: Mapping[str, int] | None = None) -> tuple[bool, str, int]:
@@ -538,7 +605,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
                 obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
             return obj
 
-        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25).text)
+        return parse(self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=210, timeout_seconds=25, purpose="value_gate").text)
 
     @staticmethod
     def _value_allowed(data: Mapping[str, Any], fit: int, thresholds: Mapping[str, int] | None = None) -> tuple[bool, str, int]:
@@ -579,11 +646,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         monitoring_rule = (
             "\nКОРОТКЕ ДЖЕРЕЛО: не добирай обсяг штучно. Якщо SOURCE містить лише 1–2 факти, напиши короткий пост і завершуй. "
             "Не додавай фрази про те, що деталі/терміни не надані, якщо SOURCE цього прямо не каже. "
-            "Не додавай від себе порад, моралей, застережень або загальних фраз. "
+            "Не додавай від себе порад, моралей, застережень, оцінок важливості, висновків або загальних фраз. "
+            "Не пиши «це свідчить/показує/підкреслює», «важливий крок», «продовжує працювати/підтримувати» та подібні інтерпретації, якщо SOURCE прямо цього не стверджує. "
             if channel.mode == ChannelMode.MONITORING else ""
         )
         named_source_style = source_body_instruction(channel, article)
-        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.{monitoring_rule}{named_source_style}
+        prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
+СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий пост — 2–4 абзаци. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -592,7 +661,6 @@ EXTRA: {p.writer_extra_prompt}
 ANGLE: {selection.angle}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
-ФОРМАТ: якщо текст має 350+ символів, розбий його на 2–4 короткі змістові абзаци. Не пиши суцільною стіною. Коротке оперативне повідомлення до 350 символів може бути одним абзацом.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
@@ -604,6 +672,7 @@ SOURCE:
             value = str(raw or "").strip()
             if channel.mode == ChannelMode.MONITORING:
                 value = restore_practical_literals(article, value, hard_max_chars=validation_hard_max)
+                value = strip_non_actionable_article_urls(article, value)
             return value
 
         slop_profile = _anti_slop_profile(channel)
@@ -622,16 +691,14 @@ SOURCE:
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
-        result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30)
+        result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30, purpose="writer")
         draft = validate_writer_output(
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
         needs_trusted_editor = (
-            channel.mode == ChannelMode.MONITORING
-            or str(result.provider or "").casefold() not in TRUSTED_EDITOR_PROVIDERS
-            or quality.needs_second_candidate
+            quality.needs_second_candidate
             or bool(language_quality_issues(draft))
             or bool(human_style_issues(draft))
             or needs_grammar_polish(draft)
@@ -649,6 +716,8 @@ SOURCE:
         else:
             final = draft
 
+        # Optional local LanguageTool pass. It never creates a dependency, but if it
+        # is already available we accept only conservative edits and re-run every gate.
         lt = apply_local_languagetool_detailed(final, timeout=1.2, max_changes=18, require_ready=False)
         if lt.changes and preserves_content(final, lt.text):
             candidate = prepared_text(lt.text)
@@ -678,12 +747,13 @@ SOURCE:
         )
         source_attribution_instruction = source_body_instruction(channel, article)
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nФОРМАТ: якщо фінальний текст має 350+ символів, він повинен мати 2–4 короткі змістові абзаци; не зливай його в один блок.\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
             value = str(raw or "").strip()
             if channel.mode == ChannelMode.MONITORING:
                 value = restore_practical_literals(article, value, hard_max_chars=final_hard_max)
+                value = strip_non_actionable_article_urls(article, value)
             return value
 
         slop_profile = _anti_slop_profile(channel)
@@ -705,7 +775,7 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         try:
             result = self.gateway.run(
                 prompt, validator=validator, max_output_tokens=1100, timeout_seconds=28,
-                allowed_providers=TRUSTED_EDITOR_PROVIDERS if trusted_only else None,
+                allowed_providers=TRUSTED_EDITOR_PROVIDERS if trusted_only else None, purpose="final_editor",
             )
             candidate = prepared_text(result.text)
             validator(candidate)

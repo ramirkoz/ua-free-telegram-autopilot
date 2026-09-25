@@ -5,6 +5,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from ..secrets_store import load_secrets
+from ..fact_guard import strip_non_actionable_article_urls
 from ..facebook import FacebookError, publish_page_link
 from ..telegram import (
     TelegramError,
@@ -12,7 +13,7 @@ from ..telegram import (
     send_prepared_media_only,
 )
 from .source_attribution import attribution_for_article
-from .domain import BlockedBy, EditorialRuntimeProfile
+from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle, media_bundle_complete
 from .storage import V2Store
@@ -302,6 +303,31 @@ class Publisher:
         channel = self.store.get_channel(channel_id)
         if channel is None:
             raise ValueError("CHANNEL_MISSING")
+        current_text = str(article["final_text"] or "").strip()
+        if channel.mode == ChannelMode.MONITORING:
+            sanitized = strip_non_actionable_article_urls(article, current_text)
+            if sanitized != current_text:
+                current_text = sanitized
+                self.store.update_article(article_id, final_text=current_text)
+                article = self.store.get_article(article_id) or article
+                event(
+                    "publish", "removed non-actionable source/media URL from body",
+                    channel_id=channel_id, article_id=article_id,
+                )
+        # Local import avoids publisher <-> semantic/editorial module cycles while
+        # keeping the current channel rules authoritative at the last boundary.
+        from .editorial import prepublish_quality_issues
+        qa_issues = prepublish_quality_issues(channel, article, current_text)
+        if qa_issues:
+            detail = "; ".join(qa_issues[:6])
+            outcome = self.store.requeue_quality_rewrite(
+                article_id, error_code="PREPUBLISH_QA", detail=detail, max_attempts=3
+            )
+            event(
+                "publish", "pre-publish QA blocked READY article", level=30,
+                channel_id=channel_id, article_id=article_id, outcome=outcome, detail=detail[:1200],
+            )
+            return outcome
         schedule_ok, schedule_reason = self.can_publish_now(channel_id)
         if not schedule_ok:
             return schedule_reason

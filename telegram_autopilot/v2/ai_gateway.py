@@ -157,9 +157,6 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
 class AIGateway:
     """Modular V2 AI router with provider-aware health and local full fallback."""
 
-    # Codex uses the user's ChatGPT plan quota, so it is a trusted reserve, not
-    # the default engine for every selector/value task. Cheap direct providers run
-    # first; Codex remains available as the final cloud fallback.
     PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
     LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     LOCAL_LONG_MAX_OUTPUT = 720
@@ -357,6 +354,44 @@ class AIGateway:
             woke = self.store.wake_blocked(BlockedBy.AI, limit=500)
             event("ai", "provider restored", provider=provider, model=current.model, woke_waiting_ai=woke)
 
+
+    def _mark_probe_success(self, provider: str, slot_model: str, runtime_model: str) -> None:
+        current = self._model_health_map().get((provider, slot_model), AIModelHealth(provider=provider, model=slot_model))
+        current.state = ProviderState.HEALTHY
+        current.detail = f"manual/authenticated health probe OK via {runtime_model or slot_model}"
+        current.consecutive_failures = 0
+        current.cooldown_until = ""
+        current.updated_at = now_iso()
+        self.store.set_ai_model_health(current)
+        health = self._health_map().get(provider, ProviderHealth(provider=provider))
+        health.state = ProviderState.HEALTHY
+        health.model = runtime_model or slot_model
+        health.detail = "manual/authenticated health probe OK"
+        health.consecutive_failures = 0
+        health.cooldown_until = ""
+        health.updated_at = now_iso()
+        self.store.set_provider_health(health)
+
+    def _mark_probe_failure(self, provider: str, model: str, exc: Exception) -> tuple[ProviderState, str]:
+        state, seconds, scope = _failure_meta(exc)
+        current = self._model_health_map().get((provider, model), AIModelHealth(provider=provider, model=model))
+        current.state = state
+        current.detail = f"health probe: {str(exc)[:1100]}"
+        current.consecutive_failures = max(1, int(current.consecutive_failures or 0))
+        current.cooldown_until = _until(seconds) if scope != "task" else ""
+        current.updated_at = now_iso()
+        self.store.set_ai_model_health(current)
+        if scope == "provider":
+            health = self._health_map().get(provider, ProviderHealth(provider=provider))
+            health.state = state
+            health.model = model
+            health.detail = current.detail
+            health.consecutive_failures = max(1, int(health.consecutive_failures or 0))
+            health.cooldown_until = current.cooldown_until
+            health.updated_at = now_iso()
+            self.store.set_provider_health(health)
+        return state, scope
+
     def _call_slot(
         self,
         slot: legacy_ai.Slot,
@@ -474,6 +509,7 @@ class AIGateway:
         max_output_tokens: int = 800,
         timeout_seconds: int = 25,
         allowed_providers: Iterable[str] | None = None,
+        purpose: str = "content",
     ) -> AIResult:
         text_prompt = str(prompt or "").strip()
         if not text_prompt:
@@ -568,7 +604,7 @@ class AIGateway:
                 event(
                     "ai", "AI success", provider=provider, model=runtime_model,
                     elapsed=round(time.monotonic() - started, 2), chars=len(output),
-                    provider_state=str(summary.state), attempted=len(attempted),
+                    provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
                 )
                 return AIResult(output, provider, runtime_model, label, tuple(attempted))
             except Exception as exc:
@@ -577,7 +613,7 @@ class AIGateway:
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
                 if scope == "provider":
                     provider_suppressed.add(provider)
-                event("ai", "route failed", provider=provider, model=slot.model, state=str(state), detail=str(exc)[:600])
+                event("ai", "route failed", provider=provider, model=slot.model, state=str(state), purpose=str(purpose or "content"), detail=str(exc)[:600])
                 continue
 
         for provider in configured:
@@ -628,14 +664,14 @@ class AIGateway:
                     lock.release()
                 if not str(text or "").strip():
                     raise ProviderAPIError("health probe returned empty text", kind="bad_response")
-                self._mark_success(provider, slot.model, runtime_model, "authenticated completion probe OK")
+                self._mark_probe_success(provider, slot.model, runtime_model)
                 event(
                     "ai", "model health probe success", provider=provider, model=runtime_model,
                     elapsed=round(time.monotonic() - started, 2),
                 )
                 return self._refresh_provider_summary(provider, cfg)
             except Exception as exc:
-                _state, scope = self._mark_model_failure(provider, slot.model, exc)
+                _state, scope = self._mark_probe_failure(provider, slot.model, exc)
                 event(
                     "ai", "model health probe failed", provider=provider, model=slot.model, scope=scope,
                     elapsed=round(time.monotonic() - started, 2), detail=str(exc)[:700],

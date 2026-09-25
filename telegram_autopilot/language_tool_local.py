@@ -18,7 +18,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 
-from .paths import data_dir, logs_dir, tools_dir
+from .paths import logs_dir, tools_dir
 
 _DEFAULT_URL = "http://127.0.0.1:8081/v2/check"
 _LT_SNAPSHOT_URL = "https://languagetool.org/download/snapshots/LanguageTool-latest-snapshot.zip"
@@ -97,15 +97,7 @@ def _endpoint() -> str:
 
 
 def _tools_dir() -> Path:
-    path = tools_dir()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _runtime_state_dir() -> Path:
-    path = data_dir() / "runtime"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return tools_dir()
 
 
 def _lt_root() -> Path:
@@ -117,11 +109,11 @@ def _java_root() -> Path:
 
 
 def _state_path() -> Path:
-    return _runtime_state_dir() / "languagetool_install.json"
+    return _tools_dir() / "languagetool_install.json"
 
 
 def _stats_path() -> Path:
-    return _runtime_state_dir() / "languagetool_stats.json"
+    return _tools_dir() / "languagetool_stats.json"
 
 
 def _read_stats() -> dict[str, object]:
@@ -394,7 +386,7 @@ def _install_languagetool(callback: Callable[[str, str], None] | None) -> Path:
 
 
 def _pid_path() -> Path:
-    return _runtime_state_dir() / "languagetool_server.pid"
+    return _tools_dir() / "languagetool_server.pid"
 
 
 def _terminate_pid_tree(pid: int) -> None:

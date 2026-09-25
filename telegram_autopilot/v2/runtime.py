@@ -116,21 +116,13 @@ class RuntimeEngine:
         self.store.recover_stale_leases()
         self.stop_event.clear()
         self.started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        threading.Thread(target=self._startup_ai_probe, name="V2-AI-Startup-Probe", daemon=True).start()
+        event("ai", "startup live AI probes skipped; health will update on real work or explicit manual test")
         for row in self.store.list_channels(enabled_only=True):
             self._start_channel(int(row["id"]))
         if not self._watchdog_thread or not self._watchdog_thread.is_alive():
             self._watchdog_thread = threading.Thread(target=self._watchdog_loop, name="V2-Runtime-Watchdog", daemon=True)
             self._watchdog_thread.start()
         event("app", "V2 runtime started", channels=len(self._threads), collectors=len(self._collector_threads))
-
-    def _startup_ai_probe(self) -> None:
-        try:
-            health = self.gateway.probe_all()
-            healthy = sum(1 for item in health if str(item.state) == "HEALTHY")
-            event("ai", "startup provider probe complete", healthy=healthy, total=len(health))
-        except Exception as exc:
-            event("ai", "startup provider probe failed", level=logging.WARNING, detail=str(exc)[:1000])
 
     def stop(self, timeout: float = 8.0) -> None:
         self.stop_event.set()
@@ -205,6 +197,29 @@ class RuntimeEngine:
             self._touch(state, "loop")
             try:
                 self._maybe_expire_stale(channel_id, channel.max_age_hours, state)
+                # Drain an already prepared post before spending another AI request.
+                self._touch(state, "publish")
+                state.published += self.publisher.publish_ready(channel_id, heartbeat=lambda: self._touch(state, "publish"))
+
+                # Keep only a tiny READY buffer.  A 10-minute publication interval must
+                # not allow the worker to spend AI quota preparing dozens of posts that
+                # cannot be published yet.
+                with self.store.connect() as con:
+                    ready_count = int(con.execute(
+                        "SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'",
+                        (int(channel_id),),
+                    ).fetchone()[0] or 0)
+                ready_buffer = max(1, min(2, int(channel.max_posts_per_cycle or 1)))
+                can_publish, publish_reason = self.publisher.can_publish_now(channel_id)
+                if ready_count >= ready_buffer and not can_publish:
+                    self._touch(state, "idle")
+                    event(
+                        "worker", "AI preparation paused by READY buffer",
+                        channel_id=channel_id, ready=ready_count, buffer=ready_buffer, reason=publish_reason,
+                    )
+                    self.stop_event.wait(1.0)
+                    continue
+
                 self._touch(state, "process")
                 worked = self._process_one(channel_id, worker_id, state)
                 self._touch(state, "publish")
@@ -242,13 +257,14 @@ class RuntimeEngine:
                 continue
 
             started = time.monotonic()
+            # Poll interval is start-to-start, not finish-plus-interval.
+            state.last_collect_monotonic = started
             state.collecting = True
             state.collect_started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
             self._touch_collector(state)
             try:
                 result = self.ingest.collect_channel(channel_id, heartbeat=lambda: self._touch_collector(state))
                 finished = time.monotonic()
-                state.last_collect_monotonic = finished
                 state.collect_cycles += 1
                 state.last_collect_duration_seconds = round(max(0.0, finished - started), 2)
                 state.last_collect_completed_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -261,7 +277,6 @@ class RuntimeEngine:
                 event("worker", "collection cycle", channel_id=channel_id, duration_seconds=state.last_collect_duration_seconds, input_zero_add_cycles=state.input_zero_add_cycles, **result)
             except Exception as exc:
                 finished = time.monotonic()
-                state.last_collect_monotonic = finished
                 state.last_collect_duration_seconds = round(max(0.0, finished - started), 2)
                 state.collector_errors += 1
                 event("worker", "collector loop error", level=logging.ERROR, channel_id=channel_id, detail=str(exc)[:1200], duration_seconds=state.last_collect_duration_seconds)

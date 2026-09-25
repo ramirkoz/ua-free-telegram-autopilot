@@ -17,12 +17,12 @@ class ProductionMainWindow(ResponsiveMainWindow):
         self._rc20_heartbeat_after = None
         self._rc20_data_refresh_inflight: set[str] = set()
 
-        original = base_ui.SupervisorService
-        base_ui.SupervisorService = ProductionSupervisorService
+        original = base_ui.LocalOnlyProductionSupervisorService
+        base_ui.LocalOnlyProductionSupervisorService = ProductionSupervisorService
         try:
             base_ui.MainWindow.__init__(self, store, runtime, logs_dir)
         finally:
-            base_ui.SupervisorService = original
+            base_ui.LocalOnlyProductionSupervisorService = original
 
         self.book.bind("<<NotebookTabChanged>>", self._rc20_tab_changed, add="+")
         self._rc20_ui_heartbeat()

@@ -170,11 +170,11 @@ def _validate_stage(stage: Path, request: UpdateRequest, runtime: Path) -> None:
     if not abi_file.is_file() or abi_file.read_text(encoding="utf-8").strip() != UPDATE_RUNTIME_ABI:
         raise RuntimeError("UPDATE_RUNTIME_ABI_MISMATCH")
     for required in (
-        "_runtime/telegram_autopilot/v2/main.py",
-        "_runtime/telegram_autopilot/v2/storage.py",
-        "_runtime/telegram_autopilot/v2/update_protocol.py",
-        "_runtime/telegram_autopilot/v2/updater_helper.py",
-        "_runtime/Lib/site-packages/sitecustomize.py",
+        "telegram_autopilot/v2/main.py",
+        "telegram_autopilot/v2/storage.py",
+        "telegram_autopilot/v2/update_protocol.py",
+        "telegram_autopilot/v2/updater_helper.py",
+        "app_v2.py",
         "PUBLIC_VERSION.txt",
         "V2_VERSION.txt",
     ):

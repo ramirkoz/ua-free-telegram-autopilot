@@ -114,18 +114,6 @@ def assess_text(value: str, *, rules_path: str | Path, profile: str = "standard"
     if questions >= 2:
         findings.append(SlopFinding("R4", "Надлишок риторичних питань", "minor", questions, f"{questions} питань", 4))
 
-    # RC74 corruption guard: generative glitches must never be interpreted as
-    # stylistic imperfections. Six repeated alphabetic characters ("пппппп")
-    # or an absurd punctuation run are deterministic blockers.
-    repeated_letters = list(re.finditer(r"([A-Za-zА-Яа-яІіЇїЄєҐґ])\1{5,}", text, flags=re.I))
-    if repeated_letters:
-        sample = repeated_letters[0].group(0)[:24]
-        findings.append(SlopFinding("C1", "Пошкоджений повтор символів", "blocker", len(repeated_letters), sample, 18))
-    repeated_punctuation = list(re.finditer(r"([!?.,:;])\1{5,}", text))
-    if repeated_punctuation:
-        sample = repeated_punctuation[0].group(0)[:24]
-        findings.append(SlopFinding("C2", "Пошкоджений повтор пунктуації", "blocker", len(repeated_punctuation), sample, 18))
-
     # Collapse duplicate rules, keeping the strongest observation.
     by_rule: dict[str, SlopFinding] = {}
     for item in findings:

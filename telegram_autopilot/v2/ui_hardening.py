@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 import tkinter as tk
+from tkinter import ttk
 import threading
 import time
 from typing import Callable
@@ -36,7 +37,11 @@ class FastMainWindow(ProductionMainWindow):
         self._rc51_result_pump()
 
     def _install_windows_editing_support(self) -> None:
-        """Normal Windows editing in every active V2 Entry/Combobox/Text widget."""
+        """Normal Windows editing in every V2 Entry/Combobox/Text widget.
+
+        Physical Win32 keycodes keep Ctrl+V/C/X/A working while the Ukrainian
+        keyboard layout is active.  Right-click exposes a standard edit menu.
+        """
         for widget_class in ("Entry", "TEntry", "TCombobox", "Text"):
             self.bind_class(widget_class, "<Control-KeyPress>", self._control_edit_shortcut, add="+")
             self.bind_class(widget_class, "<Shift-Insert>", self._paste_shortcut, add="+")

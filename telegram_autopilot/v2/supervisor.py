@@ -732,9 +732,11 @@ class SupervisorService:
                 ))
 
             starve_code = f"CHANNEL_OUTPUT_STARVATION_{cid}"
-            starved = bool(op.get("output_starved"))
+            # Do not accuse a freshly restarted/migrated runtime of hours of starvation
+            # merely because the publication window opened before this process started.
+            starved = bool(op.get("output_starved")) and runtime_age >= 900.0
             elapsed_starved = self._condition_elapsed(starve_code, starved, now)
-            if starved and elapsed_starved >= 0:
+            if starved and elapsed_starved >= 300.0:
                 incidents.append(Incident(
                     "WARNING", starve_code, f"Канал «{name}» обробляє матеріали, але не публікує",
                     f"window={int(stats.get('output_starvation_window_hours') or 0)}h; "

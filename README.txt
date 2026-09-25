@@ -1,7 +1,8 @@
-UA FREE Telegram Autopilot v2.0.0-rc80 — MANUAL TEST
+UA FREE Telegram Autopilot v2.0.0-rc84 — MANUAL TEST
 
-RC80:
-- Codex SDK can be installed/updated explicitly into Tools\Codex from the AI tab.
-- Source attribution inside post body is controlled only by visible per-channel settings.
-- Conditional marker mode allows body attribution only when source_name contains the configured marker; otherwise source stays in footer only.
-- Core runtime contains only the generic attribution mechanism; channel-specific marker values live in channel policy data.
+Stability build based on RC83.
+- Import from RC83 Data.
+- Preserves durable Supervisor mirror/Telegram-report target only; old runtime state is not copied.
+- Monitoring body sanitizer removes source/canonical/already-attached-media URLs before publish while preserving real action links.
+- Supervisor reports Drive API and Telegram-report status in the UI.
+- GitHub/Drive release sync is intentionally disabled until Windows validation.
