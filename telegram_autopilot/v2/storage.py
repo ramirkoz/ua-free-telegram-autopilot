@@ -334,6 +334,27 @@ class V2Store:
         )
 
     @staticmethod
+    def _ensure_rc89_polling_repair(con: sqlite3.Connection) -> None:
+        """Repair RC88 carry-forward databases that retained the old 5-minute interval.
+
+        RC85 already had a one-time marker, so carrying that marker forward could
+        suppress the intended 15-minute baseline even when channel rows were still 5.
+        RC89 applies one explicit repair pass; operators remain free to edit later.
+        """
+        key = "rc89_poll_interval_15m_repair_v1"
+        row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if row:
+            return
+        con.execute(
+            "UPDATE channels SET poll_interval_minutes=15,updated_at=? WHERE poll_interval_minutes<15",
+            (now_iso(),),
+        )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, "1"),
+        )
+
+    @staticmethod
     def _ensure_source_attribution_mode(con: sqlite3.Connection) -> None:
         """Keep attribution as explicit channel data; never infer it from a name."""
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channels)").fetchall()}
