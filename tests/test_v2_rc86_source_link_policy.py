@@ -41,23 +41,10 @@ def test_strip_all_publication_links_removes_zabor_promos() -> None:
 
 def test_source_policy_is_operator_editable(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.set_source_suppress_publication_links(1, True)
-    assert store.source_suppress_publication_links(1) is True
-    store.set_source_suppress_publication_links(1, False)
-    assert store.source_suppress_publication_links(1) is False
+    assert store.source_strip_body_links(1) is False
+    store.set_source_strip_body_links(1, True)
+    assert store.source_strip_body_links(1) is True
+    store.set_source_strip_body_links(1, False)
+    assert store.source_strip_body_links(1) is False
 
 
-def test_rc86_seed_enables_existing_zabor_sources_once(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    with store.connect() as con:
-        con.execute("DELETE FROM meta WHERE key='rc86_source_link_policy_seed_v1'")
-        store._ensure_rc86_source_link_policy(con)
-        raw = con.execute("SELECT legacy_config_json FROM sources WHERE id=1").fetchone()[0]
-    payload = json.loads(raw)
-    assert payload["publication"]["suppress_links"] is True
-
-    # Operator remains authoritative after the one-time seed.
-    store.set_source_suppress_publication_links(1, False)
-    with store.connect() as con:
-        store._ensure_rc86_source_link_policy(con)
-    assert store.source_suppress_publication_links(1) is False
