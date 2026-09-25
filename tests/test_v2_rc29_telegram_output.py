@@ -91,7 +91,7 @@ def test_semantic_media_class_drift_is_accepted_inside_exact_widget() -> None:
     assert _urls(parser.entries[0]) == ["https://cdn.example/current-markup.jpg"]
     article = strict_stitch_telegram("community", parser.entries)[0]
     layout = json.loads(article.article_layout_json)
-    assert layout["telegram"]["media_filter_version"] == 5
+    assert layout["telegram"]["media_filter_version"] == 7
     assert layout["telegram"]["media_filter"]["content_media"] == 1
 
 
