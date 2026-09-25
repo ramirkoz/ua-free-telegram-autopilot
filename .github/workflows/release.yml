@@ -284,6 +284,7 @@ jobs:
             Pop-Location
             Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
             Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $stage 'Tools\Codex') -Recurse -Force -ErrorAction SilentlyContinue
           }
 
       - name: Native Windows credential-pair migration smoke
