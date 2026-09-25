@@ -352,14 +352,13 @@ def _strict_media_bearing(entry: base.TelegramEntry) -> bool:
 
 
 def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
-    """Attach adjacent Telegram text/media messages, including pending video posts.
+    """Build articles only from the exact Telegram post that owns the text/media.
 
-    Ownership remains deliberately narrow: consecutive Telegram post IDs and the
-    existing <=300 second adjacency window. Unlike the base stitcher, a same-post
-    video placeholder with no downloadable MP4 still counts as media-bearing for
-    stitching. It never becomes article media by itself; it only preserves the
-    relationship so the publication gate can defer the combined article instead of
-    publishing the caption as naked text.
+    Adjacent message IDs are not ownership evidence. Older stitching could attach a
+    media-only post N to text post N+1 merely because they were close in time, which
+    risks publishing another post's image/video. The strict pipeline now keeps
+    exact-post boundaries absolute; albums already exposed inside one Telegram widget
+    stay attached to that entry.
     """
     ordered = sorted(
         entries,
@@ -375,93 +374,13 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
     }
 
     articles: list[CollectedArticle] = []
-    i = 0
-    while i < len(ordered):
-        current = ordered[i]
-        current_media = _strict_media_bearing(current)
-
-        # media/video placeholder first -> text/caption next
-        if not current.text and current_media:
-            run = [current]
-            j = i + 1
-            while (
-                j < len(ordered)
-                and not ordered[j].text
-                and _strict_media_bearing(ordered[j])
-                and base._adjacent(run[-1], ordered[j])
-            ):
-                run.append(ordered[j])
-                j += 1
-
-            if j < len(ordered) and ordered[j].text and base._adjacent(run[-1], ordered[j]):
-                primary = ordered[j]
-                attached = run[:]
-                k = j + 1
-                previous = primary
-                while (
-                    k < len(ordered)
-                    and not ordered[k].text
-                    and _strict_media_bearing(ordered[k])
-                    and base._adjacent(previous, ordered[k])
-                ):
-                    attached.append(ordered[k])
-                    previous = ordered[k]
-                    k += 1
-                article = base._to_article(username, primary, attached)
-                event(
-                    "ingest", "telegram adjacent stitch", source=username,
-                    primary_post=base._post_number(primary.post),
-                    message_ids=[base._post_number(x.post) for x in [primary, *attached]],
-                    direction="media_then_text", pending_video=any(
-                        bool(getattr(x, "video_attachment_seen", False)) and not bool(x.media)
-                        for x in attached
-                    ),
-                )
-                articles.append(article)
-                i = k
-                continue
-
-            # Keep unmatched media-only entries out of publication. They may pair
-            # with a future text post on a later poll, where the source window will
-            # contain both messages.
-            i = j
+    for entry in ordered:
+        if not str(entry.text or "").strip():
+            # A media-only neighbour is never borrowed by another post. It can be
+            # reconsidered on a later exact-post fetch if Telegram exposes text.
             continue
-
-        # text/caption first -> media/video placeholder next
-        if current.text:
-            attached: list[base.TelegramEntry] = []
-            j = i + 1
-            previous = current
-            while (
-                j < len(ordered)
-                and not ordered[j].text
-                and _strict_media_bearing(ordered[j])
-                and base._adjacent(previous, ordered[j])
-            ):
-                attached.append(ordered[j])
-                previous = ordered[j]
-                j += 1
-
-            if not current.media and not attached and j >= len(ordered) and base._held(current):
-                i = j
-                continue
-
-            article = base._to_article(username, current, attached)
-            if attached:
-                event(
-                    "ingest", "telegram adjacent stitch", source=username,
-                    primary_post=base._post_number(current.post),
-                    message_ids=[base._post_number(x.post) for x in [current, *attached]],
-                    direction="text_then_media", pending_video=any(
-                        bool(getattr(x, "video_attachment_seen", False)) and not bool(x.media)
-                        for x in attached
-                    ),
-                )
-            articles.append(article)
-            i = j
-            continue
-
-        i += 1
+        article = base._to_article(username, entry, [])
+        articles.append(article)
 
     return [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
 

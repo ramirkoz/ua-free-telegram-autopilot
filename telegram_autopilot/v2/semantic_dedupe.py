@@ -255,6 +255,25 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     the same concrete study/court case/event while refusing broad same-topic stories
     that merely share a product or category.
     """
+    # Repeated breaking incidents can use almost identical wording many hours apart.
+    # Keep clearly separated cross-source incidents distinct unless hard identity
+    # evidence says they are literally the same source item.
+    ta, tb = _incident_time(current), _incident_time(candidate)
+    if ta is not None and tb is not None and abs((ta - tb).total_seconds()) > 6 * 3600:
+        left = str(_value(current, "title", "")) + "\n" + str(_value(current, "raw_text", ""))[:2200]
+        right = str(_value(candidate, "title", "")) + "\n" + str(_value(candidate, "raw_text", ""))[:2200]
+        actions = _incident_groups(left, _INCIDENT_ACTION_GROUPS) & _incident_groups(right, _INCIDENT_ACTION_GROUPS)
+        targets = _incident_groups(left, _INCIDENT_TARGET_GROUPS) & _incident_groups(right, _INCIDENT_TARGET_GROUPS)
+        source_a = int(_value(current, "source_id", 0) or 0)
+        source_b = int(_value(candidate, "source_id", 0) or -1)
+        hash_a = str(_value(current, "content_hash", "") or "").strip()
+        hash_b = str(_value(candidate, "content_hash", "") or "").strip()
+        url_a = str(_value(current, "canonical_source_url", "") or _value(current, "source_url", "") or "").strip()
+        url_b = str(_value(candidate, "canonical_source_url", "") or _value(candidate, "source_url", "") or "").strip()
+        exact_identity = bool((hash_a and hash_a == hash_b) or (url_a and url_a == url_b))
+        if actions and targets and source_a != source_b and not exact_identity:
+            return False, "separate breaking incidents outside six-hour event window"
+
     same, reason = _same_event(current, candidate)
     if same:
         return True, reason

@@ -16,6 +16,7 @@ from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRu
 from .ui_hardening import FastMainWindow as MainWindow
 from .update_protocol import UpdateProtocol
 from .first_run_import import maybe_import_legacy_data
+from .credential_recovery import recover_missing_credentials_from_siblings
 from ..language_tool_local import shutdown_languagetool
 
 
@@ -44,6 +45,11 @@ def main() -> int:
                 except Exception:
                     pass
             store = HardenedV2Store(v2_database_path())
+            try:
+                recovery = recover_missing_credentials_from_siblings()
+                event("app", "credential recovery checked", **recovery)
+            except Exception as exc:
+                event("app", "credential recovery failed", level=30, detail=str(exc)[:1200])
             runtime = RuntimeEngine(store)
             runtime.ingest = BoundedStrictIngestService(store)
             app = MainWindow(store, runtime, logs)

@@ -314,6 +314,9 @@ def test_runtime_channel_isolation_on_ai_outage(tmp_path: Path):
                 heartbeat()
             return 0
 
+        def can_publish_now(self, cid):
+            return True, "test"
+
     runtime.editorial = FakeEditorial()
     runtime.publisher = FakePublisher()
     runtime.ingest.collect_channel = lambda cid, heartbeat=None: {"seen": 0, "added": 0, "errors": 0}

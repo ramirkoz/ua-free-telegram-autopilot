@@ -7,7 +7,8 @@ import tempfile
 from pathlib import Path
 
 from .legacy_credentials import import_legacy_secrets
-from .migration import build_export_bundle, import_legacy_data
+from .domain import MigrationReport
+from .migration import build_export_bundle, import_legacy_data, locate_legacy_database
 from .storage import V2Store, now_iso
 
 
@@ -27,6 +28,38 @@ class MigrationManager:
 
     def export_legacy(self, legacy_path: str | Path, output_zip: str | Path) -> Path:
         return build_export_bundle(legacy_path, output_zip)
+
+    @staticmethod
+    def _locate_import_database(selected_path: str | Path) -> tuple[Path, bool]:
+        """Return (database_path, is_v2_database).
+
+        Current V2 Data must win over the old legacy database when both live in
+        the same portable/Data folder.  Older import code picked
+        telegram_autopilot.sqlite3 first, which is exactly the wrong file for
+        RC85+ migrations.
+        """
+        src = Path(selected_path)
+        if src.is_file() and src.suffix.casefold() in {".sqlite3", ".sqlite", ".db"}:
+            db = src.resolve()
+            return db, db.name.casefold() == "telegram_autopilot_v2.sqlite3"
+        if src.is_dir():
+            preferred_v2 = (
+                src / "telegram_autopilot_v2.sqlite3",
+                src / "Data" / "telegram_autopilot_v2.sqlite3",
+            )
+            for item in preferred_v2:
+                if item.exists():
+                    return item.resolve(), True
+        return locate_legacy_database(src).resolve(), False
+
+    @staticmethod
+    def _is_v2_database(path: Path) -> bool:
+        con = sqlite3.connect(f"file:{Path(path).resolve().as_posix()}?mode=ro", uri=True, timeout=30)
+        try:
+            existing = {str(r[0]) for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {"channels", "channel_policies", "sources", "articles", "jobs", "meta"}.issubset(existing)
+        finally:
+            con.close()
 
     @staticmethod
     def _sqlite_backup(source: Path, destination: Path) -> None:
@@ -84,10 +117,37 @@ class MigrationManager:
         temp.unlink(missing_ok=True)
 
         backup: Path | None = None
+        legacy_snapshot: Path | None = None
         try:
-            temp_store = V2Store(temp)
-            report = import_legacy_data(legacy_path, temp_store)
-            self._validate_database(temp)
+            source_db, hinted_v2 = self._locate_import_database(legacy_path)
+            snap_fd, snap_name = tempfile.mkstemp(
+                prefix="ua_free_import_snapshot.",
+                suffix=".sqlite3",
+            )
+            os.close(snap_fd)
+            legacy_snapshot = Path(snap_name)
+            legacy_snapshot.unlink(missing_ok=True)
+            self._sqlite_backup(source_db, legacy_snapshot)
+
+            is_v2 = hinted_v2 or self._is_v2_database(legacy_snapshot)
+            if is_v2:
+                # V2 -> V2 migration is an exact database carry-forward.
+                # Never reinterpret current data through the legacy converter.
+                self._sqlite_backup(legacy_snapshot, temp)
+                temp_store = V2Store(temp)  # initialize/upgrade current schema in-place
+                self._validate_database(temp)
+                with temp_store.connect() as con:
+                    report = MigrationReport(source=str(source_db))
+                    report.channels_total = report.channels_imported = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
+                    report.sources_total = report.sources_imported = int(con.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
+                    report.articles_total = report.articles_imported = int(con.execute("SELECT COUNT(*) FROM articles").fetchone()[0])
+                    report.published_imported = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED'").fetchone()[0])
+                    report.pending_reevaluation = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage<>'PUBLISHED' AND decision='PENDING'").fetchone()[0])
+                    report.archived_unpublished = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='ARCHIVED' AND published_at=''").fetchone()[0])
+            else:
+                temp_store = V2Store(temp)
+                report = import_legacy_data(legacy_snapshot, temp_store)
+                self._validate_database(temp)
 
             if self.target_db.exists():
                 backup_dir = self.target_db.parent / "migration_backups"
@@ -143,3 +203,8 @@ class MigrationManager:
                 temp.unlink(missing_ok=True)
             except OSError:
                 pass
+            if legacy_snapshot is not None:
+                try:
+                    legacy_snapshot.unlink(missing_ok=True)
+                except OSError:
+                    pass

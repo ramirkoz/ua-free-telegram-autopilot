@@ -97,7 +97,7 @@ def test_writer_qa_requires_explicit_named_source_context_when_requested() -> No
         validate_writer_output(article, contextless, min_chars=80, max_chars=450, hard_max_chars=850, required_context="Кушугумська громада")
 
 
-def test_rc35_schema_upgrade_preserves_rc34_communities_behavior_once(tmp_path) -> None:
+def test_source_attribution_schema_upgrade_is_explicit_and_name_agnostic(tmp_path) -> None:
     db = tmp_path / "old.sqlite3"
     with sqlite3.connect(db) as con:
         con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
@@ -107,7 +107,7 @@ def test_rc35_schema_upgrade_preserves_rc34_communities_behavior_once(tmp_path) 
     with sqlite3.connect(db) as con:
         columns = {row[1] for row in con.execute("PRAGMA table_info(channels)")}
         mode = con.execute("SELECT source_attribution_mode FROM channels WHERE id=3").fetchone()[0]
-        marker = con.execute("SELECT value FROM meta WHERE key='rc35_explicit_source_attribution_mode_v1'").fetchone()[0]
+        marker = con.execute("SELECT value FROM meta WHERE key='rc62_source_attribution_explicit_v1'").fetchone()[0]
     assert "source_attribution_mode" in columns
-    assert mode == "named_source"
+    assert mode == "standard"
     assert marker == "1"

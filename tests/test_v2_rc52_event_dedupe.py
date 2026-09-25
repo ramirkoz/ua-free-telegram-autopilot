@@ -132,7 +132,7 @@ def test_same_topic_but_different_mouse_study_is_not_collapsed() -> None:
     assert same is False
 
 
-def test_ctrlua_migration_sets_only_that_channel_to_scientific_profile(tmp_path) -> None:
+def test_channel_names_do_not_infer_dedupe_profiles(tmp_path) -> None:
     db = tmp_path / "old.sqlite3"
     with sqlite3.connect(db) as con:
         con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
@@ -177,14 +177,14 @@ def test_ctrlua_migration_sets_only_that_channel_to_scientific_profile(tmp_path)
     sold = store.get_channel(2)
 
     assert ctrl is not None and sold is not None
-    assert ctrl.dedupe_profile == DedupeProfile.SCIENTIFIC_NEWS
-    assert ctrl.dedupe_scientific_names is True
-    assert ctrl.dedupe_compound_events is True
-    assert ctrl.dedupe_rare_terms is True
+    assert ctrl.dedupe_profile == DedupeProfile.STANDARD
+    assert ctrl.dedupe_scientific_names is False
+    assert ctrl.dedupe_compound_events is False
+    assert ctrl.dedupe_rare_terms is False
     assert ctrl.published_dedupe_window_hours == 720
 
-    assert sold.dedupe_profile == DedupeProfile.COMMERCIAL_EDITORIAL
-    assert sold.editorial_runtime_profile == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
+    assert sold.dedupe_profile == DedupeProfile.STANDARD
+    assert sold.editorial_runtime_profile == EditorialRuntimeProfile.STANDARD
     assert sold.dedupe_scientific_names is False
     assert sold.dedupe_compound_events is False
     assert sold.dedupe_rare_terms is False
