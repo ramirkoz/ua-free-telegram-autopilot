@@ -159,15 +159,15 @@ jobs:
           def _bootstrap_codex():
               if _codex_present():
                   return True, ''
-              root = _data_root() / 'ai_runtime'
+              root = Path(__file__).resolve().parent / 'Tools' / 'Codex'
               versions = root / 'codex_versions'
               versions.mkdir(parents=True, exist_ok=True)
-              unique = f"codex-0.147.0-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+              unique = f"codex-0.156.1-{int(time.time())}-{uuid.uuid4().hex[:8]}"
               staging = versions / ('.' + unique + '.tmp')
               target = versions / unique
               staging.mkdir(parents=True, exist_ok=False)
               runtime = Path(__file__).resolve().parent / '_runtime_console.exe'
-              command = [str(runtime), '-I', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--target', str(staging), 'openai-codex==0.147.0']
+              command = [str(runtime), '-I', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--target', str(staging), 'openai-codex==0.156.1']
               env = dict(os.environ)
               env['PYTHONUTF8'] = '1'
               env['UA_FREE_CODEX_BOOTSTRAP'] = '0'
@@ -179,7 +179,7 @@ jobs:
                   staging.rename(target)
                   pointer = root / 'codex_active.json'
                   temp = root / 'codex_active.tmp'
-                  temp.write_text(json.dumps({'directory': target.relative_to(root).as_posix(), 'package': 'openai-codex==0.147.0', 'updated_at': int(time.time())}, ensure_ascii=False, indent=2), encoding='utf-8')
+                  temp.write_text(json.dumps({'directory': target.relative_to(root).as_posix(), 'package': 'openai-codex==0.156.1', 'updated_at': int(time.time())}, ensure_ascii=False, indent=2), encoding='utf-8')
                   os.replace(temp, pointer)
                   return True, ''
               except Exception as exc:
@@ -234,7 +234,7 @@ jobs:
           Розпакуйте у нову папку та запустіть UA_FREE_Telegram_Autopilot.exe.
           V2 database: Data\telegram_autopilot_v2.sqlite3
           Логи: Data\logs\v2
-          Codex 0.147.0 НЕ роздуває базовий portable: при першому запуску він автоматично встановлюється окремо у Data\ai_runtime.
+          Codex 0.156.1 НЕ роздуває базовий portable: при першому запуску він автоматично встановлюється окремо у Tools\Codex.
           Для першого встановлення Codex потрібен інтернет; системний Python не потрібен.
           "@ | Set-Content (Join-Path $stage 'README_V2.txt') -Encoding utf8
           New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
@@ -278,7 +278,7 @@ jobs:
           Remove-Item Env:UA_FREE_CODEX_BOOTSTRAP_ONLY -ErrorAction SilentlyContinue
           Push-Location $stage
           try {
-            & .\_runtime_console.exe -I -c "from telegram_autopilot.codex_engine import inspect_codex; s=inspect_codex(); assert s.installed, s; assert s.version == '0.147.0', s; print('V2_CODEX_FIRST_RUN_BOOTSTRAP_PASS', s.version)"
+            & .\_runtime_console.exe -I -c "from telegram_autopilot.codex_engine import inspect_codex; s=inspect_codex(); assert s.installed, s; assert s.version == '0.156.1', s; print('V2_CODEX_FIRST_RUN_BOOTSTRAP_PASS', s.version)"
             if ($LASTEXITCODE -ne 0) { throw 'Installed Codex bootstrap validation failed' }
           } finally {
             Pop-Location
