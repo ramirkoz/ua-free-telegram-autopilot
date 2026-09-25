@@ -204,6 +204,7 @@ _INCIDENT_TARGET_GROUPS = {
     "residential": ("житлов","будин","квартир","residential","house","apartment"),
     "infrastructure": ("інфраструкт","енерг","підстанц","об'єкт","об’єкт","infrastructure","energy"),
     "education": ("школ","універс","освіт","school","university","education"),
+    "evacuation": ("евакуац","евакуаційн","евакуаційник","волонтер","рятуваль","evacuat","volunteer","rescue"),
 }
 _INCIDENT_GENERIC = {"російськ","росіян","ворож","військ","міст","област","район","сьогодні","вранц","зранк","наслідк","інформац","уточню","служб","місц","людин","допомог","атака","удар","обстріл"}
 
@@ -322,6 +323,31 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
             f"body={body_shared}/{body_containment:.2f} "
             f"bigrams={shared_bigrams} trigrams={shared_trigrams}"
         )
+
+    # RC86: independently rewritten copies from different sources may have weak
+    # source-text overlap but converge to almost the same Ukrainian publication.
+    # At pre-publish time this is strong evidence of one event. Keep the threshold
+    # deliberately high and require a tight time window to avoid collapsing later updates.
+    final_a = str(_value(current, "final_text", "") or "")
+    final_b = str(_value(candidate, "final_text", "") or "")
+    if final_a.strip() and final_b.strip():
+        ta, tb = _incident_time(current), _incident_time(candidate)
+        close_in_time = ta is None or tb is None or abs((ta - tb).total_seconds()) <= 6 * 3600
+        final_shared, final_containment = _concept_overlap(final_a, final_b)
+        final_bigrams = len(_concept_ngrams(final_a, 2) & _concept_ngrams(final_b, 2))
+        final_trigrams = len(_concept_ngrams(final_a, 3) & _concept_ngrams(final_b, 3))
+        if (
+            close_in_time
+            and final_shared >= 8
+            and final_containment >= 0.55
+            and final_bigrams >= 5
+            and final_trigrams >= 2
+        ):
+            return True, (
+                "high-confidence final-text event duplicate "
+                f"final={final_shared}/{final_containment:.2f} "
+                f"bigrams={final_bigrams} trigrams={final_trigrams}"
+            )
 
     # READY articles already have the Ukrainian final text. Use it only as a
     # corroborating signal and never without meaningful overlap in the source copy.

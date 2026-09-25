@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
@@ -87,6 +88,32 @@ def _web_media_provenance(article: Any) -> str:
         return ""
     meta = layout.get("featured_meta")
     return str(meta.get("provenance") or "") if isinstance(meta, dict) else ""
+
+
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:https?://|www\.)[^)]+\)", re.IGNORECASE)
+_BARE_LINK_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
+_EMPTY_PROMO_LINE_RE = re.compile(
+    r"(?iu)^\s*(?:детальніше|детали|деталі(?:/реєстрація)?|реєстрація|registration|read more|посилання)\s*[:：-]?\s*$"
+)
+
+
+def _strip_all_publication_links(text: str) -> str:
+    """Remove clickable/bare URLs while preserving useful linked anchor text."""
+    value = _MARKDOWN_LINK_RE.sub(lambda match: str(match.group(1) or "").strip(), str(text or ""))
+    value = _BARE_LINK_RE.sub("", value)
+    lines: list[str] = []
+    for raw in value.splitlines():
+        line = raw.strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if _EMPTY_PROMO_LINE_RE.fullmatch(line):
+            continue
+        lines.append(line)
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 def _source_urls(article: Any) -> list[str]:
@@ -304,6 +331,17 @@ class Publisher:
         if channel is None:
             raise ValueError("CHANNEL_MISSING")
         current_text = str(article["final_text"] or "").strip()
+        strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
+        if strip_body_links:
+            sanitized = _strip_all_publication_links(current_text)
+            if sanitized != current_text:
+                current_text = sanitized
+                self.store.update_article(article_id, final_text=current_text)
+                article = self.store.get_article(article_id) or article
+                event(
+                    "publish", "source setting removed URLs from article body",
+                    channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
+                )
         if channel.mode == ChannelMode.MONITORING:
             sanitized = strip_non_actionable_article_urls(article, current_text)
             if sanitized != current_text:
@@ -429,7 +467,7 @@ class Publisher:
                     channel.telegram_chat_id,
                     post_text,
                     source_url=source_url,
-                    source_urls=attribution_urls,
+                    source_urls=source_urls,
                     source_labels=attribution_labels,
                     timeout=45.0,
                 )
@@ -482,7 +520,7 @@ class Publisher:
                     channel.telegram_chat_id,
                     post_text,
                     source_url=source_url,
-                    source_urls=attribution_urls,
+                    source_urls=source_urls,
                     source_labels=attribution_labels,
                     timeout=45.0,
                 )
@@ -536,7 +574,7 @@ class Publisher:
                             post_text,
                             chunk[0],
                             source_url=source_url,
-                            source_urls=attribution_urls,
+                            source_urls=source_urls,
                             source_labels=attribution_labels,
                             timeout=75.0,
                         )
@@ -549,7 +587,7 @@ class Publisher:
                         chunk,
                         caption=post_text if is_final_chunk else "",
                         source_url=source_url if is_final_chunk else "",
-                        source_urls=attribution_urls if is_final_chunk else None,
+                        source_urls=source_urls if is_final_chunk else None,
                         source_labels=attribution_labels if is_final_chunk else None,
                         timeout=90.0,
                     )
@@ -568,7 +606,7 @@ class Publisher:
                             channel.telegram_chat_id,
                             post_text,
                             source_url=source_url,
-                            source_urls=attribution_urls,
+                            source_urls=source_urls,
                             source_labels=attribution_labels,
                             timeout=45.0,
                         )
