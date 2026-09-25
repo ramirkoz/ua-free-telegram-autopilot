@@ -94,7 +94,7 @@ def test_telegram_neighbour_media_is_never_stitched() -> None:
     layout = json.loads(items[0].article_layout_json)
     assert layout["telegram"]["message_ids"] == ["101"]
     assert layout["telegram"]["stitched"] is False
-    assert layout["telegram"]["media_filter_version"] == 5
+    assert layout["telegram"]["media_filter_version"] == 7
 
 
 def test_pre_rc19_telegram_snapshot_is_quarantined(tmp_path: Path) -> None:
