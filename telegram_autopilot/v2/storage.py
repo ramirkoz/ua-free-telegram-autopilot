@@ -313,7 +313,6 @@ class V2Store:
                 self._ensure_rc71_commercial_media_quality_policy(con)
                 self._ensure_rc72_channel_policy_tuning(con)
                 self._ensure_rc85_polling_baseline(con)
-                self._ensure_rc86_source_link_policy(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
 
     @staticmethod
@@ -1102,7 +1101,7 @@ class V2Store:
         clause=" AND enabled=1" if enabled_only else ""
         with self.connect() as con: return list(con.execute(f"SELECT * FROM sources WHERE channel_id=?{clause} ORDER BY priority,id",(int(channel_id),)))
 
-    def source_suppress_publication_links(self, source_id: int) -> bool:
+    def source_strip_body_links(self, source_id: int) -> bool:
         with self.connect() as con:
             row = con.execute("SELECT legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
         if row is None:
@@ -1114,9 +1113,9 @@ class V2Store:
         if not isinstance(payload, dict):
             return False
         publication = payload.get("publication")
-        return bool(publication.get("suppress_links")) if isinstance(publication, dict) else False
+        return bool(publication.get("strip_body_links")) if isinstance(publication, dict) else False
 
-    def set_source_suppress_publication_links(self, source_id: int, enabled: bool) -> None:
+    def set_source_strip_body_links(self, source_id: int, enabled: bool) -> None:
         with self.connect() as con:
             row = con.execute("SELECT legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
             if row is None:
@@ -1130,7 +1129,7 @@ class V2Store:
             publication = payload.get("publication")
             if not isinstance(publication, dict):
                 publication = {}
-            publication["suppress_links"] = bool(enabled)
+            publication["strip_body_links"] = bool(enabled)
             payload["publication"] = publication
             con.execute(
                 "UPDATE sources SET legacy_config_json=? WHERE id=?",
