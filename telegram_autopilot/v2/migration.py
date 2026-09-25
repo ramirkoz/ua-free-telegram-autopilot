@@ -147,13 +147,37 @@ def _canonical_url(data: dict[str, Any]) -> str:
     return value if value.startswith(("http://", "https://")) else ""
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _merge_legacy_json(raw: Any, extras: dict[str, Any]) -> str:
+    payload = _json_object(raw)
+    for key, value in extras.items():
+        if key not in payload:
+            payload[key] = value
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
 def _known_channel_fields() -> set[str]:
     return {
-        "id","name","telegram_chat_id","enabled","channel_mode","mode","editorial_mode","editorial_profile","include_source_link",
-        "poll_interval_minutes","poll_immediate","min_publish_interval_minutes","dedupe_window_hours","max_age_hours","max_posts_per_cycle",
-        "publish_24h","publish_start","publish_end","publish_immediately","topic_balance_enabled","topic_daily_limit","related_spacing_posts",
-        "editorial_weights_json","language_mode","content_direction","language_direction","input_language_mode","media_enrichment_mode",
-        "media_first_allowed","media_min_text_chars","created_at","updated_at",
+        "id","name","telegram_chat_id","enabled","channel_mode","mode","editorial_mode","editorial_profile",
+        "editorial_runtime_profile","include_source_link","source_link_required","source_attribution_mode",
+        "poll_interval_minutes","poll_immediate","min_publish_interval_minutes","dedupe_window_hours","dedupe_profile",
+        "dedupe_scientific_names","dedupe_compound_events","dedupe_rare_terms","published_dedupe_window_hours",
+        "max_age_hours","max_posts_per_cycle","publish_24h","publish_start","publish_end","publish_immediately",
+        "topic_balance_enabled","topic_daily_limit","related_spacing_posts","editorial_weights_json","editorial_thresholds_json",
+        "output_starvation_enabled","output_starvation_window_hours","output_starvation_min_processed","output_starvation_min_published",
+        "page_prefer_feed","page_candidate_scan_limit","page_fetch_limit","input_starvation_enabled","input_starvation_min_seen",
+        "input_starvation_cycles","language_mode","content_direction","language_direction","input_language_mode",
+        "media_enrichment_mode","media_first_allowed","media_min_text_chars","facebook_page_ids_json","legacy_config_json",
+        "created_at","updated_at",
     }
 
 
@@ -190,21 +214,34 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                     stamp = str(_pick(d,"updated_at","created_at",default=now_iso()) or now_iso())
                     new.execute(
                         """INSERT OR REPLACE INTO channels(
-                           id,name,telegram_chat_id,enabled,channel_mode,editorial_profile,include_source_link,source_link_required,
-                           poll_interval_minutes,poll_immediate,min_publish_interval_minutes,dedupe_window_hours,max_age_hours,max_posts_per_cycle,
-                           publish_24h,publish_start,publish_end,publish_immediately,topic_balance_enabled,topic_daily_limit,related_spacing_posts,
-                           editorial_weights_json,language_mode,media_enrichment_mode,media_first_allowed,media_min_text_chars,legacy_config_json,created_at,updated_at
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           id,name,telegram_chat_id,enabled,channel_mode,editorial_profile,editorial_runtime_profile,
+                           include_source_link,source_link_required,source_attribution_mode,
+                           poll_interval_minutes,poll_immediate,min_publish_interval_minutes,dedupe_window_hours,
+                           dedupe_profile,dedupe_scientific_names,dedupe_compound_events,dedupe_rare_terms,published_dedupe_window_hours,
+                           max_age_hours,max_posts_per_cycle,publish_24h,publish_start,publish_end,publish_immediately,
+                           topic_balance_enabled,topic_daily_limit,related_spacing_posts,editorial_weights_json,editorial_thresholds_json,
+                           output_starvation_enabled,output_starvation_window_hours,output_starvation_min_processed,output_starvation_min_published,
+                           page_prefer_feed,page_candidate_scan_limit,page_fetch_limit,input_starvation_enabled,input_starvation_min_seen,input_starvation_cycles,
+                           language_mode,media_enrichment_mode,media_first_allowed,media_min_text_chars,facebook_page_ids_json,legacy_config_json,created_at,updated_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             cid,str(d.get("name") or f"Канал {cid}"),str(d.get("telegram_chat_id") or ""),_bool(d.get("enabled"),True),_legacy_mode(d),
-                            str(d.get("editorial_profile") or ""),_bool(d.get("include_source_link"),True),1,
+                            str(d.get("editorial_profile") or ""),str(d.get("editorial_runtime_profile") or "standard"),
+                            _bool(d.get("include_source_link"),True),_bool(d.get("source_link_required"),True),str(d.get("source_attribution_mode") or "standard"),
                             _int(d.get("poll_interval_minutes"),15),_bool(d.get("poll_immediate"),False),_int(d.get("min_publish_interval_minutes"),10),
-                            _int(d.get("dedupe_window_hours"),72),_int(d.get("max_age_hours"),24),_int(d.get("max_posts_per_cycle"),3),
+                            _int(d.get("dedupe_window_hours"),72),str(d.get("dedupe_profile") or "standard"),
+                            _bool(d.get("dedupe_scientific_names"),False),_bool(d.get("dedupe_compound_events"),False),_bool(d.get("dedupe_rare_terms"),False),
+                            _int(d.get("published_dedupe_window_hours"),168),_int(d.get("max_age_hours"),24),_int(d.get("max_posts_per_cycle"),3),
                             _bool(d.get("publish_24h"),False),str(d.get("publish_start") or "07:00"),str(d.get("publish_end") or "00:00"),_bool(d.get("publish_immediately"),False),
                             _bool(d.get("topic_balance_enabled"),True),_int(d.get("topic_daily_limit"),2),_int(d.get("related_spacing_posts"),5),
-                            str(d.get("editorial_weights_json") or "[]"),_legacy_language(d),str(d.get("media_enrichment_mode") or "auto"),
-                            _bool(d.get("media_first_allowed"),True),_int(d.get("media_min_text_chars"),500),json.dumps(extras,ensure_ascii=False,separators=(",",":"),default=str),
-                            str(d.get("created_at") or stamp),stamp,
+                            str(d.get("editorial_weights_json") or "[]"),str(d.get("editorial_thresholds_json") or "{}"),
+                            _bool(d.get("output_starvation_enabled"),True),_int(d.get("output_starvation_window_hours"),4),
+                            _int(d.get("output_starvation_min_processed"),20),_int(d.get("output_starvation_min_published"),1),
+                            _bool(d.get("page_prefer_feed"),False),_int(d.get("page_candidate_scan_limit"),24),_int(d.get("page_fetch_limit"),8),
+                            _bool(d.get("input_starvation_enabled"),True),_int(d.get("input_starvation_min_seen"),40),_int(d.get("input_starvation_cycles"),3),
+                            _legacy_language(d),str(d.get("media_enrichment_mode") or "auto"),_bool(d.get("media_first_allowed"),True),
+                            _int(d.get("media_min_text_chars"),500),str(d.get("facebook_page_ids_json") or "[]"),
+                            _merge_legacy_json(d.get("legacy_config_json"),extras),str(d.get("created_at") or stamp),stamp,
                         ),
                     )
                     p = policies.get(cid,{})
@@ -212,13 +249,16 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                     selection = str(p.get("selection_rules") or d.get("editorial_profile") or "")
                     new.execute(
                         """INSERT OR REPLACE INTO channel_policies(channel_id,enabled,purpose,audience,selection_rules,rejection_rules,writing_rules,style_rules,
-                           positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,media_policy,target_min_chars,target_max_chars,updated_at)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           positive_examples,negative_examples,extra_instructions,selector_extra_prompt,writer_extra_prompt,
+                           source_body_attribution_mode,source_body_attribution_marker,media_policy,target_min_chars,target_max_chars,updated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (cid,_bool(p.get("enabled"),True),purpose,str(p.get("audience") or "Україномовна аудиторія каналу."),selection,
                          str(p.get("rejection_rules") or ""),str(p.get("writing_rules") or ""),str(p.get("style_rules") or ""),
                          str(p.get("positive_examples") or ""),str(p.get("negative_examples") or ""),str(p.get("extra_instructions") or ""),
-                         str(p.get("selector_extra_prompt") or ""),str(p.get("writer_extra_prompt") or ""),str(p.get("media_policy") or "required"),
-                         _int(p.get("target_min_chars"),300),_int(p.get("target_max_chars"),750),str(p.get("updated_at") or stamp)),
+                         str(p.get("selector_extra_prompt") or ""),str(p.get("writer_extra_prompt") or ""),
+                         str(p.get("source_body_attribution_mode") or "footer_only"),str(p.get("source_body_attribution_marker") or ""),
+                         str(p.get("media_policy") or "required"),_int(p.get("target_min_chars"),300),_int(p.get("target_max_chars"),750),
+                         str(p.get("updated_at") or stamp)),
                     )
                     report.channels_imported += 1
 
@@ -227,14 +267,14 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                     d = _row_dict(row); sid = _int(d.get("id"),0); cid = _int(d.get("channel_id"),0)
                     if not sid or not cid:
                         continue
-                    known = {"id","channel_id","kind","name","url","enabled","initialized","priority","last_checked_at","last_error"}
+                    known = {"id","channel_id","kind","name","url","enabled","initialized","priority","last_checked_at","last_error","legacy_config_json"}
                     extras = {k:v for k,v in d.items() if k not in known}
                     new.execute(
                         """INSERT OR REPLACE INTO sources(id,channel_id,kind,name,url,enabled,initialized,priority,last_checked_at,last_error,legacy_config_json)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                         (sid,cid,str(d.get("kind") or "web"),str(d.get("name") or d.get("url") or f"Source {sid}"),str(d.get("url") or ""),
                          _bool(d.get("enabled"),True),_bool(d.get("initialized"),False),_int(d.get("priority"),100),str(d.get("last_checked_at") or ""),
-                         str(d.get("last_error") or ""),json.dumps(extras,ensure_ascii=False,separators=(",",":"),default=str)),
+                         str(d.get("last_error") or ""),_merge_legacy_json(d.get("legacy_config_json"),extras)),
                     )
                     source_ids.add(sid); report.sources_imported += 1
 
