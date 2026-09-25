@@ -322,6 +322,7 @@ jobs:
           Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
           $env:UA_FREE_TELEGRAM_AUTOPILOT_DATA=$smoke
           $env:UA_FREE_CODEX_BOOTSTRAP='0'
+          $env:UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT='1'
           $p=Start-Process -FilePath $launcher -WorkingDirectory $stage -PassThru
           Start-Sleep -Seconds 8
           $p.Refresh()
@@ -329,6 +330,7 @@ jobs:
           if (-not (Test-Path (Join-Path $smoke 'telegram_autopilot_v2.sqlite3'))) { throw 'V2 DB not initialized' }
           & taskkill.exe /PID $p.Id /T /F | Out-Null
           Remove-Item Env:UA_FREE_CODEX_BOOTSTRAP -ErrorAction SilentlyContinue
+          Remove-Item Env:UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT -ErrorAction SilentlyContinue
           Remove-Item Env:UA_FREE_TELEGRAM_AUTOPILOT_DATA -ErrorAction SilentlyContinue
           Write-Host 'V2_NATIVE_GUI_SMOKE_PASS'
 
