@@ -275,6 +275,17 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
     if marker.exists() or target_db.exists():
         return {"imported": False, "reason": "already_initialized"}
 
+    if str(os.environ.get("UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT") or "").strip() == "1":
+        marker.write_text(
+            json.dumps(
+                {"imported": False, "skipped": True, "reason": "noninteractive_first_run", "at": datetime.now(timezone.utc).isoformat()},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return {"imported": False, "reason": "noninteractive_first_run"}
+
     try:
         wants = messagebox.askyesno(
             "UA FREE Telegram Autopilot · перший запуск",
