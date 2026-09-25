@@ -10,7 +10,7 @@ def test_production_ui_does_not_chain_three_supervisors():
     source = inspect.getsource(production_ui.ProductionMainWindow.__init__)
     assert "ResponsiveMainWindow.__init__" not in source
     assert "base_ui.MainWindow.__init__" in source
-    assert "base_ui.SupervisorService = ProductionSupervisorService" in source
+    assert "base_ui.LocalOnlyProductionSupervisorService = ProductionSupervisorService" in source
     assert "self.supervisor.stop()" not in source
     assert "self.supervisor.start()" not in source
 
