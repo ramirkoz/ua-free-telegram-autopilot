@@ -29,15 +29,13 @@ def _candidate_score(cfg: SecretConfig) -> int:
     return score
 
 
-def _candidate_data_dirs() -> Iterable[Path]:
-    current_root = runtime_dir().resolve()
-    parent = current_root.parent
+def _autopilot_data_dirs(parent: Path, *, exclude_root: Path | None = None) -> Iterable[Path]:
     try:
         roots = [
             item
             for item in parent.iterdir()
             if item.is_dir()
-            and item.resolve() != current_root
+            and (exclude_root is None or item.resolve() != exclude_root.resolve())
             and item.name.casefold().startswith("ua_free_telegram_autopilot")
         ]
     except OSError:
@@ -45,7 +43,49 @@ def _candidate_data_dirs() -> Iterable[Path]:
     for root in roots:
         data = root / "Data"
         if data.is_dir():
-            yield data
+            yield data.resolve()
+
+
+def _candidate_data_dirs() -> Iterable[Path]:
+    current_root = runtime_dir().resolve()
+    yield from _autopilot_data_dirs(current_root.parent, exclude_root=current_root)
+
+
+def _lineage_data_dirs(source_data: str | Path) -> Iterable[Path]:
+    """Yield credential donors around both the selected old build and current build.
+
+    A migration may be selected from a newer RC whose database is good but whose
+    secret pair already lost older fallback providers. In that case the authoritative
+    donor can be an older Autopilot folder beside the selected build, not beside the
+    new portable. Only explicit Autopilot sibling folders are inspected; there is no
+    recursive home-directory secret scan.
+    """
+    source = Path(source_data).resolve()
+    seen: set[str] = set()
+
+    def emit(path: Path):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        key = str(resolved).casefold()
+        if key in seen or not resolved.is_dir():
+            return
+        seen.add(key)
+        yield resolved
+
+    yield from emit(source)
+
+    # source is normally <old portable>/Data, so source.parent.parent is the
+    # directory that contains RC84/RC90/RC91/... sibling portable folders.
+    old_root = source.parent
+    old_parent = old_root.parent
+    for candidate in _autopilot_data_dirs(old_parent):
+        yield from emit(candidate)
+
+    # Preserve the RC90 behaviour too: donors located beside the new portable.
+    for candidate in _candidate_data_dirs():
+        yield from emit(candidate)
 
 
 def _merge_missing(current: SecretConfig, donor: SecretConfig) -> SecretConfig:
@@ -91,7 +131,7 @@ def _merge_missing(current: SecretConfig, donor: SecretConfig) -> SecretConfig:
 
     donor_pages = {str(item.get("id") or "").strip(): dict(item) for item in (donor.facebook_pages or []) if str(item.get("id") or "").strip()}
     current_pages = {str(item.get("id") or "").strip(): dict(item) for item in (current.facebook_pages or []) if str(item.get("id") or "").strip()}
-    donor_pages.update(current_pages)  # current page/token values always win
+    donor_pages.update(current_pages)
     payload["facebook_pages"] = list(donor_pages.values())
 
     return SecretConfig(**payload).normalized()
@@ -115,67 +155,9 @@ def _ai_routes(cfg: SecretConfig) -> dict[str, bool]:
     }
 
 
-def merge_missing_credentials_from_data(source_data: str | Path) -> dict[str, object]:
-    """Merge one explicitly selected Data credential pair without overwriting current values.
-
-    This is used by first-run import. A Codex bootstrap may already have created a
-    valid current encrypted secret file before the user imports an older Data
-    folder. Copying the old pair byte-for-byte would erase those current values.
-    RC90 decrypts both configs and fills only fields that are actually missing.
-    """
-    source = Path(source_data)
-    key = source / "secrets.key"
-    secure = source / "secrets.secure"
-    if not key.is_file() or not secure.is_file():
-        return {"merged": False, "reason": "source_pair_missing", "recovered_fields": []}
-
-    donor = load_secrets_from_files(key, secure).normalized()
-    current = load_secrets().normalized()
-    merged = _merge_missing(current, donor)
-    changed = _changed_fields(current, merged)
-    if not changed:
-        return {
-            "merged": False,
-            "reason": "no_missing_values_found",
-            "recovered_fields": [],
-            "ai_routes": _ai_routes(current),
-        }
-
-    save_secrets(merged)
-    return {
-        "merged": True,
-        "reason": "missing_values_merged",
-        "source": str(source),
-        "recovered_fields": changed,
-        "ai_routes": _ai_routes(merged),
-    }
-
-
-def recover_missing_credentials_from_siblings() -> dict[str, object]:
-    """Recover missing credentials from validated sibling Autopilot Data folders.
-
-    RC89 stopped recovery as soon as *any* AI route existed. That meant a freshly
-    bootstrapped Codex route could hide missing Gemini/NVIDIA/Groq/Cloudflare
-    credentials after migration. RC90 instead treats the current encrypted config
-    as authoritative field-by-field: non-empty current values are never replaced,
-    while missing values may be filled from one or more decryptable sibling pairs.
-    """
-    target = data_dir()
-    marker = target / _MARKER
-    try:
-        current = load_secrets().normalized()
-    except Exception as exc:
-        # Never treat an unreadable current secret pair as "empty": doing so could
-        # destroy recoverable current credentials. Fail closed and leave the pair
-        # untouched; startup continues and telemetry exposes the recovery failure.
-        return {
-            "recovered": False,
-            "reason": "current_credentials_unreadable",
-            "detail": f"{type(exc).__name__}: {exc}"[:500],
-        }
-
+def _validated_candidates(paths: Iterable[Path]) -> list[tuple[int, float, Path, SecretConfig]]:
     candidates: list[tuple[int, float, Path, SecretConfig]] = []
-    for source_data in _candidate_data_dirs():
+    for source_data in paths:
         key = source_data / "secrets.key"
         secure = source_data / "secrets.secure"
         if not key.is_file() or not secure.is_file():
@@ -192,18 +174,14 @@ def recover_missing_credentials_from_siblings() -> dict[str, object]:
         except OSError:
             mtime = 0.0
         candidates.append((score, mtime, source_data, cfg))
+    return candidates
 
-    if not candidates:
-        return {
-            "recovered": False,
-            "reason": "no_valid_sibling_credentials",
-            "ai_routes": _ai_routes(current),
-        }
 
+def _merge_candidates(current: SecretConfig, candidates: list[tuple[int, float, Path, SecretConfig]]) -> tuple[SecretConfig, list[str], set[str]]:
     merged = current
     used_sources: list[str] = []
     recovered_fields: set[str] = set()
-    for score, _mtime, source_data, donor in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True):
+    for _score, _mtime, source_data, donor in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True):
         before = merged
         after = _merge_missing(before, donor)
         changed = _changed_fields(before, after)
@@ -211,7 +189,79 @@ def recover_missing_credentials_from_siblings() -> dict[str, object]:
             merged = after
             recovered_fields.update(changed)
             used_sources.append(str(source_data))
+    return merged, used_sources, recovered_fields
 
+
+def merge_missing_credentials_from_data(source_data: str | Path) -> dict[str, object]:
+    """Recover missing credentials from the selected migration lineage.
+
+    Existing current values always win. The selected Data is checked first as a
+    lineage anchor, then sibling Autopilot Data folders around that old build and
+    around the new portable are considered. This repairs chains where a newer RC
+    preserved the database but had already lost one or more fallback-provider keys.
+    """
+    try:
+        current = load_secrets().normalized()
+    except Exception as exc:
+        return {
+            "merged": False,
+            "reason": "current_credentials_unreadable",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+            "recovered_fields": [],
+        }
+
+    candidates = _validated_candidates(_lineage_data_dirs(source_data))
+    if not candidates:
+        return {
+            "merged": False,
+            "reason": "no_valid_lineage_credentials",
+            "recovered_fields": [],
+            "ai_routes": _ai_routes(current),
+        }
+
+    merged, used_sources, recovered_fields = _merge_candidates(current, candidates)
+    if not recovered_fields:
+        return {
+            "merged": False,
+            "reason": "no_missing_values_found",
+            "sources_checked": len(candidates),
+            "recovered_fields": [],
+            "ai_routes": _ai_routes(current),
+        }
+
+    save_secrets(merged)
+    return {
+        "merged": True,
+        "reason": "missing_values_merged_from_lineage",
+        "sources": used_sources,
+        "sources_checked": len(candidates),
+        "recovered_fields": sorted(recovered_fields),
+        "ai_routes": _ai_routes(merged),
+    }
+
+
+def recover_missing_credentials_from_siblings() -> dict[str, object]:
+    """Recover missing credentials from validated sibling Autopilot Data folders."""
+    target = data_dir()
+    marker = target / _MARKER
+    try:
+        current = load_secrets().normalized()
+    except Exception as exc:
+        return {
+            "recovered": False,
+            "reason": "current_credentials_unreadable",
+            "detail": f"{type(exc).__name__}: {exc}"[:500],
+        }
+
+    candidates = _validated_candidates(_candidate_data_dirs())
+    if not candidates:
+        return {
+            "recovered": False,
+            "reason": "no_valid_sibling_credentials",
+            "ai_routes": _ai_routes(current),
+        }
+
+    merged, used_sources, recovered_fields = _merge_candidates(current, candidates)
     if not recovered_fields:
         return {
             "recovered": False,
