@@ -47,10 +47,11 @@ def test_windows_single_instance_uses_kernel_mutex_not_portable_file_lock():
     assert "self.path.open" not in windows_block
 
 
-def test_rc91_version_metadata_is_consistent():
-    assert _read("VERSION.txt").strip() == "2.0.0-rc91"
-    assert _read("PUBLIC_VERSION.txt").strip() == "2.0.0-rc91"
-    assert _read("V2_VERSION.txt").strip() == "2.0.0-rc91"
-    assert '__version__ = "2.0.0-rc91"' in _read("telegram_autopilot/__init__.py")
-    assert 'V2_VERSION = "2.0.0-rc91"' in _read("telegram_autopilot/v2/__init__.py")
-    assert 'version = "2.0.0rc91"' in _read("pyproject.toml")
+def test_current_version_metadata_is_consistent():
+    version = _read("VERSION.txt").strip()
+    assert version == "2.0.0-rc92"
+    assert _read("PUBLIC_VERSION.txt").strip() == version
+    assert _read("V2_VERSION.txt").strip() == version
+    assert f'__version__ = "{version}"' in _read("telegram_autopilot/__init__.py")
+    assert f'V2_VERSION = "{version}"' in _read("telegram_autopilot/v2/__init__.py")
+    assert 'version = "2.0.0rc92"' in _read("pyproject.toml")
