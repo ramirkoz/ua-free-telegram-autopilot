@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
@@ -46,20 +47,55 @@ def _autopilot_data_dirs(parent: Path, *, exclude_root: Path | None = None) -> I
             yield data.resolve()
 
 
+def _common_search_roots() -> Iterable[Path]:
+    """Yield only shallow, user-obvious locations where portable builds normally live."""
+    raw: list[Path] = []
+    try:
+        raw.append(runtime_dir().resolve().parent)
+    except OSError:
+        pass
+
+    home = Path.home()
+    raw.extend([home / "Desktop", home / "Downloads"])
+
+    userprofile = str(os.environ.get("USERPROFILE") or "").strip()
+    if userprofile:
+        base = Path(userprofile)
+        raw.extend([base / "Desktop", base / "Downloads"])
+
+    for env_name in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            base = Path(value)
+            raw.extend([base, base / "Desktop", base / "Downloads"])
+
+    seen: set[str] = set()
+    for item in raw:
+        try:
+            resolved = item.resolve()
+        except OSError:
+            continue
+        key = str(resolved).casefold()
+        if key in seen or not resolved.is_dir():
+            continue
+        seen.add(key)
+        yield resolved
+
+
 def _candidate_data_dirs() -> Iterable[Path]:
     current_root = runtime_dir().resolve()
-    yield from _autopilot_data_dirs(current_root.parent, exclude_root=current_root)
+    seen: set[str] = set()
+    for root in _common_search_roots():
+        for candidate in _autopilot_data_dirs(root, exclude_root=current_root):
+            key = str(candidate).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            yield candidate
 
 
 def _lineage_data_dirs(source_data: str | Path) -> Iterable[Path]:
-    """Yield credential donors around both the selected old build and current build.
-
-    A migration may be selected from a newer RC whose database is good but whose
-    secret pair already lost older fallback providers. In that case the authoritative
-    donor can be an older Autopilot folder beside the selected build, not beside the
-    new portable. Only explicit Autopilot sibling folders are inspected; there is no
-    recursive home-directory secret scan.
-    """
+    """Yield validated credential donors around the selected build and common portable roots."""
     source = Path(source_data).resolve()
     seen: set[str] = set()
 
@@ -76,14 +112,10 @@ def _lineage_data_dirs(source_data: str | Path) -> Iterable[Path]:
 
     yield from emit(source)
 
-    # source is normally <old portable>/Data, so source.parent.parent is the
-    # directory that contains RC84/RC90/RC91/... sibling portable folders.
-    old_root = source.parent
-    old_parent = old_root.parent
+    old_parent = source.parent.parent
     for candidate in _autopilot_data_dirs(old_parent):
         yield from emit(candidate)
 
-    # Preserve the RC90 behaviour too: donors located beside the new portable.
     for candidate in _candidate_data_dirs():
         yield from emit(candidate)
 
@@ -155,6 +187,11 @@ def _ai_routes(cfg: SecretConfig) -> dict[str, bool]:
     }
 
 
+def _fallback_route_count(cfg: SecretConfig) -> int:
+    routes = _ai_routes(cfg)
+    return sum(1 for name in ("gemini", "nvidia", "groq", "cloudflare") if routes.get(name))
+
+
 def _validated_candidates(paths: Iterable[Path]) -> list[tuple[int, float, Path, SecretConfig]]:
     candidates: list[tuple[int, float, Path, SecretConfig]] = []
     for source_data in paths:
@@ -193,13 +230,7 @@ def _merge_candidates(current: SecretConfig, candidates: list[tuple[int, float, 
 
 
 def merge_missing_credentials_from_data(source_data: str | Path) -> dict[str, object]:
-    """Recover missing credentials from the selected migration lineage.
-
-    Existing current values always win. The selected Data is checked first as a
-    lineage anchor, then sibling Autopilot Data folders around that old build and
-    around the new portable are considered. This repairs chains where a newer RC
-    preserved the database but had already lost one or more fallback-provider keys.
-    """
+    """Recover missing credentials from selected Data plus validated nearby/common builds."""
     try:
         current = load_secrets().normalized()
     except Exception as exc:
@@ -217,31 +248,27 @@ def merge_missing_credentials_from_data(source_data: str | Path) -> dict[str, ob
             "reason": "no_valid_lineage_credentials",
             "recovered_fields": [],
             "ai_routes": _ai_routes(current),
+            "fallback_routes": _fallback_route_count(current),
         }
 
     merged, used_sources, recovered_fields = _merge_candidates(current, candidates)
-    if not recovered_fields:
-        return {
-            "merged": False,
-            "reason": "no_missing_values_found",
-            "sources_checked": len(candidates),
-            "recovered_fields": [],
-            "ai_routes": _ai_routes(current),
-        }
+    if recovered_fields:
+        save_secrets(merged)
 
-    save_secrets(merged)
     return {
-        "merged": True,
-        "reason": "missing_values_merged_from_lineage",
+        "merged": bool(recovered_fields),
+        "reason": "missing_values_merged_from_lineage" if recovered_fields else "no_missing_values_found",
         "sources": used_sources,
         "sources_checked": len(candidates),
         "recovered_fields": sorted(recovered_fields),
         "ai_routes": _ai_routes(merged),
+        "fallback_routes": _fallback_route_count(merged),
+        "best_candidate_score": max((item[0] for item in candidates), default=0),
     }
 
 
 def recover_missing_credentials_from_siblings() -> dict[str, object]:
-    """Recover missing credentials from validated sibling Autopilot Data folders."""
+    """Recover missing credentials from validated Autopilot folders in common local roots."""
     target = data_dir()
     marker = target / _MARKER
     try:
@@ -259,25 +286,22 @@ def recover_missing_credentials_from_siblings() -> dict[str, object]:
             "recovered": False,
             "reason": "no_valid_sibling_credentials",
             "ai_routes": _ai_routes(current),
+            "fallback_routes": _fallback_route_count(current),
         }
 
     merged, used_sources, recovered_fields = _merge_candidates(current, candidates)
-    if not recovered_fields:
-        return {
-            "recovered": False,
-            "reason": "no_missing_values_found",
-            "candidates": len(candidates),
-            "ai_routes": _ai_routes(current),
-        }
+    if recovered_fields:
+        save_secrets(merged)
 
-    save_secrets(merged)
     payload = {
-        "recovered": True,
+        "recovered": bool(recovered_fields),
+        "reason": "missing_values_merged" if recovered_fields else "no_missing_values_found",
         "sources": used_sources,
         "candidates": len(candidates),
         "recovered_fields": sorted(recovered_fields),
         "at": now_iso(),
         "ai_routes": _ai_routes(merged),
+        "fallback_routes": _fallback_route_count(merged),
     }
     marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
