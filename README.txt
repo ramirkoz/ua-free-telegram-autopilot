@@ -1,9 +1,9 @@
-UA FREE Telegram Autopilot v2.0.0-rc89 — REMOTE UPDATE CANDIDATE
+UA FREE Telegram Autopilot v2.0.0-rc90 — SIGNED UPDATE CANDIDATE
 
-RC89 is based on RC88.
+RC90 is the live-hardening release after RC89 validation.
 
-- Repairs RC88 partial credential migration: when the current Data has no configured AI route, the app validates sibling Autopilot encrypted secret pairs and restores only missing secret fields from the best valid previous Data.
-- Existing non-empty current secrets are never overwritten.
-- Repairs the carried-forward 5-minute polling regression with one explicit 15-minute migration pass; later operator edits remain authoritative.
-- Keeps the RC88 V2 database carry-forward fix.
-- Keeps RC86 source text-only cleanup and cross-source duplicate protection.
+- Recovers missing Gemini/NVIDIA/Groq/Cloudflare/Local and service credentials even when Codex is already configured; current non-empty values always win.
+- First-run import merges encrypted credentials field-by-field instead of blindly overwriting the new portable's current secret pair.
+- Repairs carried-forward 5-minute polling to the 15-minute baseline only after real channel rows exist; later operator edits remain authoritative.
+- Aligns source and portable Codex dependency on openai-codex 0.156.1.
+- Preserves anti-slop, source-specific text-only cleanup, semantic/event dedupe, incident clustering, editorial learning, exact-post Telegram media ownership and signed updater.

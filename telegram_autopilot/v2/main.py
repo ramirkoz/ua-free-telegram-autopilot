@@ -17,6 +17,7 @@ from .ui_hardening import FastMainWindow as MainWindow
 from .update_protocol import UpdateProtocol
 from .first_run_import import maybe_import_legacy_data
 from .credential_recovery import recover_missing_credentials_from_siblings
+from .rc90_runtime_repair import repair_polling_baseline
 from ..language_tool_local import shutdown_languagetool
 
 
@@ -45,6 +46,11 @@ def main() -> int:
                 except Exception:
                     pass
             store = HardenedV2Store(v2_database_path())
+            try:
+                poll_repair = repair_polling_baseline(store)
+                event("app", "RC90 polling baseline repair checked", **poll_repair)
+            except Exception as exc:
+                event("app", "RC90 polling baseline repair failed", level=30, detail=str(exc)[:1200])
             try:
                 recovery = recover_missing_credentials_from_siblings()
                 event("app", "credential recovery checked", **recovery)
