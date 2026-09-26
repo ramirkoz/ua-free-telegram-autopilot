@@ -16,7 +16,7 @@ class InstanceLock:
     """Single-instance guard.
 
     On Windows use a named kernel mutex so the portable directory is not kept
-    artificially locked by a file handle.  Non-Windows CI/dev keeps the simple
+    artificially locked by a file handle. Non-Windows CI/dev keeps the simple
     advisory file lock.
     """
 
@@ -33,7 +33,7 @@ class InstanceLock:
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
             kernel32.CreateMutexW.restype = ctypes.c_void_p
-            mutex = kernel32.CreateMutexW(None, False, self._WINDOWS_MUTEX_NAME)
+            mutex = kernel32.CreateMutexW(None, True, self._WINDOWS_MUTEX_NAME)
             if not mutex:
                 raise OSError(ctypes.get_last_error(), "CreateMutexW failed")
             if ctypes.get_last_error() == self._ERROR_ALREADY_EXISTS:
@@ -59,8 +59,8 @@ class InstanceLock:
             mutex = self.mutex_handle
             self.mutex_handle = None
             if mutex:
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
                 try:
-                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
                     kernel32.ReleaseMutex(ctypes.c_void_p(mutex))
                 finally:
                     kernel32.CloseHandle(ctypes.c_void_p(mutex))
