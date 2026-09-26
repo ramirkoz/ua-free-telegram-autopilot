@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import telegram_autopilot.v2.credential_recovery as recovery
 from telegram_autopilot.secrets_store import SecretConfig, _AAD, _HEADER
-from telegram_autopilot.v2.rc90_runtime_repair import repair_polling_baseline
+from telegram_autopilot.v2.migration_repair import repair_polling_baseline
 from telegram_autopilot.v2.storage import V2Store, now_iso
 
 
@@ -55,7 +55,7 @@ def test_rc90_codex_does_not_block_recovery_of_missing_api_providers(tmp_path: P
     assert saved
     merged = saved[-1]
     assert merged.codex_enabled is True
-    assert merged.groq_api_key == "groq-current"  # current value must never be overwritten
+    assert merged.groq_api_key == "groq-current"
     assert merged.gemini_api_key == "gemini-old"
     assert merged.nvidia_api_key == "nvidia-old"
     assert merged.cloudflare_account_id == "cf-account"
