@@ -10,7 +10,7 @@ from ..paths import data_dir, runtime_dir
 from ..secrets_store import SecretConfig, load_secrets, load_secrets_from_files, save_secrets
 from .storage import now_iso
 
-_MARKER = "rc94_credential_recovery.json"
+_MARKER = "rc90_credential_recovery.json"
 
 
 def _candidate_score(cfg: SecretConfig) -> int:
