@@ -9,18 +9,7 @@ from ..paths import data_dir, runtime_dir
 from ..secrets_store import SecretConfig, load_secrets, load_secrets_from_files, save_secrets
 from .storage import now_iso
 
-_MARKER = "rc89_credential_recovery.json"
-
-
-def _ai_configured(cfg: SecretConfig) -> bool:
-    return bool(
-        cfg.gemini_api_key
-        or cfg.nvidia_api_key
-        or cfg.groq_api_key
-        or (cfg.cloudflare_account_id and cfg.cloudflare_api_token)
-        or cfg.codex_enabled
-        or cfg.local_enabled
-    )
+_MARKER = "rc90_credential_recovery.json"
 
 
 def _candidate_score(cfg: SecretConfig) -> int:
@@ -42,18 +31,17 @@ def _candidate_score(cfg: SecretConfig) -> int:
 
 def _candidate_data_dirs() -> Iterable[Path]:
     current_root = runtime_dir().resolve()
-    roots = []
     parent = current_root.parent
     try:
-        roots.extend(
+        roots = [
             item
             for item in parent.iterdir()
             if item.is_dir()
             and item.resolve() != current_root
             and item.name.casefold().startswith("ua_free_telegram_autopilot")
-        )
+        ]
     except OSError:
-        pass
+        roots = []
     for root in roots:
         data = root / "Data"
         if data.is_dir():
@@ -61,6 +49,7 @@ def _candidate_data_dirs() -> Iterable[Path]:
 
 
 def _merge_missing(current: SecretConfig, donor: SecretConfig) -> SecretConfig:
+    """Fill only empty values. Existing current credentials always win."""
     payload = asdict(current)
     donor_payload = asdict(donor)
 
@@ -100,29 +89,90 @@ def _merge_missing(current: SecretConfig, donor: SecretConfig) -> SecretConfig:
     channel_tokens.update(dict(current.channel_bot_tokens or {}))
     payload["channel_bot_tokens"] = channel_tokens
 
-    if not list(current.facebook_pages or []) and list(donor.facebook_pages or []):
-        payload["facebook_pages"] = list(donor.facebook_pages)
+    donor_pages = {str(item.get("id") or "").strip(): dict(item) for item in (donor.facebook_pages or []) if str(item.get("id") or "").strip()}
+    current_pages = {str(item.get("id") or "").strip(): dict(item) for item in (current.facebook_pages or []) if str(item.get("id") or "").strip()}
+    donor_pages.update(current_pages)  # current page/token values always win
+    payload["facebook_pages"] = list(donor_pages.values())
 
     return SecretConfig(**payload).normalized()
 
 
-def recover_missing_credentials_from_siblings() -> dict[str, object]:
-    """Recover only missing credentials from a validated older portable.
+def _changed_fields(before: SecretConfig, after: SecretConfig) -> list[str]:
+    left = asdict(before.normalized())
+    right = asdict(after.normalized())
+    return sorted(key for key in right if left.get(key) != right.get(key))
 
-    RC88 could preserve the V2 database while leaving a newer Data folder with a
-    partial secrets file.  We never overwrite non-empty current values.  Recovery
-    runs only while no AI provider is configured and accepts only decryptable
-    sibling secret pairs that contain at least one usable AI route.
+
+def _ai_routes(cfg: SecretConfig) -> dict[str, bool]:
+    value = cfg.normalized()
+    return {
+        "gemini": bool(value.gemini_api_key),
+        "nvidia": bool(value.nvidia_api_key),
+        "groq": bool(value.groq_api_key),
+        "cloudflare": bool(value.cloudflare_account_id and value.cloudflare_api_token),
+        "codex": bool(value.codex_enabled),
+        "local": bool(value.local_enabled),
+    }
+
+
+def merge_missing_credentials_from_data(source_data: str | Path) -> dict[str, object]:
+    """Merge one explicitly selected Data credential pair without overwriting current values.
+
+    This is used by first-run import. A Codex bootstrap may already have created a
+    valid current encrypted secret file before the user imports an older Data
+    folder. Copying the old pair byte-for-byte would erase those current values.
+    RC90 decrypts both configs and fills only fields that are actually missing.
+    """
+    source = Path(source_data)
+    key = source / "secrets.key"
+    secure = source / "secrets.secure"
+    if not key.is_file() or not secure.is_file():
+        return {"merged": False, "reason": "source_pair_missing", "recovered_fields": []}
+
+    donor = load_secrets_from_files(key, secure).normalized()
+    current = load_secrets().normalized()
+    merged = _merge_missing(current, donor)
+    changed = _changed_fields(current, merged)
+    if not changed:
+        return {
+            "merged": False,
+            "reason": "no_missing_values_found",
+            "recovered_fields": [],
+            "ai_routes": _ai_routes(current),
+        }
+
+    save_secrets(merged)
+    return {
+        "merged": True,
+        "reason": "missing_values_merged",
+        "source": str(source),
+        "recovered_fields": changed,
+        "ai_routes": _ai_routes(merged),
+    }
+
+
+def recover_missing_credentials_from_siblings() -> dict[str, object]:
+    """Recover missing credentials from validated sibling Autopilot Data folders.
+
+    RC89 stopped recovery as soon as *any* AI route existed. That meant a freshly
+    bootstrapped Codex route could hide missing Gemini/NVIDIA/Groq/Cloudflare
+    credentials after migration. RC90 instead treats the current encrypted config
+    as authoritative field-by-field: non-empty current values are never replaced,
+    while missing values may be filled from one or more decryptable sibling pairs.
     """
     target = data_dir()
     marker = target / _MARKER
     try:
-        current = load_secrets()
-    except Exception:
-        current = SecretConfig()
-
-    if _ai_configured(current):
-        return {"recovered": False, "reason": "ai_already_configured"}
+        current = load_secrets().normalized()
+    except Exception as exc:
+        # Never treat an unreadable current secret pair as "empty": doing so could
+        # destroy recoverable current credentials. Fail closed and leave the pair
+        # untouched; startup continues and telemetry exposes the recovery failure.
+        return {
+            "recovered": False,
+            "reason": "current_credentials_unreadable",
+            "detail": f"{type(exc).__name__}: {exc}"[:500],
+        }
 
     candidates: list[tuple[int, float, Path, SecretConfig]] = []
     for source_data in _candidate_data_dirs():
@@ -131,39 +181,53 @@ def recover_missing_credentials_from_siblings() -> dict[str, object]:
         if not key.is_file() or not secure.is_file():
             continue
         try:
-            cfg = load_secrets_from_files(key, secure)
+            cfg = load_secrets_from_files(key, secure).normalized()
         except Exception:
             continue
-        if not _ai_configured(cfg):
+        score = _candidate_score(cfg)
+        if score <= 0:
             continue
         try:
             mtime = max(key.stat().st_mtime, secure.stat().st_mtime)
         except OSError:
             mtime = 0.0
-        candidates.append((_candidate_score(cfg), mtime, source_data, cfg))
+        candidates.append((score, mtime, source_data, cfg))
 
     if not candidates:
-        return {"recovered": False, "reason": "no_valid_sibling_credentials"}
+        return {
+            "recovered": False,
+            "reason": "no_valid_sibling_credentials",
+            "ai_routes": _ai_routes(current),
+        }
 
-    score, _mtime, source_data, donor = max(candidates, key=lambda item: (item[0], item[1]))
-    merged = _merge_missing(current, donor)
-    if not _ai_configured(merged):
-        return {"recovered": False, "reason": "candidate_merge_no_ai"}
+    merged = current
+    used_sources: list[str] = []
+    recovered_fields: set[str] = set()
+    for score, _mtime, source_data, donor in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True):
+        before = merged
+        after = _merge_missing(before, donor)
+        changed = _changed_fields(before, after)
+        if changed:
+            merged = after
+            recovered_fields.update(changed)
+            used_sources.append(str(source_data))
+
+    if not recovered_fields:
+        return {
+            "recovered": False,
+            "reason": "no_missing_values_found",
+            "candidates": len(candidates),
+            "ai_routes": _ai_routes(current),
+        }
 
     save_secrets(merged)
     payload = {
         "recovered": True,
-        "source": str(source_data),
-        "score": int(score),
+        "sources": used_sources,
+        "candidates": len(candidates),
+        "recovered_fields": sorted(recovered_fields),
         "at": now_iso(),
-        "ai_routes": {
-            "gemini": bool(merged.gemini_api_key),
-            "nvidia": bool(merged.nvidia_api_key),
-            "groq": bool(merged.groq_api_key),
-            "cloudflare": bool(merged.cloudflare_account_id and merged.cloudflare_api_token),
-            "codex": bool(merged.codex_enabled),
-            "local": bool(merged.local_enabled),
-        },
+        "ai_routes": _ai_routes(merged),
     }
     marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload

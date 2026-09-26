@@ -67,10 +67,10 @@ def test_rc89_recovers_missing_ai_fields_without_overwriting_current_secrets(tmp
     assert merged.google_client_id == "google-current"
     assert merged.google_client_secret == "secret-current"
     assert merged.google_refresh_token == "refresh-current"
-    assert (current_data / "rc89_credential_recovery.json").is_file()
+    assert (current_data / "rc90_credential_recovery.json").is_file()
 
 
-def test_rc89_does_not_touch_config_when_ai_already_present(tmp_path: Path, monkeypatch) -> None:
+def test_rc89_existing_ai_without_donor_is_left_untouched(tmp_path: Path, monkeypatch) -> None:
     current_root = tmp_path / "UA_FREE_Telegram_Autopilot_v2.0.0-rc88"
     current_data = current_root / "Data"
     current_data.mkdir(parents=True)
@@ -83,7 +83,9 @@ def test_rc89_does_not_touch_config_when_ai_already_present(tmp_path: Path, monk
 
     result = recovery.recover_missing_credentials_from_siblings()
 
-    assert result == {"recovered": False, "reason": "ai_already_configured"}
+    assert result["recovered"] is False
+    assert result["reason"] == "no_valid_sibling_credentials"
+    assert result["ai_routes"]["groq"] is True
     assert saved == []
 
 

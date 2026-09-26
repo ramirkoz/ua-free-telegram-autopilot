@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,9 +10,9 @@ from tkinter import filedialog, messagebox
 
 from ..paths import data_dir
 from .storage import V2Store
+from .credential_recovery import merge_missing_credentials_from_data
 
 _MARKER = "first_run_import.json"
-_SECRET_FILES = ("secrets.key", "secrets.secure")
 _STABLE_TABLES = (
     "channels",
     "channel_policies",
@@ -331,18 +330,26 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
             raise RuntimeError("Не можна імпортувати поточну Data у саму себе.")
         source_db = source_data / "telegram_autopilot_v2.sqlite3"
         counts = _selective_import(source_db, target_db)
-        copied: list[str] = []
-        for name in _SECRET_FILES:
-            src = source_data / name
-            if src.is_file():
-                shutil.copy2(src, target / name)
-                copied.append(name)
+        # Credentials are merged semantically, never copied over the current pair.
+        # This preserves a Codex bootstrap (or any current secret) that already
+        # exists in the new portable while recovering missing API/Telegram values
+        # from the selected older Data folder. Credential trouble must not destroy
+        # the already validated database import.
+        try:
+            credentials_state = merge_missing_credentials_from_data(source_data)
+        except Exception as exc:
+            credentials_state = {
+                "merged": False,
+                "reason": "merge_error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "recovered_fields": [],
+            }
         supervisor_state = _migrate_supervisor_durable_state(source_data, target)
         payload = {
             "imported": True,
             "source": str(source_data),
             "tables": counts,
-            "files": copied,
+            "credentials": credentials_state,
             "supervisor": supervisor_state,
             "at": datetime.now(timezone.utc).isoformat(),
             "old_data_preserved": True,
@@ -358,7 +365,8 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
             f"PUBLISHED збережено: {counts.get('published_preserved', 0)}\n"
             f"Свіжі непубліковані переобробити: {counts.get('active_requeued', 0)}\n"
             f"Старі/надлишкові непубліковані архівовано: {counts.get('stale_archived', 0)}\n"
-            f"Credentials: {len(copied)} файли.\n"
+            f"Credentials: {'доповнено' if credentials_state.get('merged') else 'без перезапису'}; "
+            f"відновлено полів: {len(credentials_state.get('recovered_fields') or [])}.\n"
             f"Supervisor mirror: {'так' if supervisor_state.get('config') else 'новий'}\n"
             f"Telegram report target: {'перенесено' if supervisor_state.get('telegram_target') else 'не знайдено'}\n\n"
             "Стара Data не змінювалась.",
