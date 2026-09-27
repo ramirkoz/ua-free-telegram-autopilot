@@ -143,6 +143,10 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 return None
         return self._request_from_manifest(manifest, source=source)
 
+    def _manifest_request(self):
+        """Read the local manifest path retained for existing coordinator callers."""
+        return self._drive_manifest_request()
+
     def poll(self) -> None:
         self._after_id = None
         if self._closed or self._inflight:
@@ -178,7 +182,6 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             self._begin(request)
         except Exception as exc:
             event("update", "update discovery failed", level=30, detail=str(exc)[:1200])
-            # A temporary GitHub/network failure must not disable local Drive fallback.
             try:
                 request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
                 if request is None:
