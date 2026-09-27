@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from .domain import BlockedBy, Decision, Stage
@@ -7,6 +8,7 @@ from .loghub import event
 from .media_pipeline import build_media_bundle, media_bundle_complete
 from .ready_backlog import ReadyBacklogRuntimeEngine, ReadyBacklogStore
 from .storage import _parse_datetime_value, now_iso
+from .telegram_ingest_policy import install_rc97_ingest_behavior
 
 READY_MEDIA_GRACE_SECONDS = 1800
 _READY_MEDIA_CODES = {
@@ -17,8 +19,44 @@ _READY_MEDIA_CODES = {
 }
 
 
+# The production scheduler imports its collector function at module load. Install the
+# RC97 wrapper once before any runtime worker starts; this changes Telegram composition
+# only and leaves the bounded scheduler/source-health behavior intact.
+install_rc97_ingest_behavior()
+
+
 class HardenedReadyStore(ReadyBacklogStore):
-    """RC50 store marker; existing Data/schema stay fully compatible."""
+    """RC97 store hardening with source-level text-only publication behavior."""
+
+    def insert_collected(self, **kwargs):
+        source_id = int(kwargs.get("source_id") or 0)
+        if source_id and self.source_strip_body_links(source_id):
+            # The existing source checkbox is intentionally upgraded to match its
+            # visible label: "Брати ... тільки текст".  It already strips body links;
+            # RC97 also suppresses source media and any adjacent-media stitch for that
+            # source.  The canonical footer/source URL remains untouched.
+            kwargs["media_json"] = "[]"
+            try:
+                layout = json.loads(str(kwargs.get("article_layout_json") or "{}"))
+            except Exception:
+                layout = {}
+            if not isinstance(layout, dict):
+                layout = {}
+            blocks = layout.get("blocks")
+            if isinstance(blocks, list):
+                layout["blocks"] = [
+                    block for block in blocks
+                    if not (isinstance(block, dict) and str(block.get("type") or "").casefold() == "media")
+                ]
+            tg = layout.get("telegram")
+            if isinstance(tg, dict):
+                tg["media_count"] = 0
+                tg["media_group"] = False
+                tg["text_only_source"] = True
+                tg["stitch_media_suppressed"] = True
+            layout["source_text_only"] = True
+            kwargs["article_layout_json"] = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+        return super().insert_collected(**kwargs)
 
 
 class HardenedRuntimeEngine(ReadyBacklogRuntimeEngine):
