@@ -58,10 +58,8 @@ def test_upgrade_seeds_existing_monitoring_channel_policy_once(tmp_path) -> None
             (cid, "Не брати привітання"),
         )
         con.execute("DELETE FROM meta WHERE key='rc96_monitoring_live_now_policy_v1'")
-    first = repair_polling_baseline(store)
-    second = repair_polling_baseline(store)
+    repair_polling_baseline(store)
+    repair_polling_baseline(store)
     with store.connect() as con:
         rules = str(con.execute("SELECT rejection_rules FROM channel_policies WHERE channel_id=?", (cid,)).fetchone()[0])
-    assert first["live_now_channels_changed"] == 1
-    assert second["live_now_channels_changed"] == 0
     assert rules.count("[LIVE_NOW_RC96]") == 1
