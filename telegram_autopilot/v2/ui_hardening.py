@@ -12,11 +12,12 @@ from .production_ui import ProductionMainWindow
 
 
 class FastMainWindow(ProductionMainWindow):
-    """RC51 UI hardening.
+    """Responsive V2 window with bounded background reads and incremental rendering.
 
-    Slow reads stay off the Tk thread.  Large Treeview refreshes are additionally
-    applied in small slices, so rebuilding queue/history tables cannot monopolise
-    the Windows message pump and make the window appear hung.
+    RC97 keeps all storage/AI work off Tk, reduces timer churn, skips periodic heavy
+    refreshes while the window is hidden/minimized, renders only changed tree rows,
+    and records event-loop lag so UI stalls are visible in telemetry instead of being
+    guessed from subjective feel alone.
     """
 
     _TREE_VIEWS = {
@@ -33,16 +34,17 @@ class FastMainWindow(ProductionMainWindow):
         self._rc51_tree_generation: dict[str, int] = {}
         self._rc51_tree_after: dict[str, object] = {}
         self._rc51_tree_started: dict[str, float] = {}
+        self._rc97_tab_after = None
+        self._rc97_lag_after = None
+        self._rc97_expected_tick = 0.0
+        self._rc97_last_lag_event = 0.0
         super().__init__(store, runtime, logs_dir)
         self._install_windows_editing_support()
         self._rc51_result_pump()
+        self._rc97_start_lag_probe()
 
     def _install_windows_editing_support(self) -> None:
-        """Normal Windows editing in every V2 Entry/Combobox/Text widget.
-
-        Physical Win32 keycodes keep Ctrl+V/C/X/A working while the Ukrainian
-        keyboard layout is active.  Right-click exposes a standard edit menu.
-        """
+        """Normal Windows editing in every V2 Entry/Combobox/Text widget."""
         for widget_class in ("Entry", "TEntry", "TCombobox", "Text"):
             self.bind_class(widget_class, "<Control-KeyPress>", self._control_edit_shortcut, add="+")
             self.bind_class(widget_class, "<Shift-Insert>", self._paste_shortcut, add="+")
@@ -121,6 +123,56 @@ class FastMainWindow(ProductionMainWindow):
             menu.grab_release()
         return "break"
 
+    def _rc97_start_lag_probe(self) -> None:
+        self._rc97_expected_tick = time.monotonic() + 0.5
+        self._rc97_schedule_lag_probe()
+
+    def _rc97_schedule_lag_probe(self) -> None:
+        if self._rc20_closing:
+            return
+        try:
+            self._rc97_lag_after = self.after(500, self._rc97_lag_probe)
+        except Exception:
+            self._rc97_lag_after = None
+
+    def _rc97_lag_probe(self) -> None:
+        if self._rc20_closing:
+            return
+        now = time.monotonic()
+        expected = self._rc97_expected_tick or now
+        lag_ms = max(0, int((now - expected) * 1000))
+        self._rc97_expected_tick = now + 0.5
+        try:
+            self.runtime.ui_event_loop_lag_ms = lag_ms
+            peak = int(getattr(self.runtime, "ui_event_loop_peak_lag_ms", 0) or 0)
+            if lag_ms > peak:
+                self.runtime.ui_event_loop_peak_lag_ms = lag_ms
+        except Exception:
+            pass
+        if lag_ms >= 750 and now - self._rc97_last_lag_event >= 10.0:
+            self._rc97_last_lag_event = now
+            event("ui", "event loop lag detected", level=30, lag_ms=lag_ms, active_tab=self._active_tab_key())
+        self._rc97_schedule_lag_probe()
+
+    def _rc20_tab_changed(self, _event=None) -> None:
+        """Debounce notebook changes instead of stacking immediate refresh callbacks."""
+        self._rc20_last_refresh.pop(self._active_tab_key(), None)
+        if self._rc97_tab_after is not None:
+            try:
+                self.after_cancel(self._rc97_tab_after)
+            except Exception:
+                pass
+            self._rc97_tab_after = None
+        try:
+            self._rc97_tab_after = self.after(120, self._rc97_refresh_after_tab_change)
+        except Exception:
+            self._rc97_tab_after = None
+
+    def _rc97_refresh_after_tab_change(self) -> None:
+        self._rc97_tab_after = None
+        if not self._rc20_closing:
+            self.refresh_all()
+
     def _rc20_async_refresh(self, key: str, work: Callable[[], object], apply: Callable[[object], None]) -> None:
         if self._rc20_closing:
             return
@@ -140,8 +192,6 @@ class FastMainWindow(ProductionMainWindow):
             except Exception as exc:
                 error = exc
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            # Never call Tk from this thread.  Tkinter cross-thread calls are
-            # nondeterministic on Windows and were a real production freeze source.
             self._rc51_results.put((key, (apply, result), error, elapsed_ms, signature))
 
         threading.Thread(target=worker, daemon=True, name=f"V2-UI-Refresh-{key}").start()
@@ -149,8 +199,6 @@ class FastMainWindow(ProductionMainWindow):
     def _rc51_result_pump(self) -> None:
         if self._rc20_closing:
             return
-        # Apply only one completed view per pump.  A burst of six completed
-        # refreshes used to create a long uninterrupted block of Tk work.
         try:
             key, payload, error, elapsed_ms, signature = self._rc51_results.get_nowait()
         except queue.Empty:
@@ -181,12 +229,12 @@ class FastMainWindow(ProductionMainWindow):
                             event("ui", "background refresh apply failed", level=30, view=key, detail=str(exc)[:1200])
 
         try:
-            self._rc51_pump_after = self.after(80, self._rc51_result_pump)
+            self._rc51_pump_after = self.after(160, self._rc51_result_pump)
         except Exception:
             self._rc51_pump_after = None
 
     def _rc51_schedule_tree_render(self, key: str, result: object, signature: int) -> None:
-        """Render a large Treeview incrementally instead of delete/reinsert in one go."""
+        """Render only changed rows in small slices, leaving time for the message pump."""
         attr = self._TREE_VIEWS.get(key)
         tree = getattr(self, attr, None) if attr else None
         if tree is None:
@@ -200,6 +248,7 @@ class FastMainWindow(ProductionMainWindow):
         try:
             selected = tuple(tree.selection())
             existing = tuple(tree.get_children())
+            existing_values = {iid: tuple(tree.item(iid, "values")) for iid in existing}
         except Exception as exc:
             event("ui", "tree snapshot failed", level=30, view=key, detail=str(exc)[:1200])
             return
@@ -216,7 +265,10 @@ class FastMainWindow(ProductionMainWindow):
             desired.append((iid, values_tuple))
 
         stale = [iid for iid in existing if iid not in seen]
-        batch_size = 24
+        desired_order = tuple(iid for iid, _ in desired)
+        order_unchanged = tuple(iid for iid in existing if iid in seen) == desired_order
+        batch_size = 12
+        yield_ms = 8
 
         def delete_batch(offset: int = 0) -> None:
             if self._rc20_closing or self._rc51_tree_generation.get(key) != generation:
@@ -228,9 +280,9 @@ class FastMainWindow(ProductionMainWindow):
                 except Exception:
                     pass
             if end < len(stale):
-                self._rc51_tree_after[key] = self.after(1, lambda: delete_batch(end))
+                self._rc51_tree_after[key] = self.after(yield_ms, lambda: delete_batch(end))
             else:
-                self._rc51_tree_after[key] = self.after(1, lambda: row_batch(0))
+                self._rc51_tree_after[key] = self.after(yield_ms, lambda: row_batch(0))
 
         def row_batch(offset: int = 0) -> None:
             if self._rc20_closing or self._rc51_tree_generation.get(key) != generation:
@@ -240,14 +292,16 @@ class FastMainWindow(ProductionMainWindow):
                 iid, values = desired[index]
                 try:
                     if tree.exists(iid):
-                        tree.item(iid, values=values)
-                        tree.move(iid, "", index)
+                        if existing_values.get(iid) != tuple(str(v) for v in values):
+                            tree.item(iid, values=values)
+                        if not order_unchanged and tree.index(iid) != index:
+                            tree.move(iid, "", index)
                     else:
                         tree.insert("", index, iid=iid, values=values)
                 except Exception as exc:
                     event("ui", "tree row render failed", level=30, view=key, iid=iid, detail=str(exc)[:500])
             if end < len(desired):
-                self._rc51_tree_after[key] = self.after(1, lambda: row_batch(end))
+                self._rc51_tree_after[key] = self.after(yield_ms, lambda: row_batch(end))
                 return
 
             for iid in selected:
@@ -270,6 +324,14 @@ class FastMainWindow(ProductionMainWindow):
         else:
             row_batch(0)
 
+    def _rc97_window_visible(self) -> bool:
+        try:
+            if str(self.state()) in {"iconic", "withdrawn"}:
+                return False
+            return bool(self.winfo_viewable())
+        except Exception:
+            return True
+
     def refresh_all(self):
         if self._rc20_closing:
             return
@@ -280,19 +342,25 @@ class FastMainWindow(ProductionMainWindow):
                 pass
             self._refresh_after_id = None
 
+        if not self._rc97_window_visible():
+            try:
+                if self.winfo_exists() and not self._rc20_closing:
+                    self._refresh_after_id = self.after(2500, self.refresh_all)
+            except Exception:
+                self._refresh_after_id = None
+            return
+
         key = self._active_tab_key()
-        # Heavy operational tables do not need to be rebuilt every few seconds.
-        # Manual actions still trigger their normal refresh immediately.
         ttl = {
-            "home": 7.5,
-            "channels": 30.0,
-            "queue": 30.0,
-            "editorial": 20.0,
-            "history": 60.0,
-            "ai": 30.0,
-            "learning": 90.0,
-            "supervisor": 10.0,
-        }.get(key, 60.0)
+            "home": 10.0,
+            "channels": 45.0,
+            "queue": 45.0,
+            "editorial": 30.0,
+            "history": 90.0,
+            "ai": 45.0,
+            "learning": 120.0,
+            "supervisor": 15.0,
+        }.get(key, 90.0)
         now = time.monotonic()
         self.runtime.ui_refresh_inflight = bool(self._rc20_data_refresh_inflight or self._rc51_tree_after)
         try:
@@ -316,7 +384,7 @@ class FastMainWindow(ProductionMainWindow):
         finally:
             try:
                 if self.winfo_exists() and not self._rc20_closing:
-                    self._refresh_after_id = self.after(1500, self.refresh_all)
+                    self._refresh_after_id = self.after(2000, self.refresh_all)
             except Exception:
                 self._refresh_after_id = None
 
@@ -327,10 +395,13 @@ class FastMainWindow(ProductionMainWindow):
             except Exception:
                 pass
         self._rc51_tree_after.clear()
-        if self._rc51_pump_after is not None:
-            try:
-                self.after_cancel(self._rc51_pump_after)
-            except Exception:
-                pass
-            self._rc51_pump_after = None
+        for after_id in (self._rc51_pump_after, self._rc97_tab_after, self._rc97_lag_after):
+            if after_id is not None:
+                try:
+                    self.after_cancel(after_id)
+                except Exception:
+                    pass
+        self._rc51_pump_after = None
+        self._rc97_tab_after = None
+        self._rc97_lag_after = None
         return super()._close()
