@@ -53,7 +53,7 @@ def test_non_adjacent_media_is_not_borrowed() -> None:
     assert items[0].media_urls == []
 
 
-def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
+def _store_with_source(tmp_path):
     store = HardenedReadyStore(tmp_path / "autopilot.sqlite3")
     with store.connect() as con:
         con.execute(
@@ -66,13 +66,20 @@ def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
             (channel_id, "telegram", "text-only source", "https://t.me/textonly"),
         )
         source_id = int(cur.lastrowid)
+    return store, channel_id, source_id
 
-    store.set_source_strip_body_links(source_id, True)
-    layout = {
+
+def _layout():
+    return {
         "source_kind": "telegram",
         "telegram": {"media_count": 1, "media_group": False, "stitched": True},
         "blocks": [{"type": "media", "kind": "image", "url": "https://example.test/photo.jpg"}],
     }
+
+
+def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
+    store, channel_id, source_id = _store_with_source(tmp_path)
+    store.set_source_strip_body_links(source_id, True)
     article_id = store.insert_collected(
         channel_id=channel_id,
         source_id=source_id,
@@ -81,7 +88,7 @@ def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
         source_url="https://t.me/textonly/1",
         raw_text="Текст матеріалу",
         media_json=json.dumps([encode_media("image", "https://example.test/photo.jpg")]),
-        article_layout_json=json.dumps(layout),
+        article_layout_json=json.dumps(_layout()),
     )
 
     row = store.get_article(article_id)
@@ -92,3 +99,34 @@ def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
     assert saved_layout["telegram"]["media_count"] == 0
     assert saved_layout["telegram"]["stitch_media_suppressed"] is True
     assert not [b for b in saved_layout["blocks"] if b.get("type") == "media"]
+
+
+def test_switching_existing_source_to_text_only_clears_previously_saved_media(tmp_path) -> None:
+    store, channel_id, source_id = _store_with_source(tmp_path)
+    encoded = encode_media("image", "https://example.test/photo.jpg")
+    article_id = store.insert_collected(
+        channel_id=channel_id,
+        source_id=source_id,
+        external_id="textonly/2",
+        title="Тест",
+        source_url="https://t.me/textonly/2",
+        raw_text="Текст матеріалу",
+        media_json=json.dumps([encoded]),
+        article_layout_json=json.dumps(_layout()),
+    )
+    assert json.loads(str(store.get_article(article_id)["media_json"]))
+
+    store.set_source_strip_body_links(source_id, True)
+    same_id = store.insert_collected(
+        channel_id=channel_id,
+        source_id=source_id,
+        external_id="textonly/2",
+        title="Тест",
+        source_url="https://t.me/textonly/2",
+        raw_text="Текст матеріалу",
+        media_json=json.dumps([encoded]),
+        article_layout_json=json.dumps(_layout()),
+    )
+
+    assert same_id == article_id
+    assert json.loads(str(store.get_article(article_id)["media_json"])) == []
