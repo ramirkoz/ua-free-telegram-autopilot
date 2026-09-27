@@ -19,9 +19,6 @@ _READY_MEDIA_CODES = {
 }
 
 
-# The production scheduler imports its collector function at module load. Install the
-# current V2 composition wrapper before any runtime worker starts; this changes only
-# Telegram source composition and leaves bounded scheduling/source health intact.
 install_ingest_behavior()
 
 
@@ -30,10 +27,9 @@ class HardenedReadyStore(ReadyBacklogStore):
 
     def insert_collected(self, **kwargs):
         source_id = int(kwargs.get("source_id") or 0)
-        if source_id and self.source_strip_body_links(source_id):
-            # The existing visible "Брати ... тільки текст" source setting already
-            # strips body links. It now also suppresses source media and adjacent-media
-            # composition. The canonical source/footer URL is preserved.
+        text_only = bool(source_id and self.source_strip_body_links(source_id))
+        cleaned_layout = ""
+        if text_only:
             kwargs["media_json"] = "[]"
             try:
                 layout = json.loads(str(kwargs.get("article_layout_json") or "{}"))
@@ -54,8 +50,22 @@ class HardenedReadyStore(ReadyBacklogStore):
                 tg["text_only_source"] = True
                 tg["stitch_media_suppressed"] = True
             layout["source_text_only"] = True
-            kwargs["article_layout_json"] = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
-        return super().insert_collected(**kwargs)
+            cleaned_layout = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+            kwargs["article_layout_json"] = cleaned_layout
+
+        article_id = super().insert_collected(**kwargs)
+
+        if text_only:
+            # insert_collected intentionally preserves previously discovered media on
+            # duplicate Telegram rows. A source-level text-only choice must override
+            # that preservation as well, otherwise an older queued copy can still
+            # publish media after the operator ticks the checkbox.
+            with self.connect() as con:
+                con.execute(
+                    "UPDATE articles SET media_json='[]',article_layout_json=? WHERE id=?",
+                    (cleaned_layout or "{}", int(article_id)),
+                )
+        return article_id
 
 
 class HardenedRuntimeEngine(ReadyBacklogRuntimeEngine):
