@@ -1,9 +1,6 @@
 name: Autopilot V2 Update Overlay
 
 on:
-  workflow_run:
-    workflows: ["Autopilot V2 Release"]
-    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +8,6 @@ permissions:
 
 jobs:
   update-overlay:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-latest
     timeout-minutes: 20
     steps:

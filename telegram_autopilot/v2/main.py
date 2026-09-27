@@ -12,18 +12,56 @@ from ..paths import data_dir
 from . import V2_VERSION
 from .advanced_update_coordinator import AdvancedUpdateCoordinator as UpdateCoordinator
 from .bounded_ingest import BoundedStrictIngestService
+from .domain import ProviderState
 from .loghub import LogHub, event
 from .provider_compat import install_provider_compat
 from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
-from .ui_hardening import FastMainWindow as MainWindow
+from .ui_hardening import FastMainWindow
 from .update_protocol import UpdateProtocol
 from .first_run_import import maybe_import_legacy_data
-from .credential_recovery import recover_missing_credentials_from_siblings
 from .migration_repair import repair_polling_baseline
 from ..language_tool_local import shutdown_languagetool
 
 
 _CRASH_STREAM = None
+
+
+class MainWindow(FastMainWindow):
+    """Main UI with an explicit AI probe result instead of a generic completion message."""
+
+    def test_ai(self) -> None:
+        self.status_text.set("Перевіряю налаштовані AI-провайдери…")
+
+        def work() -> None:
+            try:
+                results = list(self.runtime.gateway.probe_all())
+                skipped = 0
+                healthy = 0
+                for item in results:
+                    detail = str(getattr(item, "detail", "") or "").casefold()
+                    state = getattr(item, "state", ProviderState.UNKNOWN)
+                    if state == ProviderState.CONFIG_ERROR and (
+                        "не налаштовано" in detail
+                        or "secret" in detail
+                        or "вимкнено" in detail
+                        or "disabled" in detail
+                    ):
+                        skipped += 1
+                    elif state == ProviderState.HEALTHY:
+                        healthy += 1
+                tested = max(0, len(results) - skipped)
+                failed = max(0, tested - healthy)
+                if tested == 0:
+                    text = f"AI тест: 0 перевірено · пропущено {skipped}. Немає активних налаштованих маршрутів."
+                else:
+                    text = f"AI тест: перевірено {tested} · працює {healthy} · помилки {failed} · пропущено {skipped}"
+                event("ai", "manual provider probe complete", tested=tested, healthy=healthy, failed=failed, skipped=skipped)
+                self.after(0, lambda: self.status_text.set(text))
+            except Exception as exc:
+                event("ai", "manual provider probe failed", level=40, detail=str(exc)[:1200])
+                self.after(0, lambda: self.status_text.set(f"Тест AI: помилка: {exc}"))
+
+        threading.Thread(target=work, name="AI-Manual-Probe", daemon=True).start()
 
 
 def v2_database_path() -> Path:
@@ -142,11 +180,6 @@ def main() -> int:
                 event("app", "polling baseline repair checked", **poll_repair)
             except Exception as exc:
                 event("app", "polling baseline repair failed", level=30, detail=str(exc)[:1200])
-            try:
-                recovery = recover_missing_credentials_from_siblings()
-                event("app", "credential recovery checked", **recovery)
-            except Exception as exc:
-                event("app", "credential recovery failed", level=30, detail=str(exc)[:1200])
 
             runtime = RuntimeEngine(store)
             runtime.ingest = BoundedStrictIngestService(store)
@@ -210,7 +243,6 @@ def main() -> int:
                         if _manual_test_build():
                             event("update", "manual test build: auto-update disabled", version=V2_VERSION)
                         else:
-                            # Never let the updater interfere with the fragile first seconds of a fresh GUI/runtime start.
                             app.after(30000, update_coordinator.start)
                             event("update", "auto-update deferred until runtime grace period", delay_ms=30000)
                     app.after(250, start_runtime_and_mark_ready)

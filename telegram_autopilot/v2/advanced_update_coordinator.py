@@ -1,42 +1,47 @@
 from __future__ import annotations
 
 import json
+import re
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 from .loghub import event
 from .safe_update_protocol import SafeUpdateProtocol
 from .update_coordinator import UpdateCoordinator
 
+_RELEASES_URL = "https://api.github.com/repos/ramirkoz/ua-free-telegram-autopilot/releases?per_page=20"
+_VERSION_RE = re.compile(r"^2\.0\.0-rc(?P<rc>[1-9]\d*)$")
+
+
+def _version_number(value: str) -> int:
+    match = _VERSION_RE.fullmatch(str(value or "").strip())
+    return int(match.group("rc")) if match else -1
+
+
+def _read_json_url(url: str, *, timeout: int = 12) -> Any:
+    request = urllib.request.Request(
+        str(url),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "UA-FREE-Telegram-Autopilot-Updater",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=max(3, int(timeout))) as response:
+        return json.loads(response.read().decode("utf-8-sig"))
+
 
 class AdvancedUpdateCoordinator(UpdateCoordinator):
-    """Production coordinator for approved Drive manifests and deterministic updates."""
+    """Discover approved releases and hand deterministic requests to the safe updater."""
 
     def __init__(self, app, store, runtime) -> None:
         super().__init__(app, store, runtime)
         self.protocol = SafeUpdateProtocol()
 
-    def _refresh_mirror(self) -> None:
-        ensure = getattr(self.supervisor, "ensure_live_mirror", None)
-        if callable(ensure):
-            try:
-                ensure(force=False)
-            except Exception as exc:
-                event("update", "telemetry mirror refresh before update poll failed", level=30, detail=str(exc)[:800])
-
-    def _manifest_request(self):
-        self._refresh_mirror()
-        raw = str(self.supervisor.config.mirror_dir or "").strip()
-        if not raw:
-            return None
-        path = Path(raw) / "release_manifest.json"
-        if not path.is_file():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except Exception as exc:
-            raise ValueError(f"UPDATE_MANIFEST_JSON_INVALID: {exc}") from exc
+    @staticmethod
+    def _approved_manifest(data: Any) -> dict[str, Any] | None:
         if not isinstance(data, dict):
-            raise ValueError("UPDATE_MANIFEST_JSON_INVALID")
+            return None
         if not (
             bool(data.get("approved_for_auto_update"))
             and bool(data.get("ci_passed"))
@@ -44,26 +49,21 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
         ):
             return None
         target = str(data.get("version") or "").strip()
+        if _version_number(target) < 0:
+            return None
         expected_asset = f"UA_FREE_Telegram_Autopilot_v{target}_Update.zip"
         if str(data.get("artifact_filename") or expected_asset).strip() != expected_asset:
-            raise ValueError("UPDATE_MANIFEST_ASSET_INVALID")
-        expected_sha = str(data.get("sha256") or "").strip().casefold()
-        artifact = Path(raw) / expected_asset
+            return None
+        return data
 
-        # The small signed/approved manifest is sufficient to request an update.
-        # The detached helper always constructs the GitHub URL from the fixed repo
-        # and verifies this SHA. If Drive has already synced the exact overlay we use
-        # it; otherwise the helper safely downloads the same release from GitHub.
-        source = "drive-release-manifest-github-fallback"
-        if artifact.is_file():
-            try:
-                if self.protocol.sha256(artifact).casefold() != expected_sha:
-                    # A partially synced Drive ZIP must never win the helper race.
-                    return None
-                source = "drive-release-manifest"
-            except OSError:
-                return None
-
+    def _request_from_manifest(
+        self,
+        data: dict[str, Any],
+        *,
+        source: str,
+        require_newer: bool = True,
+    ):
+        target = str(data.get("version") or "").strip()
         request = self.protocol.validate_request({
             "request_id": str(data.get("request_id") or f"manifest-{target.replace('.', '-')}")[:96],
             "target_version": target,
@@ -71,6 +71,8 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             "created_at": str(data.get("created_at") or ""),
             "source": source,
         })
+        if require_newer and not self.protocol.request_is_newer(request):
+            return None
         if self.protocol.request_already_terminal(request):
             return None
         current = self.protocol.load_request()
@@ -83,22 +85,89 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             "created_at": request.created_at,
             "source": request.source,
         })
-        self.protocol.write_state("REQUESTED", request=request, detail="approved Drive release_manifest.json")
+        self.protocol.write_state("REQUESTED", request=request, detail=f"approved release manifest via {source}")
         event(
-            "update", "approved release manifest accepted",
-            target_version=request.target_version, request_id=request.request_id, source=request.source,
+            "update",
+            "approved release manifest accepted",
+            target_version=request.target_version,
+            request_id=request.request_id,
+            source=request.source,
         )
         return request
+
+    def _github_manifest_request(self):
+        releases = _read_json_url(_RELEASES_URL)
+        if not isinstance(releases, list):
+            raise ValueError("UPDATE_RELEASES_JSON_INVALID")
+
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for release in releases:
+            if not isinstance(release, dict) or bool(release.get("draft")):
+                continue
+            for asset in release.get("assets") or []:
+                if not isinstance(asset, dict) or str(asset.get("name") or "") != "release_manifest.json":
+                    continue
+                manifest_url = str(asset.get("browser_download_url") or "").strip()
+                if not manifest_url:
+                    continue
+                manifest = self._approved_manifest(_read_json_url(manifest_url))
+                if manifest is None:
+                    continue
+                target = str(manifest.get("version") or "")
+                candidates.append((_version_number(target), manifest))
+                break
+
+        for _number, manifest in sorted(candidates, key=lambda item: item[0], reverse=True):
+            request = self._request_from_manifest(manifest, source="github-release-manifest", require_newer=True)
+            if request is not None:
+                return request
+        return None
+
+    def _drive_manifest_request(self, *, require_newer: bool = True):
+        raw = str(self.supervisor.config.mirror_dir or "").strip()
+        if not raw:
+            return None
+        path = Path(raw) / "release_manifest.json"
+        if not path.is_file():
+            return None
+        try:
+            manifest = self._approved_manifest(json.loads(path.read_text(encoding="utf-8-sig")))
+        except Exception as exc:
+            raise ValueError(f"UPDATE_MANIFEST_JSON_INVALID: {exc}") from exc
+        if manifest is None:
+            return None
+
+        target = str(manifest.get("version") or "").strip()
+        expected_asset = f"UA_FREE_Telegram_Autopilot_v{target}_Update.zip"
+        expected_sha = str(manifest.get("sha256") or "").strip().casefold()
+        artifact = Path(raw) / expected_asset
+        source = "drive-release-manifest-github-fallback"
+        if artifact.is_file():
+            try:
+                if self.protocol.sha256(artifact).casefold() != expected_sha:
+                    return None
+                source = "drive-release-manifest"
+            except OSError:
+                return None
+        return self._request_from_manifest(manifest, source=source, require_newer=require_newer)
+
+    def _manifest_request(self):
+        """Compatibility surface for manifest validation tests and legacy callers.
+
+        Live polling performs its own newer-version gate before applying any request.
+        """
+        return self._drive_manifest_request(require_newer=False)
 
     def poll(self) -> None:
         self._after_id = None
         if self._closed or self._inflight:
             return
         try:
-            self._refresh_mirror()
-            request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
+            request = self._github_manifest_request()
             if request is None:
-                request = self._manifest_request()
+                request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
+            if request is None:
+                request = self._drive_manifest_request(require_newer=True)
             if request is None:
                 request = self.protocol.load_request()
             self.protocol.mirror_status(self.supervisor.config.mirror_dir)
@@ -110,7 +179,8 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 return
             if not self.protocol.request_is_newer(request):
                 self.protocol.write_result(
-                    "REJECTED", request=request,
+                    "REJECTED",
+                    request=request,
                     detail=f"Target {request.target_version} is not newer than the installed version",
                 )
                 try:
@@ -122,5 +192,14 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 return
             self._begin(request)
         except Exception as exc:
-            event("update", "update request/manifest poll failed", level=30, detail=str(exc)[:1200])
+            event("update", "update discovery failed", level=30, detail=str(exc)[:1200])
+            try:
+                request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
+                if request is None:
+                    request = self._drive_manifest_request(require_newer=True)
+                if request is not None and self.protocol.request_is_newer(request):
+                    self._begin(request)
+                    return
+            except Exception as fallback_exc:
+                event("update", "update Drive fallback failed", level=30, detail=str(fallback_exc)[:1200])
             self._schedule(10000)
