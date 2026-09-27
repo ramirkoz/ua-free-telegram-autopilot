@@ -28,8 +28,16 @@ class FakeTree:
         if iid in self.order:
             self.order.remove(iid)
 
-    def item(self, iid, *, values):
-        self.rows[str(iid)] = tuple(values)
+    def item(self, iid, option=None, *, values=None):
+        iid = str(iid)
+        if option == "values":
+            return self.rows.get(iid, ())
+        if values is not None:
+            self.rows[iid] = tuple(values)
+        return {"values": self.rows.get(iid, ())}
+
+    def index(self, iid):
+        return self.order.index(str(iid))
 
     def move(self, iid, _parent, index):
         iid = str(iid)
@@ -74,7 +82,6 @@ def test_queue_tree_render_is_sliced_and_preserves_all_rows():
     assert fake.queue_tree.order[0] == "0"
     assert fake.queue_tree.order[-1] == "99"
     assert fake._rc51_render_signatures["queue"] == 12345
-    # 100 rows with a batch size of 24 must yield to Tk several times.
     assert fake.after_calls >= 4
 
 
