@@ -133,7 +133,7 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
         expected_asset = f"UA_FREE_Telegram_Autopilot_v{target}_Update.zip"
         expected_sha = str(manifest.get("sha256") or "").strip().casefold()
         artifact = Path(raw) / expected_asset
-        source = "drive-release-manifest-github-download"
+        source = "drive-release-manifest-github-fallback"
         if artifact.is_file():
             try:
                 if self.protocol.sha256(artifact).casefold() != expected_sha:
