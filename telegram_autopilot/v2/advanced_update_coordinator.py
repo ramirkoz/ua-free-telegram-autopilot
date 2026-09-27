@@ -56,7 +56,13 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             return None
         return data
 
-    def _request_from_manifest(self, data: dict[str, Any], *, source: str):
+    def _request_from_manifest(
+        self,
+        data: dict[str, Any],
+        *,
+        source: str,
+        require_newer: bool = True,
+    ):
         target = str(data.get("version") or "").strip()
         request = self.protocol.validate_request({
             "request_id": str(data.get("request_id") or f"manifest-{target.replace('.', '-')}")[:96],
@@ -65,7 +71,9 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             "created_at": str(data.get("created_at") or ""),
             "source": source,
         })
-        if not self.protocol.request_is_newer(request) or self.protocol.request_already_terminal(request):
+        if require_newer and not self.protocol.request_is_newer(request):
+            return None
+        if self.protocol.request_already_terminal(request):
             return None
         current = self.protocol.load_request()
         if current and current.request_id == request.request_id:
@@ -110,12 +118,12 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 break
 
         for _number, manifest in sorted(candidates, key=lambda item: item[0], reverse=True):
-            request = self._request_from_manifest(manifest, source="github-release-manifest")
+            request = self._request_from_manifest(manifest, source="github-release-manifest", require_newer=True)
             if request is not None:
                 return request
         return None
 
-    def _drive_manifest_request(self):
+    def _drive_manifest_request(self, *, require_newer: bool = True):
         raw = str(self.supervisor.config.mirror_dir or "").strip()
         if not raw:
             return None
@@ -141,11 +149,14 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 source = "drive-release-manifest"
             except OSError:
                 return None
-        return self._request_from_manifest(manifest, source=source)
+        return self._request_from_manifest(manifest, source=source, require_newer=require_newer)
 
     def _manifest_request(self):
-        """Read the local manifest path retained for existing coordinator callers."""
-        return self._drive_manifest_request()
+        """Compatibility surface for manifest validation tests and legacy callers.
+
+        Live polling performs its own newer-version gate before applying any request.
+        """
+        return self._drive_manifest_request(require_newer=False)
 
     def poll(self) -> None:
         self._after_id = None
@@ -156,7 +167,7 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             if request is None:
                 request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
             if request is None:
-                request = self._drive_manifest_request()
+                request = self._drive_manifest_request(require_newer=True)
             if request is None:
                 request = self.protocol.load_request()
             self.protocol.mirror_status(self.supervisor.config.mirror_dir)
@@ -185,7 +196,7 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
             try:
                 request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
                 if request is None:
-                    request = self._drive_manifest_request()
+                    request = self._drive_manifest_request(require_newer=True)
                 if request is not None and self.protocol.request_is_newer(request):
                     self._begin(request)
                     return
