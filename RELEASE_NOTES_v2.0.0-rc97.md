@@ -25,7 +25,7 @@ Focused responsiveness and monitoring-quality candidate based on RC96.
 
 - Restores bounded adjacent media stitching for Telegram sources that publish media and text as two consecutive messages.
 - Stitching requires consecutive message IDs and the existing five-minute adjacency window; no media is borrowed across another text-bearing post.
-- Upgrades the existing source setting `Брати з цього джерела тільки текст` to match its visible meaning: checked sources suppress source media/adjacent media while preserving the canonical source footer.
+- The existing source checkbox `Брати з цього джерела тільки текст (очищати посилання в тілі)` now also suppresses that source's media, matching its visible text-only meaning; the canonical footer/source URL remains.
 - Existing source configuration remains compatible; no source names are hardcoded.
 
 ## Preserved RC96 behavior
