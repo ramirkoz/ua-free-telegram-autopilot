@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""RC97 Telegram source behavior.
+"""Telegram source composition policy for the current V2 runtime.
 
-The strict parser still owns media by exact ``data-post``.  This module restores one
-bounded composition rule used by municipal channels: a text-only message and an
-immediately adjacent media-only message may form one editorial item when message IDs
-are consecutive and timestamps are within the existing five-minute adjacency window.
+The strict parser still owns media by exact ``data-post``. This module composes one
+bounded editorial item when a text-only message and an immediately adjacent
+media-only message are consecutive and fall inside the existing five-minute window.
 No media is borrowed across a text-bearing neighbour or a non-consecutive message.
 """
 
@@ -38,7 +37,6 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
     while i < len(ordered):
         current = ordered[i]
 
-        # Media-only message(s) immediately BEFORE their text caption/message.
         if media_only(current):
             run = [current]
             j = i + 1
@@ -59,7 +57,6 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
                     articles.append(strict_ingest._upgrade_strict_article(username, article, entry_by_id))
                     i = k
                     continue
-            # A standalone media-only post is not converted into a text article.
             i = j
             continue
 
@@ -67,14 +64,11 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
             attached: list[base.TelegramEntry] = []
             j = i + 1
             previous = current
-            # Media-only message(s) immediately AFTER the text message.
             while j < len(ordered) and media_only(ordered[j]) and base._adjacent(previous, ordered[j]):
                 attached.append(ordered[j])
                 previous = ordered[j]
                 j += 1
 
-            # Keep the old short hold for a newest text-only Telegram post: its media
-            # may appear one poll later.  If adjacent media is already present, publish.
             if not current.media and not attached and j >= len(ordered) and base._held(current):
                 i = j
                 continue
@@ -89,7 +83,7 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
     return articles
 
 
-def collect_telegram_rc97(source: Source) -> list[CollectedArticle]:
+def collect_telegram_current(source: Source) -> list[CollectedArticle]:
     username = collector._telegram_username(source.url)
     if not username:
         raise collector.CollectorError("Telegram-джерело має містити публічну адресу t.me/username")
@@ -109,7 +103,7 @@ def collect_telegram_rc97(source: Source) -> list[CollectedArticle]:
     return items[-40:]
 
 
-def _collect_rc97(
+def _collect_current(
     source: Source,
     *,
     page_prefer_feed: bool = False,
@@ -117,7 +111,7 @@ def _collect_rc97(
     page_fetch_limit: int = 8,
 ) -> list[CollectedArticle]:
     if source.kind == "telegram":
-        return collect_telegram_rc97(source)
+        return collect_telegram_current(source)
     return collector.collect_source(
         source,
         page_prefer_feed=page_prefer_feed,
@@ -126,9 +120,9 @@ def _collect_rc97(
     )
 
 
-def install_rc97_ingest_behavior() -> None:
+def install_ingest_behavior() -> None:
     """Install only the collector hook used by the bounded production scheduler."""
-    if getattr(bounded_ingest, "_rc97_ingest_policy_installed", False):
+    if getattr(bounded_ingest, "_adjacent_ingest_policy_installed", False):
         return
-    bounded_ingest.collect_strict = _collect_rc97
-    bounded_ingest._rc97_ingest_policy_installed = True
+    bounded_ingest.collect_strict = _collect_current
+    bounded_ingest._adjacent_ingest_policy_installed = True
