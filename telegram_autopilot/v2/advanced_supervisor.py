@@ -40,10 +40,6 @@ class AdvancedSupervisorService(SupervisorService):
             if self.REMOTE_AGENT_ENABLED
             else None
         )
-        # Base RC19 synchronously built a full SQLite/media/log snapshot from
-        # set_expected_running(), which is called by Tk Start/Stop callbacks. Keep
-        # the wakeup primitive entirely in the advanced service so RC21 does not
-        # need to mutate the large base supervisor module.
         self._poke = threading.Event()
 
     def set_expected_running(self, value: bool) -> None:
@@ -88,9 +84,6 @@ class AdvancedSupervisorService(SupervisorService):
             home / "GoogleDrive",
         ]
         if os.name == "nt":
-            # Google Drive for Desktop normally exposes My Drive as a mounted drive
-            # (often G:), but the letter is configurable. Search every plausible
-            # letter instead of assuming D:..K:.
             roots.extend(Path(f"{letter}:\\") for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ")
 
         candidates: dict[str, Path] = {}
@@ -171,6 +164,8 @@ class AdvancedSupervisorService(SupervisorService):
             "heartbeat_age_seconds": round(age, 2),
             "refresh_inflight": bool(getattr(self.runtime, "ui_refresh_inflight", False)),
             "last_refresh_ms": int(getattr(self.runtime, "ui_last_refresh_ms", 0) or 0),
+            "event_loop_lag_ms": int(getattr(self.runtime, "ui_event_loop_lag_ms", 0) or 0),
+            "event_loop_peak_lag_ms": int(getattr(self.runtime, "ui_event_loop_peak_lag_ms", 0) or 0),
         }
 
     def build_snapshot(self) -> dict[str, Any]:
@@ -214,6 +209,14 @@ class AdvancedSupervisorService(SupervisorService):
             incidents.append(Incident(
                 "WARNING", "UI_STALLED", "Інтерфейс не відповідає",
                 f"Tk heartbeat не оновлювався {lag:.1f} с; backend контролюється окремо.",
+            ))
+        loop_lag_ms = int(ui.get("event_loop_lag_ms") or 0)
+        laggy = bool(expected and loop_lag_ms >= 750)
+        elapsed = self._condition_elapsed("UI_LAGGING", laggy, now)
+        if laggy and elapsed >= 2.0:
+            incidents.append(Incident(
+                "WARNING", "UI_LAGGING", "Інтерфейс підвисає",
+                f"Tk event loop запізнюється приблизно на {loop_lag_ms} мс; backend може залишатися healthy.",
             ))
         return incidents
 
