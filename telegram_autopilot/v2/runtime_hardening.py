@@ -8,7 +8,7 @@ from .loghub import event
 from .media_pipeline import build_media_bundle, media_bundle_complete
 from .ready_backlog import ReadyBacklogRuntimeEngine, ReadyBacklogStore
 from .storage import _parse_datetime_value, now_iso
-from .telegram_ingest_policy import install_rc97_ingest_behavior
+from .telegram_ingest_policy import install_ingest_behavior
 
 READY_MEDIA_GRACE_SECONDS = 1800
 _READY_MEDIA_CODES = {
@@ -20,21 +20,20 @@ _READY_MEDIA_CODES = {
 
 
 # The production scheduler imports its collector function at module load. Install the
-# RC97 wrapper once before any runtime worker starts; this changes Telegram composition
-# only and leaves the bounded scheduler/source-health behavior intact.
-install_rc97_ingest_behavior()
+# current V2 composition wrapper before any runtime worker starts; this changes only
+# Telegram source composition and leaves bounded scheduling/source health intact.
+install_ingest_behavior()
 
 
 class HardenedReadyStore(ReadyBacklogStore):
-    """RC97 store hardening with source-level text-only publication behavior."""
+    """Current store hardening with source-level text-only publication behavior."""
 
     def insert_collected(self, **kwargs):
         source_id = int(kwargs.get("source_id") or 0)
         if source_id and self.source_strip_body_links(source_id):
-            # The existing source checkbox is intentionally upgraded to match its
-            # visible label: "Брати ... тільки текст".  It already strips body links;
-            # RC97 also suppresses source media and any adjacent-media stitch for that
-            # source.  The canonical footer/source URL remains untouched.
+            # The existing visible "Брати ... тільки текст" source setting already
+            # strips body links. It now also suppresses source media and adjacent-media
+            # composition. The canonical source/footer URL is preserved.
             kwargs["media_json"] = "[]"
             try:
                 layout = json.loads(str(kwargs.get("article_layout_json") or "{}"))
