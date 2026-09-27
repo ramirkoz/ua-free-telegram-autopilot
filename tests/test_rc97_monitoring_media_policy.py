@@ -12,13 +12,13 @@ def test_adjacent_media_only_message_is_stitched_to_following_text() -> None:
     media = base.TelegramEntry(
         post="vasgromada/100",
         text="",
-        published="2026-09-27T12:00:00+00:00",
+        published="2026-09-26T12:00:00+00:00",
         media=[encode_media("image", "https://example.test/photo.jpg")],
     )
     text = base.TelegramEntry(
         post="vasgromada/101",
         text="Фахівці громади взяли участь у міжнародному саміті.",
-        published="2026-09-27T12:01:00+00:00",
+        published="2026-09-26T12:01:00+00:00",
         media=[],
     )
 
@@ -36,13 +36,13 @@ def test_non_adjacent_media_is_not_borrowed() -> None:
     media = base.TelegramEntry(
         post="source/100",
         text="",
-        published="2026-09-27T10:00:00+00:00",
+        published="2026-09-26T10:00:00+00:00",
         media=[encode_media("image", "https://example.test/wrong.jpg")],
     )
     text = base.TelegramEntry(
         post="source/102",
         text="Окрема новина без власного медіа.",
-        published="2026-09-27T10:01:00+00:00",
+        published="2026-09-26T10:01:00+00:00",
         media=[],
     )
 
@@ -67,8 +67,6 @@ def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
         )
         source_id = int(cur.lastrowid)
 
-    # RC97 deliberately upgrades the already visible "Брати ... тільки текст"
-    # checkbox instead of inventing a second competing source flag.
     store.set_source_strip_body_links(source_id, True)
     layout = {
         "source_kind": "telegram",
