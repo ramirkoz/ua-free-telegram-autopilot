@@ -47,27 +47,21 @@ def _repair_monitoring_live_now_policy(con) -> int:
 
 
 def repair_polling_baseline(store) -> dict[str, object]:
-    """Apply 15-minute polling and seed visible live-now policy after import."""
+    """Apply 15-minute polling and seed visible live-now policy after import.
+
+    Keep the historical return shape unchanged because startup and regressions use
+    it as a stable contract; the policy seed is persisted in normal channel data.
+    """
     install_monitoring_live_now_gate()
     with store.connect() as con:
-        live_now_changed = _repair_monitoring_live_now_policy(con)
+        _repair_monitoring_live_now_policy(con)
         row = con.execute("SELECT value FROM meta WHERE key=?", (_POLL_MARKER,)).fetchone()
         if row and str(row[0] or "") == "1":
-            return {
-                "repaired": bool(live_now_changed),
-                "reason": "already_applied",
-                "channels_changed": 0,
-                "live_now_channels_changed": live_now_changed,
-            }
+            return {"repaired": False, "reason": "already_applied", "channels_changed": 0}
 
         total = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0] or 0)
         if total <= 0:
-            return {
-                "repaired": bool(live_now_changed),
-                "reason": "no_channels",
-                "channels_changed": 0,
-                "live_now_channels_changed": live_now_changed,
-            }
+            return {"repaired": False, "reason": "no_channels", "channels_changed": 0}
 
         changed = int(con.execute("SELECT COUNT(*) FROM channels WHERE poll_interval_minutes<15").fetchone()[0] or 0)
         if changed:
@@ -80,9 +74,8 @@ def repair_polling_baseline(store) -> dict[str, object]:
             (_POLL_MARKER, "1"),
         )
         return {
-            "repaired": bool(changed or live_now_changed),
+            "repaired": bool(changed),
             "reason": "baseline_applied",
             "channels_changed": changed,
             "channels_total": total,
-            "live_now_channels_changed": live_now_changed,
         }
