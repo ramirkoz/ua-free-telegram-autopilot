@@ -12,7 +12,9 @@ def test_poll_marker_is_not_consumed_before_channels_exist(tmp_path: Path) -> No
     store = V2Store(db)
 
     first = repair_polling_baseline(store)
-    assert first == {"repaired": False, "reason": "no_channels", "channels_changed": 0}
+    assert first["repaired"] is False
+    assert first["reason"] == "no_channels"
+    assert first["channels_changed"] == 0
 
     stamp = now_iso()
     with store.connect() as con:

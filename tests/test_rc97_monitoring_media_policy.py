@@ -63,7 +63,7 @@ def _store_with_source(tmp_path):
         channel_id = int(con.execute("SELECT id FROM channels WHERE name='monitor'").fetchone()[0])
         cur = con.execute(
             "INSERT INTO sources(channel_id,kind,name,url,enabled,priority) VALUES(?,?,?,?,1,100)",
-            (channel_id, "telegram", "text-only source", "https://t.me/textonly"),
+            (channel_id, "telegram", "clean-body source", "https://t.me/textonly"),
         )
         source_id = int(cur.lastrowid)
     return store, channel_id, source_id
@@ -77,9 +77,10 @@ def _layout():
     }
 
 
-def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
+def test_strip_body_links_source_flag_preserves_media(tmp_path) -> None:
     store, channel_id, source_id = _store_with_source(tmp_path)
     store.set_source_strip_body_links(source_id, True)
+    encoded = encode_media("image", "https://example.test/photo.jpg")
     article_id = store.insert_collected(
         channel_id=channel_id,
         source_id=source_id,
@@ -87,21 +88,20 @@ def test_existing_take_text_only_source_flag_suppresses_media(tmp_path) -> None:
         title="Тест",
         source_url="https://t.me/textonly/1",
         raw_text="Текст матеріалу",
-        media_json=json.dumps([encode_media("image", "https://example.test/photo.jpg")]),
+        media_json=json.dumps([encoded]),
         article_layout_json=json.dumps(_layout()),
     )
 
     row = store.get_article(article_id)
     assert row is not None
-    assert json.loads(str(row["media_json"])) == []
+    assert json.loads(str(row["media_json"])) == [encoded]
     saved_layout = json.loads(str(row["article_layout_json"]))
-    assert saved_layout["source_text_only"] is True
-    assert saved_layout["telegram"]["media_count"] == 0
-    assert saved_layout["telegram"]["stitch_media_suppressed"] is True
-    assert not [b for b in saved_layout["blocks"] if b.get("type") == "media"]
+    assert saved_layout["telegram"]["media_count"] == 1
+    assert [b for b in saved_layout["blocks"] if b.get("type") == "media"]
+    assert store.source_strip_body_links(source_id) is True
 
 
-def test_switching_existing_source_to_text_only_clears_previously_saved_media(tmp_path) -> None:
+def test_switching_existing_source_to_strip_links_keeps_previously_saved_media(tmp_path) -> None:
     store, channel_id, source_id = _store_with_source(tmp_path)
     encoded = encode_media("image", "https://example.test/photo.jpg")
     article_id = store.insert_collected(
@@ -114,7 +114,7 @@ def test_switching_existing_source_to_text_only_clears_previously_saved_media(tm
         media_json=json.dumps([encoded]),
         article_layout_json=json.dumps(_layout()),
     )
-    assert json.loads(str(store.get_article(article_id)["media_json"]))
+    assert json.loads(str(store.get_article(article_id)["media_json"])) == [encoded]
 
     store.set_source_strip_body_links(source_id, True)
     same_id = store.insert_collected(
@@ -129,4 +129,4 @@ def test_switching_existing_source_to_text_only_clears_previously_saved_media(tm
     )
 
     assert same_id == article_id
-    assert json.loads(str(store.get_article(article_id)["media_json"])) == []
+    assert json.loads(str(store.get_article(article_id)["media_json"])) == [encoded]
