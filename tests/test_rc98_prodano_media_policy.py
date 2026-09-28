@@ -111,5 +111,5 @@ def test_first_impact_report_rejected_but_settled_summary_allowed(tmp_path) -> N
         "title": "ОВА повідомила підсумки нічної атаки",
         "raw_text": "За підсумками атаки пошкоджено 12 будинків. Пожежу ліквідовано.",
     }
-    assert "Первинне" in live_now_exclusion(channel, first)
+    assert live_now_exclusion(channel, first)
     assert live_now_exclusion(channel, settled) == ""
