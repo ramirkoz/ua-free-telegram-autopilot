@@ -32,6 +32,20 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
 
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
 
+    # RC99: do not let AI invent a news item from a bare warning such as
+    # "Новомиколаївка, уважно". A monitoring item must contain an actual event,
+    # action, consequence or scheduled change before it reaches generative AI.
+    compact = re.sub(r"\s+", " ", low).strip()
+    warning_only = any(token in compact for token in ("уважно", "увага", "важливо", "терміново", "обережно"))
+    concrete_context = any(token in compact for token in (
+        "пошкод", "зруйн", "поран", "загин", "постраждал", "пожеж", "відключ", "ремонт",
+        "віднов", "відкрит", "закрит", "перекрит", "зміни", "авар", "влучан", "обстріл",
+        "тривог", "евакуац", "вода", "електро", "газ", "опален", "транспорт", "дорог", "школ",
+        "лікар", "допомог", "виплат", "графік", "розклад", "рішення", "засідан", "ярмар", "поді",
+    ))
+    if warning_only and len(compact) <= 180 and not concrete_context:
+        return "Недостатньо контексту: джерело містить лише попередження без події, факту або дії"
+
     settled_aftermath = any(
         token in low
         for token in (
@@ -51,17 +65,22 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         ))
     )
 
-    unfolding_patterns = (
+    hard_unfolding_patterns = (
         r"\b(зараз|наразі|прямо\s+зараз|цієї\s+миті|у\s+ці\s+хвилини)\b.{0,140}\b(палає|горить|пожеж\w*|вибух\w*|дим\w*|задимлен\w*|летить|рухаєть\w*|загроз\w*)",
         r"\b(щойно|тільки\s+що|кілька\s+хвилин\s+тому)\b.{0,160}\b(пролетів|побачили|зафіксували|вибух\w*|загоріл\w*|палає|горить|атак\w*|удар\w*)",
         r"\b(пролунал\w*|чутно|чути)\b.{0,100}\bвибух\w*",
         r"\b(видно|помітили)\b.{0,100}\b(дим|задимлен\w*|пожеж\w*|полум.?я)",
         r"\bпопередньо\b.{0,180}\b(удар|влучан|постраждал|загибл|пошкоджен|атак|обійшл)\w*",
+    )
+    if any(re.search(pattern, low, re.I) for pattern in hard_unfolding_patterns):
+        return "Подія ще відбувається або є первинним оперативним повідомленням; для 15-хвилинного моніторингу вона неактуальна"
+
+    soft_unfolding_patterns = (
         r"\b(удар\w*\s+прийш|влучан\w*)\b.{0,180}\b(поблизу|район|об.?єкт|будин|міст|дим|пожеж)",
         r"\b(служб\w*|рятувальник\w*)\b.{0,100}\b(працюють|працює|виїхали|прямують|на\s+місці)\b",
     )
-    if any(re.search(pattern, low, re.I) for pattern in unfolding_patterns):
-        return "Подія ще відбувається або є первинним оперативним повідомленням; для 15-хвилинного моніторингу вона неактуальна"
+    if not strong_settled_result and any(re.search(pattern, low, re.I) for pattern in soft_unfolding_patterns):
+        return "Первинне оперативне повідомлення без стабілізованих підсумків"
 
     # RC98: phrases such as "зафіксовано влучання" were slipping through when a
     # first report also contained a generic word like "пошкоджено".  A first impact
@@ -92,8 +111,9 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     if any(re.search(pattern, low, re.I) for pattern in patterns):
         return "Оперативна live-now подія, що втрачає актуальність у 15-хвилинному циклі моніторингу"
 
-    attack_now = any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
-    if attack_now and not settled_aftermath:
+    war_context = any(token in low for token in ("росій", "ворож", "бпла", "дрон", "шахед", "ракет", "обстріл", "удар", "запоріж"))
+    attack_now = war_context and any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
+    if attack_now and not settled_aftermath and not strong_settled_result:
         return "Первинне повідомлення про атаку/вибух без стабілізованих підсумків"
 
     return ""

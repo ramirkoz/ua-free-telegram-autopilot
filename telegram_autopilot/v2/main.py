@@ -59,7 +59,8 @@ class MainWindow(FastMainWindow):
                 self.after(0, lambda: self.status_text.set(text))
             except Exception as exc:
                 event("ai", "manual provider probe failed", level=40, detail=str(exc)[:1200])
-                self.after(0, lambda: self.status_text.set(f"Тест AI: помилка: {exc}"))
+                msg = str(exc)
+                self.after(0, lambda msg=msg: self.status_text.set(f"Тест AI: помилка: {msg}"))
 
         threading.Thread(target=work, name="AI-Manual-Probe", daemon=True).start()
 
@@ -243,8 +244,12 @@ def main() -> int:
                         if _manual_test_build():
                             event("update", "manual test build: auto-update disabled", version=V2_VERSION)
                         else:
-                            app.after(30000, update_coordinator.start)
-                            event("update", "auto-update deferred until runtime grace period", delay_ms=30000)
+                            event(
+                                "update",
+                                "RC99 safety gate: automatic update disabled until signed-manifest verification is deployed",
+                                level=30,
+                                version=V2_VERSION,
+                            )
                     app.after(250, start_runtime_and_mark_ready)
                 else:
                     app.book.select(app.tabs["migration"])

@@ -44,7 +44,7 @@ class UpdateCoordinator:
             except Exception:
                 pass
 
-    def _schedule(self, delay_ms: int = 5000) -> None:
+    def _schedule(self, delay_ms: int = 900000) -> None:
         if self._closed or self._inflight:
             return
         try:
@@ -83,7 +83,7 @@ class UpdateCoordinator:
             self._begin(request)
         except Exception as exc:
             event("update", "update request poll failed", level=30, detail=str(exc)[:1200])
-            self._schedule(10000)
+            self._schedule(900000)
 
     def _begin(self, request: UpdateRequest) -> None:
         if self._inflight:
@@ -173,7 +173,7 @@ class UpdateCoordinator:
             self.app.status.set(message)
         except Exception:
             pass
-        self._schedule(10000)
+        self._schedule(900000)
 
     def _close_for_update(self) -> None:
         """Compatibility hook retained for older callers.

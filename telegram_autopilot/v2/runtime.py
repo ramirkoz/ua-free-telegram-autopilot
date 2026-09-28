@@ -144,8 +144,15 @@ class RuntimeEngine:
 
     def _watchdog_loop(self) -> None:
         """Continuously restore dead per-channel workers/collectors while runtime is expected to run."""
+        lease_recovery_tick = 0
         while not self.stop_event.wait(5.0):
             try:
+                lease_recovery_tick += 1
+                if lease_recovery_tick >= 12:
+                    recovered = int(self.store.recover_stale_leases() or 0)
+                    lease_recovery_tick = 0
+                    if recovered:
+                        event("worker", "watchdog recovered stale leases", level=logging.WARNING, recovered=recovered)
                 enabled = [int(row["id"]) for row in self.store.list_channels(enabled_only=True)]
                 for channel_id in enabled:
                     with self._lock:
