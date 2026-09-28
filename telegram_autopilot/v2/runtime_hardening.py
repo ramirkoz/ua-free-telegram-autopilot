@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
 from .domain import BlockedBy, Decision, Stage
@@ -23,49 +22,13 @@ install_ingest_behavior()
 
 
 class HardenedReadyStore(ReadyBacklogStore):
-    """Current store hardening with source-level text-only publication behavior."""
+    """Current store hardening.
 
-    def insert_collected(self, **kwargs):
-        source_id = int(kwargs.get("source_id") or 0)
-        text_only = bool(source_id and self.source_strip_body_links(source_id))
-        cleaned_layout = ""
-        if text_only:
-            kwargs["media_json"] = "[]"
-            try:
-                layout = json.loads(str(kwargs.get("article_layout_json") or "{}"))
-            except Exception:
-                layout = {}
-            if not isinstance(layout, dict):
-                layout = {}
-            blocks = layout.get("blocks")
-            if isinstance(blocks, list):
-                layout["blocks"] = [
-                    block for block in blocks
-                    if not (isinstance(block, dict) and str(block.get("type") or "").casefold() == "media")
-                ]
-            tg = layout.get("telegram")
-            if isinstance(tg, dict):
-                tg["media_count"] = 0
-                tg["media_group"] = False
-                tg["text_only_source"] = True
-                tg["stitch_media_suppressed"] = True
-            layout["source_text_only"] = True
-            cleaned_layout = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
-            kwargs["article_layout_json"] = cleaned_layout
-
-        article_id = super().insert_collected(**kwargs)
-
-        if text_only:
-            # insert_collected intentionally preserves previously discovered media on
-            # duplicate Telegram rows. A source-level text-only choice must override
-            # that preservation as well, otherwise an older queued copy can still
-            # publish media after the operator ticks the checkbox.
-            with self.connect() as con:
-                con.execute(
-                    "UPDATE articles SET media_json='[]',article_layout_json=? WHERE id=?",
-                    (cleaned_layout or "{}", int(article_id)),
-                )
-        return article_id
+    Source-level ``strip_body_links`` is a publication-text cleanup option only.
+    It must never discard source-owned image/video media during ingest.  RC97
+    accidentally coupled the two concerns and turned useful Telegram posts into
+    text-only publications; RC98 restores the original separation.
+    """
 
 
 class HardenedRuntimeEngine(ReadyBacklogRuntimeEngine):
