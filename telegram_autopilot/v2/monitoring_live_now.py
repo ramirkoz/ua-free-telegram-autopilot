@@ -19,11 +19,10 @@ def _value(row: Mapping[str, Any] | Any, key: str) -> str:
 def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Reject minute-lived or still-unsettled monitoring events when policy opts in.
 
-    A 15-minute monitoring cycle is not a real-time alert service.  The gate therefore
-    rejects both explicit alerts/movement and first operational reports whose truth is
-    still changing (explosions just heard, smoke visible, preliminary impact reports,
-    fire still burning).  Stable aftermath remains eligible only when the wording
-    describes a settled result rather than an unfolding scene.
+    A 15-minute monitoring cycle is not a real-time alert service. The gate rejects
+    explicit alerts/movement and first operational reports whose facts are still
+    changing. Stable aftermath remains eligible only when the report contains a
+    concrete settled result rather than merely saying that an impact occurred.
     """
     if channel.mode != ChannelMode.MONITORING:
         return ""
@@ -33,7 +32,6 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
 
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
 
-    # Stable aftermath/results may pass only when no unfolding marker below is present.
     settled_aftermath = any(
         token in low
         for token in (
@@ -44,9 +42,15 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
             "завершили ліквідацію", "відновили після", "наслідки атаки за ніч",
         )
     )
+    strong_settled_result = bool(
+        re.search(r"\b(?:пошкоджено|зруйновано)\b[^.!?]{0,100}\b\d+\b", low, re.I)
+        or re.search(r"\b\d+\b[^.!?]{0,80}\b(?:поранен|постраждал|загинул|будин|квартир|авто)\w*", low, re.I)
+        or any(token in low for token in (
+            "ліквідацію пожежі завершено", "пожежу ліквідовано", "ліквідували пожеж",
+            "завершили ліквідацію", "офіційно підтвердили наслідки", "за підсумками атаки",
+        ))
+    )
 
-    # These phrases mean the event is still unfolding or is only a first operational
-    # report.  They override generic aftermath words such as "пошкоджено".
     unfolding_patterns = (
         r"\b(зараз|наразі|прямо\s+зараз|цієї\s+миті|у\s+ці\s+хвилини)\b.{0,140}\b(палає|горить|пожеж\w*|вибух\w*|дим\w*|задимлен\w*|летить|рухаєть\w*|загроз\w*)",
         r"\b(щойно|тільки\s+що|кілька\s+хвилин\s+тому)\b.{0,160}\b(пролетів|побачили|зафіксували|вибух\w*|загоріл\w*|палає|горить|атак\w*|удар\w*)",
@@ -58,6 +62,22 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     )
     if any(re.search(pattern, low, re.I) for pattern in unfolding_patterns):
         return "Подія ще відбувається або є первинним оперативним повідомленням; для 15-хвилинного моніторингу вона неактуальна"
+
+    # RC98: phrases such as "зафіксовано влучання" were slipping through when a
+    # first report also contained a generic word like "пошкоджено".  A first impact
+    # notice is not a settled aftermath summary unless it contains a concrete final
+    # result (counts/confirmed consequences/completed response).
+    first_impact_report = any(
+        re.search(pattern, low, re.I)
+        for pattern in (
+            r"\b(?:зафіксован[оі]|зафіксували)\b.{0,100}\bвлучан\w*",
+            r"\b(?:сталося|було|є)\s+влучан\w*",
+            r"\b(?:під\s+ранок|сьогодні\s+вранці|цієї\s+ночі)\b.{0,140}\b(?:влучан\w*|приліт\w*|удар\w*)",
+            r"\b(?:приліт\w*|влучан\w*)\b.{0,100}\b(?:по|у|в)\s+(?:район|об.?єкт|будин|міст)",
+        )
+    )
+    if first_impact_report and not strong_settled_result:
+        return "Первинне повідомлення про влучання/удар без стабілізованих підсумків"
 
     patterns = (
         r"\bповітрян\w*\s+тривог",
@@ -72,9 +92,6 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     if any(re.search(pattern, low, re.I) for pattern in patterns):
         return "Оперативна live-now подія, що втрачає актуальність у 15-хвилинному циклі моніторингу"
 
-    # Generic attack wording no longer gets a blanket pass.  If it is a completed,
-    # stable result it may pass; otherwise the AI selector must not be allowed to
-    # reinterpret an immediate attack report as "aftermath".
     attack_now = any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
     if attack_now and not settled_aftermath:
         return "Первинне повідомлення про атаку/вибух без стабілізованих підсумків"
