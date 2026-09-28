@@ -22,7 +22,14 @@ class ReviewItem:
 
 
 class EditorialReviewService:
-    """Human review queue and local editorial-memory recorder."""
+    """Human review queue and local editorial-memory recorder.
+
+    RC100 queue invariant: once a material has a completed rewrite (``final_text``),
+    it remains visible to the human editor until it is actually published or the
+    editor explicitly rejects it. Automatic selector rejection, semantic duplicate
+    detection, media/quality/config/Telegram blockers, channel mode and age are not
+    allowed to silently remove a rewritten material from review.
+    """
 
     def __init__(self, store: V2Store):
         self.store = store
@@ -40,9 +47,18 @@ class EditorialReviewService:
                 );
                 CREATE INDEX IF NOT EXISTS idx_editorial_actions_channel_time
                     ON editorial_actions(channel_id,created_at DESC,id DESC);
+                CREATE INDEX IF NOT EXISTS idx_editorial_actions_article_id
+                    ON editorial_actions(article_id,id DESC);
             """)
 
     def candidates(self, *, limit: int = 250) -> list[ReviewItem]:
+        """Return every unresolved rewrite that has not reached the air.
+
+        A system decision is not a human editorial decision. In particular,
+        ``DUPLICATE`` and ``REJECT`` remain reviewable when a rewrite already exists.
+        The only terminal states for this queue are a real ``PUBLISHED`` stage or an
+        explicit latest human ``reject`` action.
+        """
         self.ensure_schema()
         with self.store.connect() as con:
             rows = con.execute("""
@@ -52,11 +68,19 @@ class EditorialReviewService:
                 FROM articles a
                 JOIN channels c ON c.id=a.channel_id
                 JOIN sources s ON s.id=a.source_id
-                WHERE c.channel_mode='editorial' AND a.final_text<>''
-                  AND a.stage<>'PUBLISHED' AND a.decision<>'DUPLICATE'
-                  AND datetime(a.discovered_at)>=datetime('now','-72 hours')
-                  AND (a.stage IN ('WRITTEN','QA_PASSED','READY')
-                       OR a.blocked_by IN ('QUALITY','MEDIA','CONFIG','TELEGRAM'))
+                WHERE TRIM(COALESCE(a.final_text,''))<>''
+                  AND a.stage<>'PUBLISHED'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM editorial_actions ea
+                      WHERE ea.article_id=a.id
+                        AND ea.id=(
+                            SELECT MAX(ea2.id)
+                            FROM editorial_actions ea2
+                            WHERE ea2.article_id=a.id
+                        )
+                        AND ea.action='reject'
+                  )
                 ORDER BY datetime(a.discovered_at) DESC,a.id DESC LIMIT ?
             """,(max(1,min(1000,int(limit))),)).fetchall()
         return [ReviewItem(int(r['id']),int(r['channel_id']),str(r['channel_name']),str(r['title'] or ''),
