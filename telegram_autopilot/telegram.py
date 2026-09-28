@@ -248,7 +248,7 @@ def _request(token: str, method: str, fields: dict[str, str], *, timeout: float 
             allow_http_errors=True,
         )
     except NetworkError as exc:
-        raise TelegramError(f"Telegram network error: {exc}", retryable=False, outcome_unknown=True) from exc
+        raise TelegramError(f"Telegram network error: {exc}", retryable=not bool(getattr(exc, "request_sent", False)), outcome_unknown=bool(getattr(exc, "request_sent", False))) from exc
     payload = response.json() if response.body else {}
     if not isinstance(payload, dict):
         raise TelegramError("Telegram повернув неправильний JSON.", outcome_unknown=True)
@@ -466,12 +466,22 @@ def prepare_telegram_media(media_value: str, *, timeout: float = 35.0, index: in
     )
 
 
-def prepare_telegram_media_list(media_values: list[str] | tuple[str, ...], *, timeout: float = 35.0) -> tuple[list[PreparedTelegramMedia], list[tuple[str, TelegramError]]]:
+def prepare_telegram_media_list(
+    media_values: list[str] | tuple[str, ...],
+    *,
+    timeout: float = 35.0,
+    heartbeat=None,
+) -> tuple[list[PreparedTelegramMedia], list[tuple[str, TelegramError]]]:
     """Download source media in order and dedupe exact binary duplicates."""
     prepared: list[PreparedTelegramMedia] = []
     failures: list[tuple[str, TelegramError]] = []
     seen_digest: set[str] = set()
     for index, value in enumerate(media_values):
+        if heartbeat is not None:
+            try:
+                heartbeat()
+            except Exception:
+                pass
         try:
             item = prepare_telegram_media(str(value or ""), timeout=timeout, index=index)
         except TelegramError as exc:
@@ -525,7 +535,7 @@ def _request_files(
             allow_http_errors=True,
         )
     except NetworkError as exc:
-        raise TelegramError(f"Telegram network error: {exc}", retryable=False, outcome_unknown=True) from exc
+        raise TelegramError(f"Telegram network error: {exc}", retryable=not bool(getattr(exc, "request_sent", False)), outcome_unknown=bool(getattr(exc, "request_sent", False))) from exc
     payload = response.json() if response.body else {}
     if not isinstance(payload, dict):
         raise TelegramError("Telegram повернув неправильний JSON.", outcome_unknown=True)
@@ -685,7 +695,7 @@ def _request_file(
             allow_http_errors=True,
         )
     except NetworkError as exc:
-        raise TelegramError(f"Telegram network error: {exc}", retryable=False, outcome_unknown=True) from exc
+        raise TelegramError(f"Telegram network error: {exc}", retryable=not bool(getattr(exc, "request_sent", False)), outcome_unknown=bool(getattr(exc, "request_sent", False))) from exc
     payload = response.json() if response.body else {}
     if not isinstance(payload, dict):
         raise TelegramError("Telegram повернув неправильний JSON.", outcome_unknown=True)

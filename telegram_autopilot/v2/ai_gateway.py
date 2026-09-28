@@ -522,6 +522,7 @@ class AIGateway:
         transport_attempts = 0
         configured: set[str] = set()
         provider_suppressed: set[str] = set()
+        busy_routes = 0
         # Small editorial gates are JSON tasks. Long writer/final-edit calls remain
         # plain text so no provider-specific JSON mode can corrupt the article body.
         json_mode = validator is not None and int(max_output_tokens) <= 260
@@ -544,6 +545,7 @@ class AIGateway:
             wait_for_lock = 6.0 if provider == "local" else min(2.0, max(0.25, float(timeout_seconds) * 0.08))
             acquired = lock.acquire(timeout=wait_for_lock)
             if not acquired:
+                busy_routes += 1
                 failures.append(f"{slot.label}: provider busy")
                 event("ai", "provider busy; trying next route", provider=provider, model=slot.model)
                 continue
@@ -627,6 +629,13 @@ class AIGateway:
             raise GatewayExhausted(
                 "AI відповів, але кандидати не пройшли редакційний QA. " + " | ".join(failures[-6:]),
                 retry_seconds=180,
+                provider_outage=False,
+                failures=failures,
+            )
+        if busy_routes and transport_attempts == 0 and validation_failures == 0:
+            raise GatewayExhausted(
+                "AI-провайдери тимчасово зайняті. " + " | ".join(failures[-6:]),
+                retry_seconds=25,
                 provider_outage=False,
                 failures=failures,
             )

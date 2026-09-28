@@ -1119,7 +1119,8 @@ class MainWindow(tk.Tk):
                     save_analytics_credentials(api_id=aid, api_hash=ahash, phone=ph, session=session)
                     self.after(0, lambda: (status.set(f"✅ Авторизовано: {display}"), auth_btn.configure(state="normal"), self.refresh_learning()))
                 except Exception as exc:
-                    self.after(0, lambda: (status.set(f"❌ {exc}"), auth_btn.configure(state="normal")))
+                    msg = str(exc)
+                    self.after(0, lambda msg=msg: (status.set(f"❌ {msg}"), auth_btn.configure(state="normal")))
             threading.Thread(target=worker, daemon=True, name="V2-Telegram-Analytics-Auth").start()
 
         ttk.Button(buttons, text="Закрити", command=win.destroy).pack(side="right")

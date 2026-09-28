@@ -435,7 +435,6 @@ class SupervisorService:
             true_stall = bool(
                 due > 0 and not startup_grace and last_job is not None
                 and now - last_job >= cfg.queue_stall_seconds
-                and fresh_heartbeat
             )
             if true_stall:
                 result[str(cid)] = {"state": "STALLED", "reasons": [f"no job activity for {int(now-last_job)}s"]}
@@ -649,9 +648,8 @@ class SupervisorService:
                 stats = dict(dict(snapshot.get("channel_stats") or {}).get(str(cid)) or {})
                 stamps = [
                     self._parse_iso(str(state.get("heartbeat_at") or "")),
-                    self._parse_iso(str(state.get("collector_heartbeat_at") or "")),
-                    self._parse_iso(str(stats.get("last_job_update") or "")),
-                    self._parse_iso(str(stats.get("last_source_check") or "")),
+                    self._parse_iso(str(state.get("last_job_activity_at") or "")),
+                    self._parse_iso(str(stats.get("last_job_activity") or "")),
                 ]
                 fresh = max((stamp for stamp in stamps if stamp is not None), default=None)
                 if fresh is None or now - fresh > cfg.worker_stale_seconds:

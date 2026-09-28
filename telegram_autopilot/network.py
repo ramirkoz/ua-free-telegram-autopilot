@@ -14,7 +14,9 @@ from .security import redact_url
 
 
 class NetworkError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, request_sent: bool = False):
+        super().__init__(message)
+        self.request_sent = bool(request_sent)
 
 
 @dataclass(slots=True)
@@ -182,7 +184,9 @@ def fetch_url(
             raise NetworkError(
                 f"Network connection failed for {host}: no reachable address among {len(addresses)} DNS result(s)."
             ) from (connect_errors[-1] if connect_errors else None)
+        request_started = False
         try:
+            request_started = True
             connection.request(method, path, body=body, headers=outgoing_headers)
             response = connection.getresponse()
             response_headers = {key.lower(): value for key, value in response.getheaders()}
@@ -209,7 +213,10 @@ def fetch_url(
                     raise NetworkError(f"Unexpected content type: {actual or '<missing>'}.")
             return HttpResponse(response.status, response_headers, data, current)
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
-            raise NetworkError(f"Network request failed: {redact_url(current)}") from exc
+            raise NetworkError(
+                f"Network request failed: {redact_url(current)}",
+                request_sent=request_started,
+            ) from exc
         finally:
             connection.close()
     raise NetworkError("Unreachable redirect state.")

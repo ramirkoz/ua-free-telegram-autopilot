@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,8 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
     def __init__(self, app, store, runtime) -> None:
         super().__init__(app, store, runtime)
         self.protocol = SafeUpdateProtocol()
+        self._discovery_inflight = False
+        self._discovery_backoff_ms = 900000
 
     @staticmethod
     def _approved_manifest(data: Any) -> dict[str, Any] | None:
@@ -159,28 +162,54 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
         return self._drive_manifest_request(require_newer=False)
 
     def poll(self) -> None:
+        """Run release discovery off the Tk thread.
+
+        RC99 keeps this path dormant by default until authenticated update
+        manifests are deployed, but manual/test callers still get a safe poll.
+        """
         self._after_id = None
-        if self._closed or self._inflight:
+        if self._closed or self._inflight or self._discovery_inflight:
             return
-        try:
-            request = self._github_manifest_request()
+        self._discovery_inflight = True
+
+        def work() -> None:
+            request = None
+            error = None
+            try:
+                request = self._github_manifest_request()
+                if request is None:
+                    request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
+                if request is None:
+                    request = self._drive_manifest_request(require_newer=True)
+                if request is None:
+                    request = self.protocol.load_request()
+                self.protocol.mirror_status(self.supervisor.config.mirror_dir)
+            except Exception as exc:
+                error = exc
+            try:
+                self.app.after(0, lambda: finish(request, error))
+            except Exception:
+                self._discovery_inflight = False
+
+        def finish(request, error) -> None:
+            self._discovery_inflight = False
+            if self._closed:
+                return
+            if error is not None:
+                event("update", "update discovery failed", level=30, detail=str(error)[:1200])
+                self._discovery_backoff_ms = min(3600000, max(900000, self._discovery_backoff_ms * 2))
+                self._schedule(self._discovery_backoff_ms)
+                return
+            self._discovery_backoff_ms = 900000
             if request is None:
-                request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
-            if request is None:
-                request = self._drive_manifest_request(require_newer=True)
-            if request is None:
-                request = self.protocol.load_request()
-            self.protocol.mirror_status(self.supervisor.config.mirror_dir)
-            if request is None:
-                self._schedule()
+                self._schedule(self._discovery_backoff_ms)
                 return
             if self.protocol.request_already_terminal(request):
-                self._schedule()
+                self._schedule(self._discovery_backoff_ms)
                 return
             if not self.protocol.request_is_newer(request):
                 self.protocol.write_result(
-                    "REJECTED",
-                    request=request,
+                    "REJECTED", request=request,
                     detail=f"Target {request.target_version} is not newer than the installed version",
                 )
                 try:
@@ -188,18 +217,8 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
                 except FileNotFoundError:
                     pass
                 self.protocol.mirror_status(self.supervisor.config.mirror_dir)
-                self._schedule()
+                self._schedule(self._discovery_backoff_ms)
                 return
             self._begin(request)
-        except Exception as exc:
-            event("update", "update discovery failed", level=30, detail=str(exc)[:1200])
-            try:
-                request = self.protocol.accept_mirror_request(self.supervisor.config.mirror_dir)
-                if request is None:
-                    request = self._drive_manifest_request(require_newer=True)
-                if request is not None and self.protocol.request_is_newer(request):
-                    self._begin(request)
-                    return
-            except Exception as fallback_exc:
-                event("update", "update Drive fallback failed", level=30, detail=str(fallback_exc)[:1200])
-            self._schedule(10000)
+
+        threading.Thread(target=work, daemon=True, name="V2-Update-Discovery").start()
