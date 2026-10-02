@@ -8,6 +8,7 @@ RC103 applies the audited scientific/news channel profile and aligns the live da
 - The editorial mix is persisted in normal per-channel settings/policy text instead of hidden channel-name business logic.
 - Editorial review, operational queue and history views are bounded to the last seven days and use narrow list-column SQL instead of loading full article blobs.
 - Live database retention is also seven days: expired articles are deleted together with article-owned jobs, feedback, editorial actions, rewrite revisions and repost rows via foreign-key cascades. Learning already uses a seven-day window, so the storage horizon now matches the product horizon.
+- Same-version startup hotfix: before expired articles are deleted, surviving `duplicate_of` references to those expired rows are detached. This keeps foreign-key enforcement enabled and prevents `FOREIGN KEY constraint failed` on real databases where a recent duplicate points to an older canonical article.
 - Audit telemetry older than seven days is removed; recent-row indexes, `ANALYZE`, `PRAGMA optimize`, WAL checkpointing and conditional `VACUUM` keep SQLite compact.
 - The Tk UI no longer rebuilds every hidden tab every 2.5 seconds. Home plus only the currently visible dynamic tab are refreshed; switching tabs triggers an immediate refresh of that tab.
 - Supervisor database telemetry reports database size, freelist ratio, seven-day operational row count and stale rows.
