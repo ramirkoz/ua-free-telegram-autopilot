@@ -65,7 +65,8 @@ def test_human_approve_and_reject_resolve_review_queue(tmp_path):
     assert {approved, rejected} <= {x.article_id for x in review.candidates(limit=50)}
 
     review.approve(approved)
-    assert approved not in {x.article_id for x in review.candidates(limit=50)}
+    # RC102 keeps human-approved items visible until actual publication or explicit reject.
+    assert approved in {x.article_id for x in review.candidates(limit=50)}
     assert approved in {int(x["id"]) for x in store.ready_articles(1, 50)}
 
     review.reject(rejected, "Ні")
