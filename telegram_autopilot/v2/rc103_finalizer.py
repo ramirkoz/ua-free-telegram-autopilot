@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
 
 from .loghub import event
 
@@ -21,8 +20,6 @@ def _purge_expired_materials(store, *, retention_days: int = RETENTION_DAYS) -> 
     modifier = f"-{days} days"
     stats = {"articles_purged": 0, "audit_pruned": 0, "vacuumed_after_purge": 0}
     with store.connect() as con:
-        # All channels can only dedupe against rows that still exist, therefore the
-        # configured published-event window must not exceed the retained history.
         con.execute(
             "UPDATE channels SET published_dedupe_window_hours=MIN(published_dedupe_window_hours, ?), updated_at=datetime('now') "
             "WHERE published_dedupe_window_hours>?",
@@ -85,14 +82,7 @@ def _install_store_finalizer() -> None:
 
 
 def _install_visible_tab_refresh() -> None:
-    """Stop rebuilding every hidden Tk tree every 2.5 seconds.
-
-    The RC101 telemetry captured a 14.7 s UI event-loop peak. The old refresh_all()
-    repopulated queue, editorial review, history, AI, learning and supervisor tabs on
-    every tick even when the operator was looking at only one tab. RC103 refreshes
-    Home plus the currently visible dynamic tab and leaves background workers and the
-    supervisor service independent of Tk rendering.
-    """
+    """Stop rebuilding every hidden Tk tree every 2.5 seconds."""
     from .ui import MainWindow
 
     tab_order = (
@@ -149,7 +139,7 @@ def _install_visible_tab_refresh() -> None:
     MainWindow.__init__ = __init__
 
 
-def install_rc103_finalizer() -> None:
+def install_operational_finalizer() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
