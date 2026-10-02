@@ -79,6 +79,25 @@ def test_seven_day_finalizer_deletes_expired_materials_with_children(tmp_path):
         assert con.execute('SELECT published_dedupe_window_hours FROM channels WHERE id=1').fetchone()[0] == 168
 
 
+def test_seven_day_finalizer_detaches_recent_duplicate_from_expired_parent(tmp_path):
+    store = V2Store(tmp_path / 'db.sqlite3')
+    _seed(store)
+    old_id = _article(store, 'old-parent', _ago(9))
+    recent_id = _article(store, 'recent-duplicate', _ago(1))
+    with store.connect() as con:
+        con.execute('UPDATE articles SET duplicate_of=? WHERE id=?', (old_id, recent_id))
+        assert con.execute('SELECT duplicate_of FROM articles WHERE id=?', (recent_id,)).fetchone()[0] == old_id
+
+    stats = _purge_expired_materials(store, retention_days=7)
+
+    assert stats['articles_purged'] == 1
+    assert stats['duplicate_links_detached'] == 1
+    assert store.get_article(old_id) is None
+    assert store.get_article(recent_id) is not None
+    with store.connect() as con:
+        assert con.execute('SELECT duplicate_of FROM articles WHERE id=?', (recent_id,)).fetchone()[0] is None
+
+
 def test_seven_day_finalizer_uses_published_time_for_recent_publication(tmp_path):
     store = V2Store(tmp_path / 'db.sqlite3')
     _seed(store)
