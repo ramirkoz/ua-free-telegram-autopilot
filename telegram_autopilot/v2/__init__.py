@@ -13,3 +13,6 @@ install_runtime_contracts()
 
 from .operational_retention import install_operational_contracts
 install_operational_contracts()
+
+from .operational_finalizer import install_operational_finalizer
+install_operational_finalizer()
