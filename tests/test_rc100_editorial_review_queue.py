@@ -109,7 +109,9 @@ def test_every_rewritten_non_published_material_is_reviewable(tmp_path):
     )
 
     ids = {item.article_id for item in review.candidates(limit=50)}
-    assert {editorial_reject, monitoring_reject, semantic_duplicate, old_quality_blocked} <= ids
+    # RC103 intentionally bounds the live editorial desk to seven days.
+    assert {editorial_reject, monitoring_reject, semantic_duplicate} <= ids
+    assert old_quality_blocked not in ids
 
 
 def test_published_or_not_rewritten_material_is_not_reviewable(tmp_path):

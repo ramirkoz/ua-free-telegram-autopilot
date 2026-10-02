@@ -6,7 +6,10 @@ from V2.
 """
 
 V2_SCHEMA_VERSION = 2
-V2_VERSION = "2.0.0-rc102"
+V2_VERSION = "2.0.0-rc103"
 
 from .runtime_contracts import install_runtime_contracts
 install_runtime_contracts()
+
+from .operational_retention import install_operational_contracts
+install_operational_contracts()
