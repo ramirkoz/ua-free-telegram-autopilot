@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .domain import BlockedBy, Decision, Stage
+from .editorial_state import ensure_editorial_state_schema
 from .guarded_runtime import GuardedRuntimeEngine
 from .local_supervisor import LocalOnlyProductionSupervisorService
 from .loghub import event
@@ -103,15 +104,23 @@ class ReadyBacklogStore(MediaRecoveryStore):
                 ).fetchall()]
                 if archived_ids:
                     qs = ",".join("?" for _ in archived_ids)
+                    # RC101: a recovery path may revive media state, but it must never
+                    # destroy a completed rewrite. Rewritten rows return directly to
+                    # READY/PUBLISH; only rows without a rewrite are reprocessed.
                     con.execute(
-                        f"""UPDATE articles SET stage='COLLECTED',decision='PENDING',blocked_by='NONE',reject_reason='',
-                           status_detail='',last_error_code='',last_error_detail='',next_retry_at='',ready_at='',final_text=''
+                        f"""UPDATE articles SET
+                           stage=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN 'READY' ELSE 'COLLECTED' END,
+                           decision=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN 'PUBLISH' ELSE 'PENDING' END,
+                           blocked_by='NONE',reject_reason='',status_detail='',last_error_code='',last_error_detail='',
+                           next_retry_at='',ready_at=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN ? ELSE '' END
                            WHERE id IN ({qs})""",
-                        tuple(archived_ids),
+                        (stamp, *archived_ids),
                     )
                     cur = con.execute(
-                        f"""UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',attempts=0,
-                           error_code='',error_detail='',updated_at=? WHERE article_id IN ({qs}) AND job_type='process'""",
+                        f"""UPDATE jobs SET
+                           state=CASE WHEN article_id IN (SELECT id FROM articles WHERE TRIM(COALESCE(final_text,''))<>'') THEN 'DONE' ELSE 'QUEUED' END,
+                           available_at=?,lease_owner='',lease_until='',attempts=0,error_code='',error_detail='',updated_at=?
+                           WHERE article_id IN ({qs}) AND job_type='process'""",
                         (stamp, stamp, *archived_ids),
                     )
                     changed += int(cur.rowcount or 0)
@@ -186,6 +195,7 @@ class ReadyBacklogStore(MediaRecoveryStore):
         return True
 
     def expire_stale_ready(self, channel_id: int, max_age_hours: int) -> int:
+        ensure_editorial_state_schema(self)
         hours = int(max_age_hours or 0)
         if hours <= 0:
             return 0
@@ -197,9 +207,15 @@ class ReadyBacklogStore(MediaRecoveryStore):
             try:
                 con.execute("BEGIN IMMEDIATE")
                 rows = con.execute(
-                    """SELECT id,source_published_at,discovered_at
-                       FROM articles
-                       WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'""",
+                    """SELECT a.id,a.source_published_at,a.discovered_at
+                       FROM articles a
+                       WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM editorial_actions ea
+                             WHERE ea.article_id=a.id
+                               AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                               AND ea.action IN ('approve','edit')
+                         )""",
                     (int(channel_id),),
                 ).fetchall()
                 ids: list[int] = []

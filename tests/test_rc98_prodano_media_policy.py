@@ -31,32 +31,33 @@ def _add_source(store: HardenedReadyStore, channel_id: int, name: str, url: str,
         return int(cur.lastrowid)
 
 
-def test_rc98_commercial_profile_uses_manual_positive_set_and_culls_trade_noise(tmp_path) -> None:
-    store = HardenedReadyStore(tmp_path / "rc98.sqlite3")
+def test_rc101_commercial_profile_startup_repair_does_not_mutate_operator_config(tmp_path) -> None:
+    store = HardenedReadyStore(tmp_path / "rc101.sqlite3")
     _seed_channel(store, 2, profile="commercial_editorial")
     creative_id = _add_source(store, 2, "Creative Boom", "https://creative.example/", priority=100)
     retail_id = _add_source(store, 2, "Modern Retail", "https://retail.example/", priority=100)
     custom_id = _add_source(store, 2, "My Custom Source", "https://custom.example/", priority=77)
+    with store.connect() as con:
+        con.execute(
+            "UPDATE channel_policies SET purpose='OPERATOR PURPOSE',audience='OPERATOR AUDIENCE',selection_rules='KEEP',rejection_rules='KEEP OUT' WHERE channel_id=2"
+        )
 
     result = repair_polling_baseline(store)
-    assert result["commercial_profile"]["channels"] == 1
+    assert result["commercial_profile"] == {"channels": 0, "sources_disabled": 0, "sources_prioritized": 0}
 
     channel = store.get_channel(2)
     assert channel is not None
-    assert channel.media_first_allowed is True
-    assert channel.media_min_text_chars == 120
-    assert "живий візуальний дайджест" in channel.policy.purpose.casefold()
-    assert "IKEA" in channel.policy.positive_examples
-    assert "trade" in channel.policy.rejection_rules.casefold()
-    thresholds = json.loads(channel.editorial_thresholds_json)
-    assert thresholds["broad_interest_score"] == 54
+    assert channel.policy.purpose == "OPERATOR PURPOSE"
+    assert channel.policy.audience == "OPERATOR AUDIENCE"
+    assert channel.policy.selection_rules == "KEEP"
+    assert channel.policy.rejection_rules == "KEEP OUT"
 
     with store.connect() as con:
         creative = con.execute("SELECT enabled,priority FROM sources WHERE id=?", (creative_id,)).fetchone()
         retail = con.execute("SELECT enabled,priority FROM sources WHERE id=?", (retail_id,)).fetchone()
         custom = con.execute("SELECT enabled,priority FROM sources WHERE id=?", (custom_id,)).fetchone()
-    assert int(creative["enabled"]) == 1 and int(creative["priority"]) == 25
-    assert int(retail["enabled"]) == 0
+    assert int(creative["enabled"]) == 1 and int(creative["priority"]) == 100
+    assert int(retail["enabled"]) == 1 and int(retail["priority"]) == 100
     assert int(custom["enabled"]) == 1 and int(custom["priority"]) == 77
 
 

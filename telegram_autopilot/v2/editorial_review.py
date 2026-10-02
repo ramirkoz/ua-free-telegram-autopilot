@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .domain import BlockedBy, Decision, Stage
 from .loghub import event
 from .storage import V2Store, now_iso
+from .editorial_state import ensure_editorial_state_schema, preserve_current_rewrite, record_rewrite_revision
 
 
 @dataclass(slots=True)
@@ -35,21 +36,7 @@ class EditorialReviewService:
         self.store = store
 
     def ensure_schema(self) -> None:
-        with self.store.connect() as con:
-            con.executescript("""
-                CREATE TABLE IF NOT EXISTS editorial_actions(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-                    action TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',
-                    before_text TEXT NOT NULL DEFAULT '',after_text TEXT NOT NULL DEFAULT '',
-                    detail TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_editorial_actions_channel_time
-                    ON editorial_actions(channel_id,created_at DESC,id DESC);
-                CREATE INDEX IF NOT EXISTS idx_editorial_actions_article_id
-                    ON editorial_actions(article_id,id DESC);
-            """)
+        ensure_editorial_state_schema(self.store)
 
     def candidates(self, *, limit: int = 250) -> list[ReviewItem]:
         """Return every unresolved rewrite that has not reached the air.
@@ -79,7 +66,7 @@ class EditorialReviewService:
                             FROM editorial_actions ea2
                             WHERE ea2.article_id=a.id
                         )
-                        AND ea.action='reject'
+                        AND ea.action IN ('approve','edit','reject')
                   )
                 ORDER BY datetime(a.discovered_at) DESC,a.id DESC LIMIT ?
             """,(max(1,min(1000,int(limit))),)).fetchall()
@@ -96,22 +83,39 @@ class EditorialReviewService:
                 (int(article_id),int(row['channel_id']),str(action),str(row['title'] or ''),before,after,str(detail)[:1800],now_iso()))
         event('learning','editorial action recorded',channel_id=int(row['channel_id']),article_id=int(article_id),action=str(action))
 
+    @staticmethod
+    def _unknown_delivery(row) -> bool:
+        return str(row["last_error_code"] or "").strip().upper() == "TELEGRAM_OUTCOME_UNKNOWN"
+
+    def _guard_unknown_delivery(self, row) -> None:
+        if self._unknown_delivery(row):
+            raise ValueError(
+                "Telegram не підтвердив результат попередньої відправки. "
+                "Не можна погоджувати або редагувати матеріал для повторної публікації, "
+                "доки оператор не підтвердить, що поста в каналі немає."
+            )
+
     def edit(self, article_id: int, text: str) -> None:
         row=self.store.get_article(int(article_id))
         if row is None: raise KeyError(article_id)
+        self._guard_unknown_delivery(row)
         new_text=str(text or '').strip()
         if not new_text: raise ValueError('Фінальний текст не може бути порожнім')
         before=str(row['final_text'] or '')
+        preserve_current_rewrite(self.store, int(article_id), origin='editor', reason='before_manual_edit')
         self.store.update_article(int(article_id),final_text=new_text,stage=str(Stage.READY),decision=str(Decision.PUBLISH),
             blocked_by=str(BlockedBy.NONE),status_detail='Погоджено редактором після ручного редагування',
             last_error_code='',last_error_detail='',next_retry_at='',ready_at=now_iso())
+        record_rewrite_revision(self.store, int(article_id), new_text, origin='editor', reason='manual_edit_approved')
         self._record(article_id,'edit',before=before,after=new_text)
 
     def approve(self, article_id: int) -> None:
         row=self.store.get_article(int(article_id))
         if row is None: raise KeyError(article_id)
+        self._guard_unknown_delivery(row)
         final_text=str(row['final_text'] or '').strip()
         if not final_text: raise ValueError('Немає готового рерайту для погодження')
+        preserve_current_rewrite(self.store, int(article_id), origin='editor', reason='manual_approve')
         self.store.update_article(int(article_id),stage=str(Stage.READY),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),
             status_detail='Погоджено редактором вручну',last_error_code='',last_error_detail='',next_retry_at='',ready_at=now_iso())
         self._record(article_id,'approve',before=final_text,after=final_text)

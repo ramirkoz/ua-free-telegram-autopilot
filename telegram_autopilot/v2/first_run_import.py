@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox
 from ..paths import data_dir
 from .storage import V2Store
 from .credential_recovery import merge_missing_credentials_from_data
+from .editorial_state import ensure_editorial_state_schema
 
 _MARKER = "first_run_import.json"
 _STABLE_TABLES = (
@@ -20,6 +21,8 @@ _STABLE_TABLES = (
     "articles",
     "feedback",
     "feedback_editor_reactions",
+    "editorial_actions",
+    "rewrite_revisions",
 )
 
 
@@ -58,6 +61,20 @@ def _copy_table(src: sqlite3.Connection, dst: sqlite3.Connection, table: str) ->
     return len(rows)
 
 
+def _copy_migration_meta(src: sqlite3.Connection, dst: sqlite3.Connection) -> int:
+    """Preserve durable migration markers so imported operator config is never re-seeded."""
+    if not _columns(src, "meta") or not _columns(dst, "meta"):
+        return 0
+    rows = src.execute("SELECT key,value FROM meta WHERE key<>'schema_version'").fetchall()
+    if not rows:
+        return 0
+    dst.executemany(
+        "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [(str(row[0]), str(row[1])) for row in rows],
+    )
+    return len(rows)
+
+
 def _parse_dt(value: str):
     raw = str(value or "").strip()
     if not raw:
@@ -72,13 +89,16 @@ def _parse_dt(value: str):
 
 
 def _normalize_imported_active_state(db_path: Path) -> dict[str, int]:
+    """Normalize only transient execution state while preserving human editorial work."""
     now = datetime.now(timezone.utc)
-    requeued = archived = published = 0
+    requeued = archived = published = review_preserved = approved_preserved = rejected_preserved = 0
     store = V2Store(db_path)
+    ensure_editorial_state_schema(store)
     with store.connect() as con:
         published = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED'").fetchone()[0] or 0)
         rows = con.execute(
-            """SELECT a.id,a.channel_id,a.source_published_at,a.discovered_at,c.max_age_hours,c.max_posts_per_cycle
+            """SELECT a.id,a.channel_id,a.source_published_at,a.discovered_at,a.final_text,a.draft_text,
+                      c.max_age_hours,c.max_posts_per_cycle
                  FROM articles a JOIN channels c ON c.id=a.channel_id
                 WHERE a.stage<>'PUBLISHED'
                 ORDER BY a.channel_id,COALESCE(NULLIF(a.source_published_at,''),a.discovered_at) DESC,a.id DESC"""
@@ -86,31 +106,73 @@ def _normalize_imported_active_state(db_path: Path) -> dict[str, int]:
         kept_per_channel: dict[int, int] = {}
         for row in rows:
             article_id = int(row["id"]); channel_id = int(row["channel_id"])
+            final_text = str(row["final_text"] or "").strip()
             age_base = _parse_dt(str(row["source_published_at"] or "")) or _parse_dt(str(row["discovered_at"] or ""))
             max_age = max(1, int(row["max_age_hours"] or 24))
             stale = age_base is not None and age_base < now - timedelta(hours=max_age)
             active_cap = max(12, min(36, max(1, int(row["max_posts_per_cycle"] or 1)) * 12))
             already_kept = kept_per_channel.get(channel_id, 0)
             backlog_excess = already_kept >= active_cap
+            action = con.execute(
+                "SELECT action FROM editorial_actions WHERE article_id=? ORDER BY id DESC LIMIT 1",
+                (article_id,),
+            ).fetchone()
+            latest_action = str(action[0] or "").strip().casefold() if action else ""
+
+            if latest_action == "reject":
+                con.execute(
+                    """UPDATE articles SET stage='ARCHIVED',decision='REJECT',blocked_by='NONE',
+                       status_detail=CASE WHEN status_detail='' THEN 'Відхилено редактором до міграції' ELSE status_detail END,
+                       last_error_code='',last_error_detail='',next_retry_at='' WHERE id=?""",
+                    (article_id,),
+                )
+                con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?", (now.isoformat(), article_id))
+                rejected_preserved += 1
+                continue
+            if final_text and latest_action in {"approve", "edit"}:
+                con.execute(
+                    """UPDATE articles SET stage='READY',decision='PUBLISH',blocked_by='NONE',
+                       reject_reason='',last_error_code='',last_error_detail='',next_retry_at='',ready_at=? WHERE id=?""",
+                    (now.astimezone().isoformat(timespec="seconds"), article_id),
+                )
+                con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?", (now.isoformat(), article_id))
+                approved_preserved += 1
+                continue
+
             if stale or backlog_excess:
                 reason = "MIGRATION_STALE" if stale else "MIGRATION_BACKLOG_ARCHIVED"
                 detail = (
-                    "Старий непублікований матеріал не перенесено в активну чергу поточної версії"
+                    "Старий непублікований матеріал збережено в історії без повторної AI-обробки"
                     if stale else
                     f"Міграційний backlog обмежено до {active_cap} найсвіжіших матеріалів каналу; матеріал збережено в історії без AI-обробки"
                 )
                 con.execute(
                     """UPDATE articles SET stage='ARCHIVED',decision='REJECT',blocked_by='NONE',
-                       reject_reason=?,status_detail=?,draft_text='',final_text='',ready_at='',last_error_code=?,last_error_detail='',next_retry_at=''
+                       reject_reason=?,status_detail=?,ready_at='',last_error_code=?,last_error_detail='',next_retry_at=''
                        WHERE id=?""", (reason, detail, reason, article_id),
                 )
+                con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?", (now.isoformat(), article_id))
                 archived += 1
+                if final_text:
+                    review_preserved += 1
                 continue
+
             kept_per_channel[channel_id] = already_kept + 1
+            if final_text:
+                con.execute(
+                    """UPDATE articles SET stage='WRITTEN',decision='PENDING',blocked_by='NONE',
+                       reject_reason='',status_detail='Імпортовано готовий рерайт для редакторського рішення',
+                       last_error_code='',last_error_detail='',next_retry_at='' WHERE id=?""",
+                    (article_id,),
+                )
+                con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?", (now.isoformat(), article_id))
+                review_preserved += 1
+                continue
+
             con.execute(
                 """UPDATE articles SET stage='COLLECTED',decision='PENDING',blocked_by='NONE',reject_reason='',status_detail='',
                    duplicate_of=NULL,event_key='',event_summary='',editorial_category='',editorial_value_score=NULL,tags_json='[]',
-                   topic_major='',topic_minor='',draft_text='',final_text='',ai_provider='',ai_model='',ready_at='',
+                   topic_major='',topic_minor='',draft_text='',ai_provider='',ai_model='',ready_at='',
                    last_error_code='',last_error_detail='',retry_count=0,next_retry_at='' WHERE id=?""",
                 (article_id,),
             )
@@ -123,13 +185,18 @@ def _normalize_imported_active_state(db_path: Path) -> dict[str, int]:
                        lease_owner='',lease_until='',attempts=0,error_code='',error_detail='',updated_at=excluded.updated_at""",
                 (article_id, channel_id, stamp, stamp, stamp),
             )
-    return {"published_preserved": published, "active_requeued": requeued, "stale_archived": archived}
+    return {
+        "published_preserved": published, "active_requeued": requeued, "stale_archived": archived,
+        "review_preserved": review_preserved, "approved_preserved": approved_preserved,
+        "human_reject_preserved": rejected_preserved,
+    }
 
 
 def _selective_import(source_db: Path, target_db: Path) -> dict[str, int]:
     temp = target_db.with_name(target_db.name + ".clean-import.tmp")
     temp.unlink(missing_ok=True)
-    V2Store(temp)  # current clean schema only
+    temp_store = V2Store(temp)
+    ensure_editorial_state_schema(temp_store)
     src = sqlite3.connect(f"file:{source_db.resolve().as_posix()}?mode=ro", uri=True, timeout=30)
     dst = sqlite3.connect(temp, timeout=30)
     counts: dict[str, int] = {}
@@ -140,7 +207,7 @@ def _selective_import(source_db: Path, target_db: Path) -> dict[str, int]:
         for table in _STABLE_TABLES:
             if _columns(src, table) and _columns(dst, table):
                 counts[table] = _copy_table(src, dst, table)
-        # Preserve only completed Facebook repost history, never old retry queues.
+        counts["meta_markers"] = _copy_migration_meta(src, dst)
         if _columns(src, "facebook_reposts") and _columns(dst, "facebook_reposts"):
             src_cols = _columns(src, "facebook_reposts")
             dst_cols = set(_columns(dst, "facebook_reposts"))
@@ -170,8 +237,6 @@ def _selective_import(source_db: Path, target_db: Path) -> dict[str, int]:
     return counts
 
 
-
-
 def _read_json_file(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -181,12 +246,7 @@ def _read_json_file(path: Path) -> dict:
 
 
 def _migrate_supervisor_durable_state(source_data: Path, target_data: Path) -> dict[str, object]:
-    """Copy only durable observability settings, never old runtime/incident state.
-
-    We preserve the operator's mirror folder and the private Telegram report target,
-    because losing either makes a clean migration look healthy locally while remote
-    observability silently disappears.
-    """
+    """Copy only durable observability settings, never old runtime/incident state."""
     result: dict[str, object] = {"config": False, "telegram_target": False}
     source_supervisor = source_data / "supervisor"
     target_supervisor = target_data / "supervisor"
@@ -228,9 +288,6 @@ def _migrate_supervisor_durable_state(source_data: Path, target_data: Path) -> d
                 source_label = candidate.name
                 break
 
-    # RC79-RC83 clean migrations may already have dropped the report target. If
-    # the selected Data has none, inspect sibling historical Autopilot folders and
-    # recover it only when they all agree on one unique private chat id.
     if not chat_id:
         siblings_root = source_data.parent.parent
         discovered: dict[str, str] = {}
@@ -290,7 +347,7 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
             "UA FREE Telegram Autopilot · перший запуск",
             "Імпортувати потрібні дані з попередньої версії?\n\n"
             "Перенесемо канали, джерела, правила, PUBLISHED-історію, навчання та credentials. "
-            "Найсвіжіші непубліковані матеріали попередньої версії будуть переоброблені з нуля поточними правилами; великий старий backlog не спалюватиме AI-квоту.\n\n"
+            "Готові рерайти, ручні правки й рішення редактора будуть збережені. Лише матеріали без готового рерайту можуть бути переоброблені; великий старий backlog не спалюватиме AI-квоту.\n\n"
             "НЕ переносяться jobs, provider/source health, cooldown, audit, logs, cache, Tools/JRE/LanguageTool/Codex.",
             parent=root,
         )
@@ -330,11 +387,6 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
             raise RuntimeError("Не можна імпортувати поточну Data у саму себе.")
         source_db = source_data / "telegram_autopilot_v2.sqlite3"
         counts = _selective_import(source_db, target_db)
-        # Credentials are merged semantically, never copied over the current pair.
-        # This preserves a Codex bootstrap (or any current secret) that already
-        # exists in the new portable while recovering missing API/Telegram values
-        # from the selected older Data folder. Credential trouble must not destroy
-        # the already validated database import.
         try:
             credentials_state = merge_missing_credentials_from_data(source_data)
         except Exception as exc:
@@ -363,7 +415,10 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
             f"Матеріали/історія: {counts.get('articles', 0)}\n"
             f"Feedback: {counts.get('feedback', 0)}\n"
             f"PUBLISHED збережено: {counts.get('published_preserved', 0)}\n"
-            f"Свіжі непубліковані переобробити: {counts.get('active_requeued', 0)}\n"
+            f"Готові рерайти для review збережено: {counts.get('review_preserved', 0)}\n"
+            f"Ручні approve/edit збережено: {counts.get('approved_preserved', 0)}\n"
+            f"Ручні reject збережено: {counts.get('human_reject_preserved', 0)}\n"
+            f"Свіжі без рерайту переобробити: {counts.get('active_requeued', 0)}\n"
             f"Старі/надлишкові непубліковані архівовано: {counts.get('stale_archived', 0)}\n"
             f"Credentials: {'доповнено' if credentials_state.get('merged') else 'без перезапису'}; "
             f"відновлено полів: {len(credentials_state.get('recovered_fields') or [])}.\n"

@@ -39,9 +39,6 @@ def test_editorial_contract_is_zero_or_one_validated_media(tmp_path: Path) -> No
         ]),
     )
     row = store.get_article(article_id)
-    # These example URLs are deliberately unreachable and therefore cannot be
-    # positively validated. Editorial media must fail closed instead of keeping
-    # the first raw URL merely because it arrived first.
     assert json.loads(row["media_json"]) == []
 
 
@@ -116,7 +113,9 @@ def test_pre_rc19_telegram_snapshot_is_quarantined(tmp_path: Path) -> None:
     row = store.get_article(article_id)
     assert stats["sanitized_telegram_media_v3"] >= 1
     assert json.loads(row["media_json"]) == []
-    assert row["stage"] == "COLLECTED" and row["decision"] == "PENDING"
+    assert row["stage"] == "READY" and row["decision"] == "PUBLISH"
+    assert row["final_text"] == "stale ready text"
+    assert row["blocked_by"] == "MEDIA"
     assert row["last_error_code"] == "TELEGRAM_MEDIA_REFRESH_REQUIRED"
     with store.connect() as con:
         job = con.execute("SELECT state FROM jobs WHERE article_id=?", (article_id,)).fetchone()

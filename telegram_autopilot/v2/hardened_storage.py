@@ -195,9 +195,14 @@ class HardenedV2Store(V2Store):
                     ]
                     article_id = int(row["id"])
                     channel_id = int(row["channel_id"])
+                    # RC101: media sanitization may block publication, but it must
+                    # never erase a completed rewrite/editorial edit.
                     con.execute(
-                        """UPDATE articles SET media_json='[]',article_layout_json=?,stage='COLLECTED',decision='PENDING',
-                           blocked_by='MEDIA',ready_at='',final_text='',last_error_code='TELEGRAM_MEDIA_REFRESH_REQUIRED',
+                        """UPDATE articles SET media_json='[]',article_layout_json=?,
+                           stage=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN 'READY' ELSE 'COLLECTED' END,
+                           decision=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN 'PUBLISH' ELSE 'PENDING' END,
+                           blocked_by='MEDIA',ready_at=CASE WHEN TRIM(COALESCE(final_text,''))<>'' THEN ready_at ELSE '' END,
+                           last_error_code='TELEGRAM_MEDIA_REFRESH_REQUIRED',
                            last_error_detail='RC19 requires a fresh same-widget Telegram media snapshot',next_retry_at=''
                            WHERE id=?""",
                         (json.dumps(layout, ensure_ascii=False, separators=(",", ":")), article_id),
