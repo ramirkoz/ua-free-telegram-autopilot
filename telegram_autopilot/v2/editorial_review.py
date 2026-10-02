@@ -66,7 +66,7 @@ class EditorialReviewService:
                             FROM editorial_actions ea2
                             WHERE ea2.article_id=a.id
                         )
-                        AND ea.action IN ('approve','edit','reject')
+                        AND ea.action='reject'
                   )
                 ORDER BY datetime(a.discovered_at) DESC,a.id DESC LIMIT ?
             """,(max(1,min(1000,int(limit))),)).fetchall()
@@ -75,6 +75,7 @@ class EditorialReviewService:
             str(r['source_name'] or ''),str(r['discovered_at'] or '')) for r in rows]
 
     def _record(self, article_id: int, action: str, *, before: str='', after: str='', detail: str='') -> None:
+        self.ensure_schema()
         row=self.store.get_article(int(article_id))
         if row is None: return
         with self.store.connect() as con:
@@ -108,6 +109,7 @@ class EditorialReviewService:
             last_error_code='',last_error_detail='',next_retry_at='',ready_at=now_iso())
         record_rewrite_revision(self.store, int(article_id), new_text, origin='editor', reason='manual_edit_approved')
         self._record(article_id,'edit',before=before,after=new_text)
+        event('editorial','HUMAN_APPROVE',channel_id=int(row['channel_id']),article_id=int(article_id),action='edit')
 
     def approve(self, article_id: int) -> None:
         row=self.store.get_article(int(article_id))
@@ -119,6 +121,7 @@ class EditorialReviewService:
         self.store.update_article(int(article_id),stage=str(Stage.READY),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),
             status_detail='Погоджено редактором вручну',last_error_code='',last_error_detail='',next_retry_at='',ready_at=now_iso())
         self._record(article_id,'approve',before=final_text,after=final_text)
+        event('editorial','HUMAN_APPROVE',channel_id=int(row['channel_id']),article_id=int(article_id),action='approve')
 
     def reject(self, article_id: int, reason: str='Відхилено редактором вручну') -> None:
         row=self.store.get_article(int(article_id))
@@ -126,9 +129,16 @@ class EditorialReviewService:
         final_text=str(row['final_text'] or '')
         self.store.update_article(int(article_id),stage=str(Stage.ARCHIVED),decision=str(Decision.REJECT),blocked_by=str(BlockedBy.NONE),
             reject_reason=reason,status_detail=reason,last_error_code='',last_error_detail='',next_retry_at='')
+        with self.store.connect() as con:
+            con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',error_code='HUMAN_REJECT',error_detail=?,updated_at=? WHERE article_id=?",
+                        (str(reason)[:1800], now_iso(), int(article_id)))
         self._record(article_id,'reject',before=final_text,detail=reason)
+        event('editorial','HUMAN_REJECT',channel_id=int(row['channel_id']),article_id=int(article_id),detail=str(reason)[:700])
 
     def record_publish_now(self, article_id: int, result: str) -> None:
         row=self.store.get_article(int(article_id))
         text=str(row['final_text'] or '') if row is not None else ''
         self._record(article_id,'publish_now' if result=='PUBLISHED' else 'publish_attempt',before=text,after=text,detail=result)
+        if row is not None:
+            event('editorial','HUMAN_PUBLISH_SUCCESS' if result=='PUBLISHED' else 'HUMAN_PUBLISH_BLOCKED',
+                  level=20 if result=='PUBLISHED' else 30, channel_id=int(row['channel_id']),article_id=int(article_id),result=str(result))
