@@ -8,6 +8,7 @@ from .media_pipeline import build_media_bundle, media_bundle_complete
 from .ready_backlog import ReadyBacklogRuntimeEngine, ReadyBacklogStore
 from .storage import _parse_datetime_value, now_iso
 from .telegram_ingest_policy import install_ingest_behavior
+from .rc102_contract import Rc102EditorialEngine, Rc102Gateway, Rc102Publisher
 
 READY_MEDIA_GRACE_SECONDS = 1800
 _READY_MEDIA_CODES = {
@@ -33,6 +34,12 @@ class HardenedReadyStore(ReadyBacklogStore):
 
 class HardenedRuntimeEngine(ReadyBacklogRuntimeEngine):
     """Keep required-media policy fail-closed without leaving immortal READY rows."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.gateway = Rc102Gateway(store)
+        self.editorial = Rc102EditorialEngine(store, self.gateway)
+        self.publisher = Rc102Publisher(store)
 
     def _resolve_confirmed_media_misses(self) -> int:
         resolved = int(super()._resolve_confirmed_media_misses() or 0)
