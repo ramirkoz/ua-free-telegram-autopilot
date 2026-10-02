@@ -12,7 +12,19 @@ def _purge_expired_materials(store, *, retention_days: int = RETENTION_DAYS) -> 
     """Keep only the operator's seven-day working set in the live article database."""
     days = max(1, int(retention_days))
     modifier = f"-{days} days"
-    stats = {"articles_purged": 0, "audit_pruned": 0, "vacuumed_after_purge": 0}
+    stats = {
+        "articles_purged": 0,
+        "duplicate_links_detached": 0,
+        "audit_pruned": 0,
+        "vacuumed_after_purge": 0,
+    }
+    expired_predicate = """datetime(
+        CASE
+          WHEN stage='PUBLISHED' AND published_at<>'' THEN published_at
+          WHEN source_published_at<>'' THEN source_published_at
+          ELSE discovered_at
+        END
+    ) < datetime('now', ?)"""
     with store.connect() as con:
         con.execute(
             "UPDATE channels SET published_dedupe_window_hours=MIN(published_dedupe_window_hours, ?), updated_at=datetime('now') "
@@ -20,17 +32,23 @@ def _purge_expired_materials(store, *, retention_days: int = RETENTION_DAYS) -> 
             (days * 24, days * 24),
         )
         before = int(con.execute("SELECT COUNT(*) FROM articles").fetchone()[0] or 0)
-        con.execute(
-            """DELETE FROM articles
-                 WHERE datetime(
-                       CASE
-                         WHEN stage='PUBLISHED' AND published_at<>'' THEN published_at
-                         WHEN source_published_at<>'' THEN source_published_at
-                         ELSE discovered_at
-                       END
-                 ) < datetime('now', ?)""",
+
+        # `articles.duplicate_of` is a self-referencing foreign key without
+        # ON DELETE SET NULL in existing databases. A recent duplicate may
+        # legitimately point at an older canonical article. Detach those
+        # historical links before deleting the expired parents so startup
+        # retention cannot fail with FOREIGN KEY constraint failed.
+        cur = con.execute(
+            f"""UPDATE articles
+                   SET duplicate_of=NULL
+                 WHERE duplicate_of IN (
+                     SELECT id FROM articles WHERE {expired_predicate}
+                 )""",
             (modifier,),
         )
+        stats["duplicate_links_detached"] = max(0, int(cur.rowcount or 0))
+
+        con.execute(f"DELETE FROM articles WHERE {expired_predicate}", (modifier,))
         after = int(con.execute("SELECT COUNT(*) FROM articles").fetchone()[0] or 0)
         stats["articles_purged"] = max(0, before - after)
         cur = con.execute("DELETE FROM audit_events WHERE datetime(created_at)<datetime('now',?)", (modifier,))
