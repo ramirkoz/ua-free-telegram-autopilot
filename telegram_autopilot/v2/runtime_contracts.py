@@ -257,11 +257,12 @@ SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: 
             decision = str(obj.get("decision") or "").casefold()
             if decision not in {"publish", "reject"}:
                 raise ValueError("invalid decision")
-            missing = [key for key in required if key not in obj]
-            if missing:
-                raise ValueError("missing combined editorial metrics: " + ",".join(missing))
-            for key in required:
-                obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
+            if decision == "publish":
+                missing = [key for key in required if key not in obj]
+                if missing:
+                    raise ValueError("missing combined editorial metrics: " + ",".join(missing))
+                for key in required:
+                    obj[key] = max(0, min(100, int(float(obj.get(key, 0) or 0))))
             return obj
 
         result = self.gateway.run(
