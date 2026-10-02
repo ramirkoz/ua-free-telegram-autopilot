@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from telegram_autopilot.v2.editorial_state import ensure_editorial_state_schema
-from telegram_autopilot.v2.rc103_finalizer import _purge_expired_materials
+from telegram_autopilot.v2.operational_finalizer import _purge_expired_materials
 from telegram_autopilot.v2.storage import V2Store, now_iso
 
 
@@ -52,7 +52,7 @@ def _article(store: V2Store, external_id: str, when: str, *, stage: str = 'WRITT
         return article_id
 
 
-def test_rc103_finalizer_deletes_materials_older_than_seven_days_with_children(tmp_path):
+def test_seven_day_finalizer_deletes_expired_materials_with_children(tmp_path):
     store = V2Store(tmp_path / 'db.sqlite3')
     _seed(store)
     old_id = _article(store, 'old', _ago(8))
@@ -79,7 +79,7 @@ def test_rc103_finalizer_deletes_materials_older_than_seven_days_with_children(t
         assert con.execute('SELECT published_dedupe_window_hours FROM channels WHERE id=1').fetchone()[0] == 168
 
 
-def test_rc103_finalizer_uses_published_time_for_recent_publication(tmp_path):
+def test_seven_day_finalizer_uses_published_time_for_recent_publication(tmp_path):
     store = V2Store(tmp_path / 'db.sqlite3')
     _seed(store)
     old_source_recent_publish = _article(store, 'published', _ago(12), stage='PUBLISHED')
@@ -89,9 +89,9 @@ def test_rc103_finalizer_uses_published_time_for_recent_publication(tmp_path):
     assert store.get_article(old_source_recent_publish) is not None
 
 
-def test_rc103_visible_tab_refresh_does_not_rebuild_all_hidden_trees():
-    source = (Path(__file__).resolve().parents[1] / 'telegram_autopilot' / 'v2' / 'rc103_finalizer.py').read_text(encoding='utf-8')
+def test_visible_tab_refresh_does_not_rebuild_all_hidden_trees():
+    source = (Path(__file__).resolve().parents[1] / 'telegram_autopilot' / 'v2' / 'operational_finalizer.py').read_text(encoding='utf-8')
     assert 'self.refresh_home()' in source
-    assert 'self._rc103_refresh_active_tab()' in source
+    assert 'self._refresh_active_tab()' in source
     assert 'self.refresh_queue()\n            self.refresh_editorial_review()' not in source
     assert '<<NotebookTabChanged>>' in source
