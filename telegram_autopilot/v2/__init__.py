@@ -14,5 +14,5 @@ install_runtime_contracts()
 from .operational_retention import install_operational_contracts
 install_operational_contracts()
 
-from .rc103_finalizer import install_operational_finalizer
+from .operational_finalizer import install_operational_finalizer
 install_operational_finalizer()
