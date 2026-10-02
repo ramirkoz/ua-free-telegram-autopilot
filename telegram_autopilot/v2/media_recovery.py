@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from .domain import BlockedBy, ChannelMode, Decision, Stage
 from .hardened_storage import HardenedV2Store
 from .loghub import event
+from .editorial_state import preserve_current_rewrite
 from .media_pipeline import build_media_bundle, media_required
 from .production_runtime import ProductionRuntimeEngine
 
@@ -32,20 +33,28 @@ class MediaRecoveryStore(HardenedV2Store):
             return article_id
 
         stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        has_rewrite = bool(str(row["final_text"] or "").strip())
+        if has_rewrite:
+            preserve_current_rewrite(self, int(article_id), origin="system", reason="media_recovery")
         with self.connect() as con:
             con.execute(
                 """UPDATE articles
-                   SET stage='COLLECTED',decision='PENDING',reject_reason='',blocked_by='NONE',
-                       ready_at='',final_text='',last_error_code='',last_error_detail='',next_retry_at=''
+                   SET stage=?,decision=?,reject_reason='',blocked_by='NONE',
+                       ready_at=?,last_error_code='',last_error_detail='',next_retry_at=''
                    WHERE id=?""",
-                (int(article_id),),
+                (
+                    str(Stage.READY) if has_rewrite else str(Stage.COLLECTED),
+                    str(Decision.PUBLISH) if has_rewrite else str(Decision.PENDING),
+                    stamp if has_rewrite else '',
+                    int(article_id),
+                ),
             )
             con.execute(
                 """UPDATE jobs
-                   SET state='QUEUED',available_at=?,lease_owner='',lease_until='',attempts=0,
+                   SET state=?,available_at=?,lease_owner='',lease_until='',attempts=0,
                        error_code='',error_detail='',updated_at=?
                    WHERE article_id=? AND job_type='process'""",
-                (stamp, stamp, int(article_id)),
+                ('DONE' if has_rewrite else 'QUEUED', stamp, stamp, int(article_id)),
             )
         event("media", "revived archived required-media item after source refresh", article_id=int(article_id))
         return article_id
