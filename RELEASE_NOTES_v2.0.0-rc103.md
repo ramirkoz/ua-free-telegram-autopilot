@@ -1,15 +1,15 @@
 # UA FREE Telegram Autopilot 2.0.0-rc103
 
-RC103 applies the audited scientific/news channel profile and bounds the live database/UI to the operator's seven-day working horizon.
+RC103 applies the audited scientific/news channel profile and aligns the live database/UI with the operator's seven-day working horizon.
 
-- Scientific/news editorial channels are tuned through visible channel settings, selected by persisted role (`scientific_news`) rather than channel name or ID.
+- Scientific/news editorial channels are tuned through visible persisted channel settings, selected by the existing `scientific_news` role rather than channel name or numeric ID.
 - Target mix: AI 38%, robotics 18%, defense/Ukraine tech 14%, cybersecurity 10%, hardware 10%, science/space 7%, medicine/biology 3%.
-- Publishing window 08:00–20:00, minimum 45 minutes between posts, maximum two posts per publish cycle, 30-day published-event dedupe window, and 450–600 character target copy.
-- The editorial mix is persisted in visible per-channel settings/policy text instead of hidden global logic.
-- Editorial review and operational queue views show only the last seven days; history view is also bounded to seven days.
-- UI queue/history SQL no longer loads full article bodies, rewrite text, media JSON and layouts for hundreds of rows just to render list columns.
-- Startup maintenance archives unfinished work older than seven days, removes stale jobs, prunes audit telemetry older than seven days and compacts heavy payloads after their operational/dedupe usefulness expires.
-- SQLite receives recent-row indexes, `PRAGMA optimize`, WAL checkpointing and conditional VACUUM when reclaimable pages are materially large.
-- Supervisor database telemetry now reports database size, freelist ratio, seven-day operational row count and stale unpublished rows.
+- Publishing window 08:00–20:00, minimum 45 minutes between posts, maximum two posts per publish cycle, seven-day published-event dedupe horizon, and 450–600 character target copy.
+- The editorial mix is persisted in normal per-channel settings/policy text instead of hidden channel-name business logic.
+- Editorial review, operational queue and history views are bounded to the last seven days and use narrow list-column SQL instead of loading full article blobs.
+- Live database retention is also seven days: expired articles are deleted together with article-owned jobs, feedback, editorial actions, rewrite revisions and repost rows via foreign-key cascades. Learning already uses a seven-day window, so the storage horizon now matches the product horizon.
+- Audit telemetry older than seven days is removed; recent-row indexes, `ANALYZE`, `PRAGMA optimize`, WAL checkpointing and conditional `VACUUM` keep SQLite compact.
+- The Tk UI no longer rebuilds every hidden tab every 2.5 seconds. Home plus only the currently visible dynamic tab are refreshed; switching tabs triggers an immediate refresh of that tab.
+- Supervisor database telemetry reports database size, freelist ratio, seven-day operational row count and stale rows.
 
-The latest live telemetry available while building RC103 was still emitted by RC101 and showed a UI event-loop peak lag of about 14.7 seconds plus heavy AI/provider pressure. RC103 therefore does not claim RC102/RC103 live acceptance until the new build is actually run.
+Telemetry evidence that motivated the UI/database part came from the latest live snapshot available during development, still RC101: UI event-loop peak lag reached about 14.7 seconds, with 26 active jobs and large review/history churn while all tabs were being rebuilt every refresh cycle. No fresh RC102 telemetry had reached the Drive live mirror yet, so RC103 runtime acceptance remains a live test rather than a CI inference.
