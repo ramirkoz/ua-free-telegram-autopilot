@@ -16,3 +16,10 @@ install_operational_contracts()
 
 from .operational_finalizer import install_operational_finalizer
 install_operational_finalizer()
+
+# Same-version RC103 live hotfix: the first two RC103 operator builds proved that
+# seven-day retention must not sit in the startup gate. Install this last so it
+# replaces the startup wrapper added by the retention/finalizer layers while
+# keeping their UI, supervisor and editorial contracts intact.
+from .startup_background_hotfix import install_startup_background_hotfix
+install_startup_background_hotfix()
