@@ -10,9 +10,13 @@ from .storage import V2Store
 from .operational_retention import OPERATIONAL_RETENTION_DAYS, _apply_scientific_news_profile
 
 
-_BATCH_SIZE = 200
-_AUDIT_BATCH_SIZE = 1000
-_BACKGROUND_DELAY_SECONDS = 3.0
+_BATCH_SIZE = 100
+_AUDIT_BATCH_SIZE = 500
+# The live failure proved that a 3-second delay lets retention race runtime startup.
+# Five minutes puts all cleanup outside the startup/readiness window even on a slow
+# migrated operator database. The worker is daemonized and lock-aware.
+_BACKGROUND_DELAY_SECONDS = 300.0
+_LOCK_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 120.0)
 _INSTALLED = False
 
 
@@ -40,8 +44,6 @@ def _purge_article_batch(store, article_ids: list[int]) -> tuple[int, int]:
         return 0, 0
     marks = ",".join("?" for _ in article_ids)
     with store.connect() as con:
-        # A surviving recent duplicate can point at an expired parent. Detach every
-        # reference to this batch before deleting it so FK enforcement stays on.
         cur = con.execute(
             f"UPDATE articles SET duplicate_of=NULL WHERE duplicate_of IN ({marks})",
             tuple(article_ids),
@@ -57,28 +59,21 @@ def _prune_audit_batches(store, *, retention_days: int) -> int:
     total = 0
     while True:
         with store.connect() as con:
-            ids = [
-                int(row[0])
-                for row in con.execute(
-                    "SELECT id FROM audit_events WHERE datetime(created_at)<datetime('now',?) ORDER BY id ASC LIMIT ?",
-                    (modifier, _AUDIT_BATCH_SIZE),
-                ).fetchall()
-            ]
+            ids = [int(row[0]) for row in con.execute(
+                "SELECT id FROM audit_events WHERE datetime(created_at)<datetime('now',?) ORDER BY id ASC LIMIT ?",
+                (modifier, _AUDIT_BATCH_SIZE),
+            ).fetchall()]
             if not ids:
                 break
             marks = ",".join("?" for _ in ids)
             cur = con.execute(f"DELETE FROM audit_events WHERE id IN ({marks})", tuple(ids))
             total += max(0, int(cur.rowcount or 0))
-        time.sleep(0.01)
+        time.sleep(0.10)
     return total
 
 
 def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION_DAYS) -> dict[str, Any]:
-    """Prune the seven-day working set without a startup-blocking VACUUM.
-
-    Work is intentionally split into short autocommit batches. This keeps the live
-    runtime and Tk queries from waiting behind one huge DELETE/VACUUM transaction.
-    """
+    """Prune the seven-day working set in short, lock-friendly batches."""
     days = max(1, int(retention_days))
     stats: dict[str, Any] = {
         "articles_purged": 0,
@@ -95,13 +90,6 @@ def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION
             "WHERE published_dedupe_window_hours>?",
             (days * 24, days * 24),
         )
-        con.execute("CREATE INDEX IF NOT EXISTS idx_articles_discovered_recent ON articles(discovered_at DESC,id DESC)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_articles_review_recent ON articles(stage,discovered_at DESC,id DESC)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_articles_working_set ON articles(discovered_at DESC,id DESC)")
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_articles_review_working_set "
-            "ON articles(discovered_at DESC,id DESC) WHERE final_text<>'' AND stage<>'PUBLISHED'"
-        )
 
     while True:
         ids = _expired_article_ids(store, retention_days=days, limit=_BATCH_SIZE)
@@ -111,28 +99,16 @@ def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION
         stats["articles_purged"] += deleted
         stats["duplicate_links_detached"] += detached
         stats["batches"] += 1
-        event(
-            "storage",
-            "RC103 deferred retention batch",
-            batch=stats["batches"],
-            articles_purged=deleted,
-            duplicate_links_detached=detached,
-        )
+        event("storage", "RC103 deferred retention batch", batch=stats["batches"], articles_purged=deleted, duplicate_links_detached=detached)
         if deleted == 0:
             break
-        time.sleep(0.02)
+        time.sleep(0.20)
 
     stats["audit_pruned"] = _prune_audit_batches(store, retention_days=days)
 
+    # No live VACUUM/ANALYZE/index creation/forced checkpoint. Those operations can
+    # take or wait on broad SQLite locks and are not worth risking operator runtime.
     with store.connect() as con:
-        try:
-            con.execute("PRAGMA optimize")
-        except sqlite3.Error:
-            pass
-        try:
-            con.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except sqlite3.Error:
-            pass
         page_count = int(con.execute("PRAGMA page_count").fetchone()[0] or 0)
         freelist = int(con.execute("PRAGMA freelist_count").fetchone()[0] or 0)
         page_size = int(con.execute("PRAGMA page_size").fetchone()[0] or 4096)
@@ -142,32 +118,39 @@ def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION
     stats["size_bytes"] = size_bytes
     stats["freelist_pages"] = freelist
     stats["free_ratio"] = round(free_ratio, 4)
-    # Full VACUUM takes an exclusive rewrite lock. Never do it automatically while
-    # the runtime is live; logical pruning and PRAGMA optimize deliver the useful win.
     stats["vacuum_recommended"] = int(size_bytes >= 16 * 1024 * 1024 and free_ratio >= 0.10)
     event("storage", "RC103 deferred seven-day maintenance complete", **stats)
     return stats
 
 
+def _is_lock_error(exc: BaseException) -> bool:
+    text = str(exc or "").casefold()
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text)
+
+
 def _run_deferred_worker(store) -> None:
     time.sleep(_BACKGROUND_DELAY_SECONDS)
-    try:
-        stats = _run_batched_retention(store)
-        event("app", "RC103 deferred database maintenance complete", **stats)
-    except Exception as exc:
-        event("app", "RC103 deferred database maintenance failed", level=40, detail=str(exc)[:1600])
+    attempts = 0
+    while True:
+        try:
+            stats = _run_batched_retention(store)
+            event("app", "RC103 deferred database maintenance complete", **stats)
+            return
+        except Exception as exc:
+            if not _is_lock_error(exc) or attempts >= len(_LOCK_RETRY_DELAYS_SECONDS):
+                event("app", "RC103 deferred database maintenance failed", level=40, detail=str(exc)[:1600])
+                return
+            delay = float(_LOCK_RETRY_DELAYS_SECONDS[attempts])
+            attempts += 1
+            event("app", "RC103 deferred database maintenance postponed: database busy", level=30, attempt=attempts, retry_in_seconds=delay, detail=str(exc)[:500])
+            time.sleep(delay)
 
 
 def _schedule_deferred_maintenance(store) -> bool:
     if bool(getattr(store, "_rc103_deferred_maintenance_started", False)):
         return False
     setattr(store, "_rc103_deferred_maintenance_started", True)
-    threading.Thread(
-        target=_run_deferred_worker,
-        args=(store,),
-        name="V2-RC103-Deferred-DB-Maintenance",
-        daemon=True,
-    ).start()
+    threading.Thread(target=_run_deferred_worker, args=(store,), name="V2-RC103-Deferred-DB-Maintenance", daemon=True).start()
     return True
 
 
@@ -175,14 +158,15 @@ def _install_fast_startup_contract() -> None:
     from .hardened_storage import HardenedV2Store
 
     def run_startup_maintenance(self):
-        # Keep the proven pre-RC103 startup repairs in the startup gate. The heavy
-        # seven-day purge/compaction added in RC103 is explicitly deferred.
+        # Only proven pre-RC103 repairs execute synchronously. Retention merely gets
+        # a daemon timer here and cannot touch SQLite until the startup window is over.
         stats = dict(V2Store.run_startup_maintenance(self))
         stats["sanitized_telegram_media_v3"] = self._sanitize_pre_rc19_telegram_media()
         stats["editorial_media_trimmed"] = self._enforce_editorial_single_media()
         stats["scientific_news_profiles_applied"] = _apply_scientific_news_profile(self)
         stats["deferred_retention_scheduled"] = int(_schedule_deferred_maintenance(self))
-        event("app", "RC103 startup gate complete; retention deferred", **stats)
+        stats["deferred_retention_delay_seconds"] = int(_BACKGROUND_DELAY_SECONDS)
+        event("app", "RC103 startup gate complete; retention delayed outside startup window", **stats)
         return stats
 
     HardenedV2Store.run_startup_maintenance = run_startup_maintenance
