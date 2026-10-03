@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from telegram_autopilot.v2.hardened_storage import HardenedV2Store
@@ -34,11 +35,23 @@ def _article(store: V2Store, external_id: str, discovered_at: str) -> int:
         return int(cur.lastrowid)
 
 
-def test_rc103_startup_gate_no_longer_runs_retention_or_vacuum() -> None:
+def test_rc103_startup_gate_only_schedules_delayed_retention() -> None:
     source = inspect.getsource(HardenedV2Store.run_startup_maintenance)
     assert "_schedule_deferred_maintenance" in source
     assert "_compact_operational_database" not in source
     assert "_purge_expired_materials" not in source
+    assert "VACUUM" not in source
+
+    import telegram_autopilot.v2.startup_background_hotfix as hotfix
+    assert hotfix._BACKGROUND_DELAY_SECONDS >= 120.0
+
+
+def test_rc103_live_retention_excludes_broad_lock_operations() -> None:
+    import telegram_autopilot.v2.startup_background_hotfix as hotfix
+    source = inspect.getsource(hotfix._run_batched_retention)
+    assert "wal_checkpoint" not in source
+    assert "CREATE INDEX" not in source
+    assert "ANALYZE" not in source
     assert "VACUUM" not in source
 
 
@@ -69,7 +82,28 @@ def test_rc103_deferred_retention_purges_in_multiple_small_batches(tmp_path, mon
 
     import telegram_autopilot.v2.startup_background_hotfix as hotfix
     monkeypatch.setattr(hotfix, "_BATCH_SIZE", 2)
+    monkeypatch.setattr(hotfix.time, "sleep", lambda *_: None)
     stats = hotfix._run_batched_retention(store, retention_days=7)
 
     assert stats["articles_purged"] == 5
     assert stats["batches"] == 3
+
+
+def test_rc103_deferred_worker_retries_database_locked(monkeypatch) -> None:
+    import telegram_autopilot.v2.startup_background_hotfix as hotfix
+
+    attempts = {"count": 0}
+
+    def fake_retention(store):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return {"articles_purged": 0}
+
+    monkeypatch.setattr(hotfix, "_BACKGROUND_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(hotfix, "_LOCK_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(hotfix, "_run_batched_retention", fake_retention)
+    monkeypatch.setattr(hotfix.time, "sleep", lambda *_: None)
+
+    hotfix._run_deferred_worker(object())
+    assert attempts["count"] == 3
