@@ -104,7 +104,7 @@ def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION
         )
 
     while True:
-        ids = _expired_article_ids(store, retention_days=days)
+        ids = _expired_article_ids(store, retention_days=days, limit=_BATCH_SIZE)
         if not ids:
             break
         deleted, detached = _purge_article_batch(store, ids)
