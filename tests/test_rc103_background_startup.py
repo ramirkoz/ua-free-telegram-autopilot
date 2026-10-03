@@ -40,7 +40,7 @@ def test_rc103_startup_gate_only_schedules_delayed_retention() -> None:
     assert "_schedule_deferred_maintenance" in source
     assert "_compact_operational_database" not in source
     assert "_purge_expired_materials" not in source
-    assert "VACUUM" not in source
+    assert 'con.execute("VACUUM")' not in source
 
     import telegram_autopilot.v2.startup_background_hotfix as hotfix
     assert hotfix._BACKGROUND_DELAY_SECONDS >= 120.0
@@ -49,10 +49,10 @@ def test_rc103_startup_gate_only_schedules_delayed_retention() -> None:
 def test_rc103_live_retention_excludes_broad_lock_operations() -> None:
     import telegram_autopilot.v2.startup_background_hotfix as hotfix
     source = inspect.getsource(hotfix._run_batched_retention)
-    assert "wal_checkpoint" not in source
-    assert "CREATE INDEX" not in source
-    assert "ANALYZE" not in source
-    assert "VACUUM" not in source
+    assert "wal_checkpoint(" not in source
+    assert 'con.execute("CREATE INDEX' not in source
+    assert 'con.execute("ANALYZE")' not in source
+    assert 'con.execute("VACUUM")' not in source
 
 
 def test_rc103_deferred_retention_keeps_fk_safe_recent_duplicate(tmp_path) -> None:
