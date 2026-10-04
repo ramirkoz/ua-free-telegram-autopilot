@@ -32,6 +32,11 @@ _OUTBOUND_TELEMETRY_FILES = frozenset({
 # suppressed here.
 _REMOTE_ONLY_INCIDENTS: frozenset[str] = frozenset()
 
+# Canonical Google Drive folder observed by the external supervisor. RC103 used
+# name-only lookup, which is ambiguous across My Drive / Shared Drive and duplicate
+# folder names. Keep an environment override for portability.
+CANONICAL_LIVE_FEED_FOLDER_ID = "1tm0Xdd5V4mDHm7iZza3SnHdEXR2VMa-0"
+
 
 class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService):
     """Local supervisor with outbound-only observability and no remote agent.
@@ -70,7 +75,13 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         # RC64: passive telemetry prefers the Google Drive API. The historical
         # filesystem mirror remains fallback-only for machines where OAuth is
         # intentionally unavailable. Core runtime work never depends on either.
-        self._drive_api = DirectDriveTelemetry(CANONICAL_LIVE_FEED_NAME)
+        self._drive_api = DirectDriveTelemetry(
+            CANONICAL_LIVE_FEED_NAME,
+            folder_id=os.environ.get(
+                "UA_FREE_AUTOPILOT_LIVE_FOLDER_ID",
+                CANONICAL_LIVE_FEED_FOLDER_ID,
+            ),
+        )
 
     @staticmethod
     def _rc55_valid_telemetry_source(source: Path, name: str) -> bool:
