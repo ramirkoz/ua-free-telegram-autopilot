@@ -16,6 +16,7 @@ from .fileio import atomic_copy
 from . import V2_VERSION
 from .telemetry_supervisor import TelemetryProductionSupervisorService
 from .drive_api_telemetry import DirectDriveTelemetry
+from ..secrets_store import load_secrets
 from .commercial_profile_audit import audit_commercial_profiles
 
 
@@ -76,13 +77,23 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         # RC64: passive telemetry prefers the Google Drive API. The historical
         # filesystem mirror remains fallback-only for machines where OAuth is
         # intentionally unavailable. Core runtime work never depends on either.
-        self._drive_api = DirectDriveTelemetry(
-            CANONICAL_LIVE_FEED_NAME,
-            folder_id=os.environ.get(
-                "UA_FREE_AUTOPILOT_LIVE_FOLDER_ID",
-                CANONICAL_LIVE_FEED_FOLDER_ID,
-            ),
-        )
+        self.reload_drive_transport()
+
+    def reload_drive_transport(self) -> dict[str, object]:
+        """Reload operator-visible Drive credentials/folder without restarting runtime."""
+        try:
+            secrets_cfg = load_secrets()
+            saved_folder = str(getattr(secrets_cfg, "google_drive_folder_id", "") or "").strip()
+        except Exception:
+            saved_folder = ""
+        folder_id = str(
+            os.environ.get("UA_FREE_AUTOPILOT_LIVE_FOLDER_ID")
+            or saved_folder
+            or CANONICAL_LIVE_FEED_FOLDER_ID
+        ).strip()
+        self._drive_api = DirectDriveTelemetry(CANONICAL_LIVE_FEED_NAME, folder_id=folder_id)
+        event("supervisor", "Drive telemetry transport reloaded", folder_id=folder_id)
+        return self._drive_api.status()
 
     @staticmethod
     def _rc55_valid_telemetry_source(source: Path, name: str) -> bool:
