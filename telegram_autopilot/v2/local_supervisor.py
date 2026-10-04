@@ -126,6 +126,29 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             except OSError:
                 pass
 
+            # RC103 migration: old installations still point to
+            # ``SUPERVISOR FEED — Autopilot V2``. If its parent Drive directory is
+            # mounted, create/use the canonical sibling automatically instead of
+            # declaring fallback unavailable.
+            try:
+                parent = configured_path.parent
+                if parent.is_dir():
+                    canonical_sibling = parent / CANONICAL_LIVE_FEED_NAME
+                    canonical_sibling.mkdir(parents=True, exist_ok=True)
+                    cfg = SupervisorConfig(**{**asdict(self.config), "mirror_dir": str(canonical_sibling)}).normalized()
+                    self.save_config(cfg)
+                    self._rc55_mirror_targets = [canonical_sibling]
+                    self._rc55_mirror_targets_checked_at = now
+                    event(
+                        "supervisor",
+                        "migrated local telemetry fallback to canonical folder",
+                        old_mirror=configured,
+                        mirror_dir=str(canonical_sibling),
+                    )
+                    return [canonical_sibling]
+            except OSError:
+                pass
+
         discovered = str(self._discover_live_mirror_dir() or "").strip()
         if discovered:
             path = Path(discovered).expanduser()
