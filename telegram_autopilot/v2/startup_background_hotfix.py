@@ -158,15 +158,15 @@ def _install_fast_startup_contract() -> None:
     from .hardened_storage import HardenedV2Store
 
     def run_startup_maintenance(self):
-        # Only proven pre-RC103 repairs execute synchronously. Retention merely gets
-        # a daemon timer here and cannot touch SQLite until the startup window is over.
-        stats = dict(V2Store.run_startup_maintenance(self))
-        stats["sanitized_telegram_media_v3"] = self._sanitize_pre_rc19_telegram_media()
-        stats["editorial_media_trimmed"] = self._enforce_editorial_single_media()
-        stats["scientific_news_profiles_applied"] = _apply_scientific_news_profile(self)
-        stats["deferred_retention_scheduled"] = int(_schedule_deferred_maintenance(self))
-        stats["deferred_retention_delay_seconds"] = int(_BACKGROUND_DELAY_SECONDS)
-        event("app", "RC103 startup gate complete; retention delayed outside startup window", **stats)
+        # RC103 startup contract: housekeeping can NEVER decide whether the app
+        # starts. Full-table URL/media/duplicate repairs are deliberately excluded
+        # from the startup path. Only schedule lock-friendly retention for later.
+        stats = {
+            "startup_gate_bypassed": 1,
+            "deferred_retention_scheduled": int(_schedule_deferred_maintenance(self)),
+            "deferred_retention_delay_seconds": int(_BACKGROUND_DELAY_SECONDS),
+        }
+        event("app", "RC103 fast startup gate complete; all DB maintenance deferred", **stats)
         return stats
 
     HardenedV2Store.run_startup_maintenance = run_startup_maintenance
