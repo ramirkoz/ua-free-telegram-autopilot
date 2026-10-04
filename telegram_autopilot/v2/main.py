@@ -188,79 +188,68 @@ def main() -> int:
             _present_main_window(app)
             update_coordinator = UpdateCoordinator(app, store, runtime)
 
-            maintenance_done = threading.Event()
-            maintenance_result: dict[str, object] = {}
-            app.set_startup_ready(False, "Підготовка бази… інтерфейс залишається активним")
+            # RC103 startup must never be gated by database housekeeping. The UI
+            # and runtime become available first; feedback schema and retention are
+            # best-effort background tasks and cannot veto application startup.
+            app.set_startup_ready(True, "Готово · фонове обслуговування БД не блокує запуск")
             event("app", "startup stage", stage="UI_READY")
 
-            def maintenance_worker() -> None:
-                try:
-                    maintenance_result["stats"] = store.run_startup_maintenance()
-                    event("app", "startup maintenance complete", **dict(maintenance_result["stats"]))
-                except Exception as exc:
-                    maintenance_result["error"] = exc
-                    event("app", "startup maintenance failed", level=40, detail=str(exc)[:1600])
-                try:
-                    maintenance_result["feedback_stats"] = app.feedback.ensure_schema()
-                    event("feedback", "schema ready", **dict(maintenance_result["feedback_stats"]))
-                except Exception as exc:
-                    maintenance_result["feedback_error"] = exc
-                    event("feedback", "schema failed", level=30, detail=str(exc)[:1200])
-                finally:
-                    maintenance_done.set()
+            try:
+                UpdateProtocol().mark_startup_healthy(V2_VERSION)
+                event("update", "startup health marker written", version=V2_VERSION)
+            except Exception as exc:
+                event("update", "startup health marker failed", level=30, detail=str(exc)[:1000])
 
-            def finish_startup_when_ready() -> None:
-                if not maintenance_done.is_set():
-                    if app.winfo_exists():
-                        app.after(200, finish_startup_when_ready)
-                    return
-                error = maintenance_result.get("error")
-                if error is not None:
-                    app.set_startup_ready(False, "Помилка підготовки бази. Runtime не запущено")
+            if store.list_channels(enabled_only=True):
+                def start_runtime_and_mark_ready() -> None:
                     try:
-                        messagebox.showerror("UA FREE Telegram Autopilot V2", f"Помилка підготовки бази:\n{error}", parent=app)
-                    except Exception:
-                        pass
-                    return
-
-                stats = maintenance_result.get("stats") or {}
-                feedback_error = maintenance_result.get("feedback_error")
-                if feedback_error is None:
-                    app.set_feedback_ready(True, "Статистика / навчання готові")
-                else:
-                    app.set_feedback_ready(False, f"Статистика / навчання недоступні: {feedback_error}")
-                app.set_startup_ready(True, f"Підготовка бази завершена: URL={stats.get('normalized_urls', 0)}, дублікати={stats.get('reconciled_duplicates', 0)}")
-
-                try:
-                    UpdateProtocol().mark_startup_healthy(V2_VERSION)
-                    event("update", "startup health marker written", version=V2_VERSION)
-                except Exception as exc:
-                    event("update", "startup health marker failed", level=30, detail=str(exc)[:1000])
-
-                if store.list_channels(enabled_only=True):
-                    def start_runtime_and_mark_ready() -> None:
                         app.start_runtime()
                         event("app", "startup stage", stage="RUNTIME_READY")
-                        if _manual_test_build():
-                            event("update", "manual test build: auto-update disabled", version=V2_VERSION)
-                        else:
-                            event(
-                                "update",
-                                "RC99 safety gate: automatic update disabled until signed-manifest verification is deployed",
-                                level=30,
-                                version=V2_VERSION,
-                            )
-                    app.after(250, start_runtime_and_mark_ready)
-                else:
-                    app.book.select(app.tabs["migration"])
-                    event("app", "startup stage", stage="UI_READY_NO_CHANNELS")
+                    except Exception as exc:
+                        event("app", "runtime start failed", level=40, detail=str(exc)[:1600])
+                        app.set_startup_ready(False, f"Помилка запуску runtime: {exc}")
+                        return
+                    if _manual_test_build():
+                        event("update", "manual test build: auto-update disabled", version=V2_VERSION)
+                    else:
+                        event(
+                            "update",
+                            "RC99 safety gate: automatic update disabled until signed-manifest verification is deployed",
+                            level=30,
+                            version=V2_VERSION,
+                        )
+                app.after(250, start_runtime_and_mark_ready)
+            else:
+                app.book.select(app.tabs["migration"])
+                event("app", "startup stage", stage="UI_READY_NO_CHANNELS")
 
-            def begin_startup_maintenance() -> None:
-                event("app", "startup stage", stage="MAINTENANCE")
-                threading.Thread(target=maintenance_worker, name="V2-Startup-Maintenance", daemon=True).start()
-                finish_startup_when_ready()
+            def background_startup_tasks() -> None:
+                # None of these tasks is allowed to block UI/runtime readiness.
+                try:
+                    stats = store.run_startup_maintenance()
+                    event("app", "startup maintenance scheduled", **dict(stats or {}))
+                except Exception as exc:
+                    event("app", "startup maintenance scheduling failed", level=30, detail=str(exc)[:1200])
+                try:
+                    feedback_stats = app.feedback.ensure_schema()
+                    event("feedback", "schema ready", **dict(feedback_stats or {}))
+                    try:
+                        app.after(0, lambda: app.set_feedback_ready(True, "Статистика / навчання готові"))
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    event("feedback", "schema failed", level=30, detail=str(exc)[:1200])
+                    try:
+                        msg = str(exc)
+                        app.after(0, lambda msg=msg: app.set_feedback_ready(False, f"Статистика / навчання недоступні: {msg}"))
+                    except Exception:
+                        pass
 
-            app.after(150, begin_startup_maintenance)
+            app.after(1000, lambda: threading.Thread(
+                target=background_startup_tasks,
+                name="V2-Post-Startup-Background",
+                daemon=True,
+            ).start())
             app.mainloop()
     except AlreadyRunning as exc:
         try:
