@@ -171,6 +171,51 @@ def _content_config_candidates() -> list[Path]:
     return values
 
 
+def _credential_candidates() -> list[DriveCredentials]:
+    """Return all usable credential sources without assuming the first token is valid.
+
+    RC103 previously preferred Autopilot's stored refresh token forever. If Google
+    revoked that token, the valid companion Content Tool credentials were never
+    tried. Keep the list small, deterministic and de-duplicated.
+    """
+    out: list[DriveCredentials] = []
+    seen: set[tuple[str, str]] = set()
+
+    for getter in (_environment_credentials, _own_credentials):
+        value = getter()
+        if value is None or not value.ready:
+            continue
+        key = (value.client_id, value.refresh_token)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+
+    for config_path in _content_config_candidates():
+        value = _portable_content_config(config_path)
+        if value is None or not value.ready:
+            continue
+        key = (value.client_id, value.refresh_token)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def _persist_drive_credentials(value: DriveCredentials) -> None:
+    """Persist a verified working companion credential set for the next restart."""
+    try:
+        cfg = load_secrets()
+        cfg.google_client_id = value.client_id
+        cfg.google_client_secret = value.client_secret
+        cfg.google_refresh_token = value.refresh_token
+        cfg.google_account_email = value.account_email
+        save_secrets(cfg)
+    except Exception:
+        pass
+
+
 def discover_drive_credentials(*, persist_companion: bool = True) -> DriveCredentials | None:
     for getter in (_own_credentials, _environment_credentials):
         value = getter()
@@ -277,20 +322,57 @@ class DirectDriveTelemetry:
     def _token(self, *, force: bool = False) -> str:
         if self._access_token and not force:
             return self._access_token
-        creds = self._credentials_now(force=force)
-        fields = {
-            "client_id": creds.client_id,
-            "refresh_token": creds.refresh_token,
-            "grant_type": "refresh_token",
-        }
-        if creds.client_secret:
-            fields["client_secret"] = creds.client_secret
-        payload = _post_form("https://oauth2.googleapis.com/token", fields, timeout=30.0)
-        token = str(payload.get("access_token") or "").strip()
-        if not token:
-            raise DriveTelemetryError("Google OAuth did not return access_token")
-        self._access_token = token
-        return token
+
+        candidates: list[DriveCredentials] = []
+        if self._credentials is not None and self._credentials.ready:
+            candidates.append(self._credentials)
+        for value in _credential_candidates():
+            if any(
+                value.client_id == existing.client_id
+                and value.refresh_token == existing.refresh_token
+                for existing in candidates
+            ):
+                continue
+            candidates.append(value)
+
+        if not candidates:
+            self._last_error = (
+                "Google Drive OAuth credentials not found; connect Drive in Content Tool "
+                "or set UA_FREE_GOOGLE_*"
+            )
+            raise DriveTelemetryError(self._last_error)
+
+        errors: list[str] = []
+        for creds in candidates:
+            fields = {
+                "client_id": creds.client_id,
+                "refresh_token": creds.refresh_token,
+                "grant_type": "refresh_token",
+            }
+            if creds.client_secret:
+                fields["client_secret"] = creds.client_secret
+            try:
+                payload = _post_form("https://oauth2.googleapis.com/token", fields, timeout=30.0)
+                token = str(payload.get("access_token") or "").strip()
+                if not token:
+                    raise DriveTelemetryError("Google OAuth did not return access_token")
+            except Exception as exc:
+                errors.append(f"{creds.source or 'unknown'}: {type(exc).__name__}: {exc}")
+                continue
+
+            self._credentials = creds
+            self._credential_source = creds.source
+            self._access_token = token
+            self._last_error = ""
+            if str(creds.source).startswith("content-tool:"):
+                _persist_drive_credentials(creds)
+                self._credential_source = creds.source + ":verified-persisted"
+            return token
+
+        self._credentials = None
+        self._access_token = ""
+        self._last_error = ("All Google Drive OAuth credential sources failed: " + "; ".join(errors))[:1200]
+        raise DriveTelemetryError(self._last_error)
 
     def _json_request(self, url: str, *, method: str = "GET", payload: dict | None = None, retry_auth: bool = True) -> dict:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
