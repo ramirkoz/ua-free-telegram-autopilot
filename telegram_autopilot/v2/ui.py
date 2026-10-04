@@ -4,6 +4,7 @@ import json
 import os
 import statistics
 import threading
+import webbrowser
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -19,7 +20,8 @@ from .migration_service import MigrationManager
 from .runtime import RuntimeEngine
 from .storage import V2Store
 from .supervisor import SupervisorConfig
-from .local_supervisor import LocalOnlyProductionSupervisorService
+from .local_supervisor import LocalOnlyProductionSupervisorService, CANONICAL_LIVE_FEED_FOLDER_ID
+from .google_drive_auth import authorize_google_drive, inspect_google_drive_connection, inspect_drive_folder
 
 
 STAGE_UA = {
@@ -1165,8 +1167,156 @@ class MainWindow(tk.Tk):
         ttk.Button(bar, text="Створити diagnostic ZIP", command=self.supervisor_diagnostic).pack(side="left", padx=6)
         self.supervisor_status = tk.StringVar(value="Supervisor запускається…")
         ttk.Label(p, textvariable=self.supervisor_status, wraplength=1120, justify="left").grid(row=7, column=0, columnspan=4, sticky="w", padx=12, pady=12)
+
+        secret_cfg = load_secrets()
+        drive = ttk.LabelFrame(p, text="Google Drive / Telemetry")
+        drive.grid(row=8, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 12))
+        self.sup_google_client_id = tk.StringVar(value=str(secret_cfg.google_client_id or ""))
+        self.sup_google_client_secret = tk.StringVar(value=str(secret_cfg.google_client_secret or ""))
+        self.sup_google_account = tk.StringVar(value=str(secret_cfg.google_account_email or ""))
+        self.sup_google_folder_id = tk.StringVar(
+            value=str(getattr(secret_cfg, "google_drive_folder_id", "") or CANONICAL_LIVE_FEED_FOLDER_ID)
+        )
+        self.sup_drive_status = tk.StringVar(value="Google Drive: очікує перевірки")
+        ttk.Label(drive, text="OAuth Client ID").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(drive, textvariable=self.sup_google_client_id, width=68).grid(row=0, column=1, columnspan=3, sticky="ew", padx=8, pady=4)
+        ttk.Label(drive, text="OAuth Client Secret").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(drive, textvariable=self.sup_google_client_secret, show="•", width=68).grid(row=1, column=1, columnspan=3, sticky="ew", padx=8, pady=4)
+        ttk.Label(drive, text="Підключений акаунт").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(drive, textvariable=self.sup_google_account, state="readonly", width=50).grid(row=2, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Label(drive, text="Telemetry Folder ID").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(drive, textvariable=self.sup_google_folder_id, width=50).grid(row=3, column=1, sticky="ew", padx=8, pady=4)
+        dbar = ttk.Frame(drive)
+        dbar.grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(6, 4))
+        self.sup_drive_connect_btn = ttk.Button(dbar, text="Підключити / змінити акаунт", command=self.drive_connect)
+        self.sup_drive_connect_btn.pack(side="left")
+        ttk.Button(dbar, text="Зберегти", command=self.drive_save_settings).pack(side="left", padx=6)
+        ttk.Button(dbar, text="Перевірити доступ", command=self.drive_test_access).pack(side="left", padx=6)
+        ttk.Button(dbar, text="Відкрити папку", command=self.drive_open_folder).pack(side="left", padx=6)
+        ttk.Button(dbar, text="Push telemetry зараз", command=self.drive_push_now).pack(side="left", padx=6)
+        ttk.Label(drive, textvariable=self.sup_drive_status, wraplength=1040, justify="left").grid(row=5, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8))
+        for col in (1, 2, 3):
+            drive.columnconfigure(col, weight=1)
         for col in (1, 2):
             p.columnconfigure(col, weight=1)
+
+    def drive_save_settings(self, *, quiet: bool = False) -> None:
+        try:
+            cfg = load_secrets()
+            cfg.google_client_id = self.sup_google_client_id.get().strip()
+            cfg.google_client_secret = self.sup_google_client_secret.get().strip()
+            cfg.google_account_email = self.sup_google_account.get().strip()
+            cfg.google_drive_folder_id = self.sup_google_folder_id.get().strip() or CANONICAL_LIVE_FEED_FOLDER_ID
+            save_secrets(cfg)
+            self.supervisor.reload_drive_transport()
+            if not quiet:
+                self.sup_drive_status.set(f"Google Drive налаштування збережено · folder={cfg.google_drive_folder_id}")
+        except Exception as exc:
+            if quiet:
+                raise
+            messagebox.showerror("Google Drive", str(exc))
+
+    def drive_connect(self) -> None:
+        client_id = self.sup_google_client_id.get().strip()
+        client_secret = self.sup_google_client_secret.get().strip()
+        if not client_id:
+            messagebox.showerror("Google Drive", "Вкажіть OAuth Client ID типу Desktop app.")
+            return
+        self.sup_drive_connect_btn.configure(state="disabled")
+        self.sup_drive_status.set("Google Drive: відкриваю браузер для авторизації…")
+
+        def worker():
+            try:
+                auth = authorize_google_drive(client_id, client_secret)
+                cfg = load_secrets()
+                cfg.google_client_id = client_id
+                cfg.google_client_secret = client_secret
+                cfg.google_refresh_token = auth.refresh_token
+                cfg.google_account_email = auth.account_email
+                cfg.google_drive_folder_id = self.sup_google_folder_id.get().strip() or CANONICAL_LIVE_FEED_FOLDER_ID
+                save_secrets(cfg)
+                self.supervisor.reload_drive_transport()
+                profile = inspect_google_drive_connection(client_id, client_secret, auth.refresh_token)
+                folder = inspect_drive_folder(client_id, client_secret, auth.refresh_token, cfg.google_drive_folder_id)
+                email = profile.account_email or auth.account_email
+                cfg.google_account_email = email
+                save_secrets(cfg)
+                msg = (
+                    f"✅ {email or profile.display_name or 'Google Drive'} · папка {folder.name or folder.folder_id} · "
+                    f"Shared Drive={bool(folder.drive_id)} · запис={'дозволено' if folder.can_add_children else 'НЕ дозволено'}"
+                )
+                self.after(0, lambda: (
+                    self.sup_google_account.set(email),
+                    self.sup_drive_status.set(msg),
+                    self.sup_drive_connect_btn.configure(state="normal"),
+                    self.refresh_supervisor(),
+                ))
+            except Exception as exc:
+                msg = str(exc)
+                self.after(0, lambda msg=msg: (
+                    self.sup_drive_status.set(f"❌ {msg}"),
+                    self.sup_drive_connect_btn.configure(state="normal"),
+                ))
+
+        threading.Thread(target=worker, daemon=True, name="V2-Google-Drive-Auth").start()
+
+    def drive_test_access(self) -> None:
+        try:
+            self.drive_save_settings(quiet=True)
+            cfg = load_secrets()
+        except Exception as exc:
+            messagebox.showerror("Google Drive", str(exc))
+            return
+        self.sup_drive_status.set("Google Drive: перевіряю акаунт і папку…")
+
+        def worker():
+            try:
+                profile = inspect_google_drive_connection(
+                    cfg.google_client_id, cfg.google_client_secret, cfg.google_refresh_token
+                )
+                folder_id = str(getattr(cfg, "google_drive_folder_id", "") or CANONICAL_LIVE_FEED_FOLDER_ID)
+                folder = inspect_drive_folder(
+                    cfg.google_client_id, cfg.google_client_secret, cfg.google_refresh_token, folder_id
+                )
+                cfg.google_account_email = profile.account_email
+                save_secrets(cfg)
+                msg = (
+                    f"✅ OAuth OK · {profile.account_email or profile.display_name or 'акаунт'} · "
+                    f"{folder.name or folder.folder_id} · Shared Drive={bool(folder.drive_id)} · "
+                    f"запис={'дозволено' if folder.can_add_children else 'НЕ дозволено'}"
+                )
+                self.after(0, lambda: (
+                    self.sup_google_account.set(profile.account_email),
+                    self.sup_drive_status.set(msg),
+                    self.refresh_supervisor(),
+                ))
+            except Exception as exc:
+                msg = str(exc)
+                self.after(0, lambda msg=msg: self.sup_drive_status.set(f"❌ {msg}"))
+
+        threading.Thread(target=worker, daemon=True, name="V2-Google-Drive-Probe").start()
+
+    def drive_open_folder(self) -> None:
+        folder_id = self.sup_google_folder_id.get().strip() or CANONICAL_LIVE_FEED_FOLDER_ID
+        webbrowser.open(f"https://drive.google.com/drive/folders/{folder_id}", new=2)
+
+    def drive_push_now(self) -> None:
+        try:
+            self.drive_save_settings(quiet=True)
+            snap = self.supervisor.write_snapshot()
+            transport = dict((self.supervisor.summary().get("snapshot") or {}).get("transport") or {})
+            ok = str(transport.get("drive_api_last_ok_at") or "")
+            error = str(transport.get("drive_api_last_error") or "")
+            if ok:
+                self.sup_drive_status.set(f"✅ telemetry записано · {ok}")
+            elif error:
+                self.sup_drive_status.set(f"❌ telemetry: {error[:300]}")
+            else:
+                self.sup_drive_status.set(
+                    f"Telemetry push виконано локально · {snap.get('generated_at')}; очікую підтвердження API"
+                )
+        except Exception as exc:
+            messagebox.showerror("Google Drive", str(exc))
 
     def _supervisor_config_from_ui(self):
         return SupervisorConfig(
@@ -1237,6 +1387,15 @@ class MainWindow(tk.Tk):
             telemetry = f"fallback ERROR: {mirror_error[:160]}"
         else:
             telemetry = "очікує першого успішного API heartbeat"
+        if hasattr(self, "sup_drive_status"):
+            folder_id = str((transport.get("drive_api") or {}).get("configured_folder_id") or "")
+            account = self.sup_google_account.get().strip() if hasattr(self, "sup_google_account") else ""
+            if api_ok:
+                self.sup_drive_status.set(
+                    f"✅ Drive API OK · {api_ok} · {account or api_source or 'акаунт'} · folder={folder_id}"
+                )
+            elif api_error:
+                self.sup_drive_status.set(f"❌ Drive API · {api_error[:260]} · folder={folder_id}")
         incident_text = "; ".join(f"{i.get('severity')} {i.get('code')}: {i.get('title')}" for i in incidents) or "немає"
         local_report = dict(snap.get("local_telegram_report") or {})
         report_status = str(local_report.get("status") or "не перевірено")
