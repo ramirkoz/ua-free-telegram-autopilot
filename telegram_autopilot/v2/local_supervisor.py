@@ -16,6 +16,7 @@ from .fileio import atomic_copy
 from . import V2_VERSION
 from .telemetry_supervisor import TelemetryProductionSupervisorService
 from .drive_api_telemetry import DirectDriveTelemetry
+from .commercial_profile_audit import audit_commercial_profiles
 
 
 # Passive observability only. These files are written from the application to the
@@ -229,7 +230,7 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             "telegram": self.local_reporter.status(),
         }
         snapshot["local_telegram_report"] = dict(self._local_report_result)
-        transport = dict(snapshot.get("transport") or {})
+        try:\n            snapshot["commercial_profile_audit"] = audit_commercial_profiles(self.store)\n        except Exception as exc:\n            snapshot["commercial_profile_audit"] = {"healthy": False, "error": f"{type(exc).__name__}: {exc}"[:500]}\n        transport = dict(snapshot.get("transport") or {})
         drive_api = self._drive_api.status()
         snapshot["transport"] = {
             **transport,
