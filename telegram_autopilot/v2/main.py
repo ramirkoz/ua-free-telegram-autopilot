@@ -20,6 +20,7 @@ from .ui_hardening import FastMainWindow
 from .update_protocol import UpdateProtocol
 from .first_run_import import maybe_import_legacy_data
 from .migration_repair import repair_polling_baseline
+from .startup_background_hotfix import _schedule_deferred_maintenance
 from ..language_tool_local import shutdown_languagetool
 
 
@@ -241,6 +242,7 @@ def main() -> int:
                     def start_runtime_and_mark_ready() -> None:
                         app.start_runtime()
                         event("app", "startup stage", stage="RUNTIME_READY")
+                        _schedule_deferred_maintenance(store)
                         if _manual_test_build():
                             event("update", "manual test build: auto-update disabled", version=V2_VERSION)
                         else:
