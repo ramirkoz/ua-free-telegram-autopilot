@@ -189,7 +189,7 @@ def authorize_google_drive(client_id: str, client_secret: str, timeout_seconds: 
 def inspect_google_drive_connection(client_id: str, client_secret: str, refresh_token: str) -> GoogleDriveProfile:
     token = refresh_access_token(client_id, client_secret, refresh_token, timeout=15)
     response = fetch_url(
-        "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)&supportsAllDrives=true",
+        "https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         max_bytes=512 * 1024,
         allowed_content_types={"application/json"},
