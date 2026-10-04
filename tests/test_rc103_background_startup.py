@@ -35,15 +35,24 @@ def _article(store: V2Store, external_id: str, discovered_at: str) -> int:
         return int(cur.lastrowid)
 
 
-def test_rc103_startup_gate_only_schedules_delayed_retention() -> None:
+def test_rc103_startup_gate_never_spawns_retention_worker() -> None:
     source = inspect.getsource(HardenedV2Store.run_startup_maintenance)
-    assert "_schedule_deferred_maintenance" in source
+    assert "_schedule_deferred_maintenance" not in source
+    assert 'deferred_retention_scheduled"] = 0' in source
     assert "_compact_operational_database" not in source
     assert "_purge_expired_materials" not in source
     assert 'con.execute("VACUUM")' not in source
 
     import telegram_autopilot.v2.startup_background_hotfix as hotfix
     assert hotfix._BACKGROUND_DELAY_SECONDS >= 120.0
+
+
+def test_rc103_retention_is_scheduled_after_runtime_start() -> None:
+    from telegram_autopilot.v2 import main as main_module
+    source = inspect.getsource(main_module.main)
+    start = source.index("app.start_runtime()")
+    schedule = source.index("_schedule_deferred_maintenance(store)")
+    assert schedule > start
 
 
 def test_rc103_live_retention_excludes_broad_lock_operations() -> None:
