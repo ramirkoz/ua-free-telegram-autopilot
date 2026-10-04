@@ -426,6 +426,9 @@ class DirectDriveTelemetry:
             "pageSize": "10",
             "orderBy": "modifiedTime desc",
             "spaces": "drive",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+            "corpora": "allDrives",
         })
         data = self._json_request(url)
         files = data.get("files")
@@ -441,7 +444,7 @@ class DirectDriveTelemetry:
             self._folder_id = found
             return found
         data = self._json_request(
-            "https://www.googleapis.com/drive/v3/files?fields=id,name",
+            "https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true",
             method="POST",
             payload={"name": self.folder_name, "mimeType": _DRIVE_FOLDER_MIME, "parents": ["root"]},
         )
@@ -464,10 +467,10 @@ class DirectDriveTelemetry:
         ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
         token = self._token()
         if existing:
-            url = f"https://www.googleapis.com/upload/drive/v3/files/{quote(existing, safe='')}?uploadType=multipart&fields=id,name,modifiedTime"
+            url = f"https://www.googleapis.com/upload/drive/v3/files/{quote(existing, safe='')}?uploadType=multipart&fields=id,name,modifiedTime&supportsAllDrives=true"
             method = "PATCH"
         else:
-            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime"
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime&supportsAllDrives=true"
             method = "POST"
         response = fetch_url(
             url,
@@ -488,7 +491,7 @@ class DirectDriveTelemetry:
             self._access_token = ""
             self._credentials = None
             if existing:
-                self._folder_id = ""
+                self._folder_id = self._configured_folder_id
             raise DriveTelemetryError(f"Google Drive authentication failed: HTTP {response.status}")
         try:
             payload = response.json() if response.body else {}
