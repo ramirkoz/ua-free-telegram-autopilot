@@ -1243,7 +1243,11 @@ class V2Store:
                    FROM articles a JOIN sources s ON s.id=a.source_id
                    WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
                      AND (a.blocked_by='NONE' OR (a.next_retry_at<>'' AND datetime(a.next_retry_at)<=datetime(?)))
-                   ORDER BY datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,a.id DESC
+                   ORDER BY
+                     CASE WHEN a.status_detail LIKE 'Погоджено редактором%' THEN 0 ELSE 1 END ASC,
+                     CASE WHEN a.status_detail LIKE 'Погоджено редактором%' THEN datetime(a.ready_at) END ASC,
+                     datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,
+                     a.id DESC
                    LIMIT ?""",
                 (int(channel_id), stamp, max(1,int(limit))),
             ))
