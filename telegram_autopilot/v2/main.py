@@ -20,6 +20,7 @@ from .ui_hardening import FastMainWindow
 from .update_protocol import UpdateProtocol
 from .first_run_import import maybe_import_legacy_data
 from .migration_repair import repair_polling_baseline
+from .commercial_profile_audit import audit_commercial_profiles
 from ..language_tool_local import shutdown_languagetool
 
 
@@ -230,6 +231,23 @@ def main() -> int:
                     event("app", "startup maintenance scheduled", **dict(stats or {}))
                 except Exception as exc:
                     event("app", "startup maintenance scheduling failed", level=30, detail=str(exc)[:1200])
+                try:
+                    profile_audit = audit_commercial_profiles(store)
+                    event(
+                        "editorial",
+                        "commercial profile audit complete",
+                        **{k: v for k, v in profile_audit.items() if k != "results"},
+                    )
+                    for item in profile_audit.get("results", []):
+                        if item.get("issues") or item.get("notes"):
+                            event(
+                                "editorial",
+                                "commercial profile audit channel",
+                                level=30 if item.get("issues") else 20,
+                                **item,
+                            )
+                except Exception as exc:
+                    event("editorial", "commercial profile audit failed", level=30, detail=str(exc)[:1200])
                 try:
                     feedback_stats = app.feedback.ensure_schema()
                     event("feedback", "schema ready", **dict(feedback_stats or {}))
