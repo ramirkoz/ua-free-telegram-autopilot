@@ -30,3 +30,12 @@ Roadmap release focused on the ПРОДАНО! commercial-editorial profile audi
 ## Roadmap note
 
 Cluster same-event dedupe shadow mode is not part of RC104 in the current ProductVault roadmap. It remains planned for RC106, with validated activation in RC107.
+
+
+## RC104 telemetry/operator settings repair
+
+- Adds operator-visible Google Drive settings directly to the Supervisor tab: OAuth Client ID/Secret, connected account, telemetry Folder ID, access test, open-folder action and manual telemetry push.
+- Autopilot now owns/persists its Google Drive telemetry configuration; Content Tool credentials are fallback/import only.
+- Adds browser OAuth re-authorization inside Autopilot instead of requiring hidden credential recovery.
+- Fixes Google Drive API access for Shared Drives via `supportsAllDrives` / `includeItemsFromAllDrives` on list/create/upload operations.
+- Keeps the pinned telemetry folder after authentication errors instead of falling back to ambiguous name discovery.
