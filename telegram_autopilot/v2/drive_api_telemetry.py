@@ -238,11 +238,17 @@ class DirectDriveTelemetry:
     Tool configuration already authorized by the same Windows user.
     """
 
-    def __init__(self, folder_name: str) -> None:
+    def __init__(self, folder_name: str, *, folder_id: str = "") -> None:
         self.folder_name = str(folder_name or "").strip()
+        # RC103: prefer one explicit canonical Drive folder ID over name-only
+        # discovery. This avoids Shared Drive / My Drive ambiguity and duplicate
+        # folders with the same display name.
+        self._configured_folder_id = str(
+            folder_id or os.environ.get("UA_FREE_AUTOPILOT_LIVE_FOLDER_ID") or ""
+        ).strip()
         self._credentials: DriveCredentials | None = None
         self._access_token = ""
-        self._folder_id = ""
+        self._folder_id = self._configured_folder_id
         self._last_credential_probe = 0.0
         self._last_ok_at = ""
         self._last_error = ""
@@ -430,6 +436,7 @@ class DirectDriveTelemetry:
             "mode": "google_drive_api",
             "folder_name": self.folder_name,
             "folder_id": self._folder_id,
+            "configured_folder_id": self._configured_folder_id,
             "credential_source": self._credential_source,
             "configured": self._credentials is not None or _own_credentials() is not None,
             "last_ok_at": self._last_ok_at,
