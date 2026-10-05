@@ -276,6 +276,26 @@ CREATE TABLE IF NOT EXISTS facebook_reposts (
  created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(article_id,page_id)
 );
 CREATE INDEX IF NOT EXISTS idx_facebook_reposts_ready ON facebook_reposts(channel_id,state,next_retry_at,updated_at);
+CREATE TABLE IF NOT EXISTS publication_delivery_journal (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ article_id INTEGER NOT NULL UNIQUE REFERENCES articles(id) ON DELETE CASCADE,
+ channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+ state TEXT NOT NULL DEFAULT 'PREPARED',
+ mode TEXT NOT NULL DEFAULT '',
+ complete INTEGER NOT NULL DEFAULT 0,
+ expected_media_count INTEGER NOT NULL DEFAULT 0,
+ media_count INTEGER NOT NULL DEFAULT 0,
+ primary_message_id TEXT NOT NULL DEFAULT '',
+ message_ids_json TEXT NOT NULL DEFAULT '[]',
+ attempt_count INTEGER NOT NULL DEFAULT 0,
+ prepared_at TEXT NOT NULL DEFAULT '',
+ sending_at TEXT NOT NULL DEFAULT '',
+ acknowledged_at TEXT NOT NULL DEFAULT '',
+ committed_at TEXT NOT NULL DEFAULT '',
+ last_error TEXT NOT NULL DEFAULT '',
+ updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_journal_state ON publication_delivery_journal(state,updated_at,article_id);
 CREATE TABLE IF NOT EXISTS audit_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,stream TEXT NOT NULL,event TEXT NOT NULL,channel_id INTEGER,article_id INTEGER,
  provider TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}'
@@ -1252,6 +1272,118 @@ class V2Store:
                 (int(channel_id), stamp, max(1,int(limit))),
             ))
 
+    def delivery_journal(self, article_id: int) -> dict[str, Any]:
+        with self.connect() as con:
+            row = con.execute(
+                "SELECT * FROM publication_delivery_journal WHERE article_id=?",
+                (int(article_id),),
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def prepare_delivery(self, article_id: int, *, mode: str, expected_media_count: int = 0) -> dict[str, Any]:
+        row = self.get_article(article_id)
+        if row is None:
+            raise KeyError(article_id)
+        stamp = now_iso()
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            current = con.execute(
+                "SELECT * FROM publication_delivery_journal WHERE article_id=?",
+                (int(article_id),),
+            ).fetchone()
+            if current is None:
+                con.execute(
+                    """INSERT INTO publication_delivery_journal(
+                           article_id,channel_id,state,mode,complete,expected_media_count,media_count,
+                           primary_message_id,message_ids_json,attempt_count,prepared_at,updated_at
+                       ) VALUES(?,?, 'PREPARED', ?,0,?,0,'','[]',0,?,?)""",
+                    (int(article_id), int(row["channel_id"]), str(mode)[:80], max(0,int(expected_media_count)), stamp, stamp),
+                )
+            elif str(current["state"] or '') in {'FAILED','PREPARED'}:
+                con.execute(
+                    """UPDATE publication_delivery_journal
+                          SET state='PREPARED',mode=?,expected_media_count=?,last_error='',updated_at=?
+                        WHERE article_id=?""",
+                    (str(mode)[:80], max(0,int(expected_media_count)), stamp, int(article_id)),
+                )
+            con.commit()
+        return self.delivery_journal(article_id)
+
+    def mark_delivery_sending(self, article_id: int, *, mode: str, expected_media_count: int = 0) -> dict[str, Any]:
+        self.prepare_delivery(article_id, mode=mode, expected_media_count=expected_media_count)
+        stamp = now_iso()
+        with self.connect() as con:
+            row = con.execute(
+                "SELECT state,complete FROM publication_delivery_journal WHERE article_id=?", (int(article_id),)
+            ).fetchone()
+            state = str(row["state"] or '') if row else ''
+            complete = bool(int(row["complete"] or 0)) if row else False
+            if state in {'COMMITTED','UNKNOWN'} or (state == 'ACKNOWLEDGED' and complete):
+                return self.delivery_journal(article_id)
+            con.execute(
+                """UPDATE publication_delivery_journal
+                      SET state='SENDING',mode=?,expected_media_count=?,sending_at=?,
+                          attempt_count=attempt_count+1,last_error='',updated_at=?
+                    WHERE article_id=?""",
+                (str(mode)[:80], max(0,int(expected_media_count)), stamp, stamp, int(article_id)),
+            )
+        return self.delivery_journal(article_id)
+
+    def acknowledge_delivery(
+        self, article_id: int, *, message_id: str, message_ids: list[str] | tuple[str, ...] | None = None,
+        media_count: int = 0, complete: bool = True, mode: str = '', expected_media_count: int = 0,
+    ) -> None:
+        stamp = now_iso()
+        ids = [str(x) for x in (message_ids or []) if str(x).strip()]
+        if str(message_id or '').strip() and str(message_id).strip() not in ids:
+            ids.append(str(message_id).strip())
+        current = self.delivery_journal(article_id)
+        old_ids: list[str] = []
+        try:
+            parsed = json.loads(str(current.get('message_ids_json') or '[]'))
+            if isinstance(parsed, list):
+                old_ids = [str(x) for x in parsed if str(x).strip()]
+        except Exception:
+            old_ids = []
+        merged = list(dict.fromkeys([*old_ids, *ids]))
+        with self.connect() as con:
+            con.execute(
+                """UPDATE publication_delivery_journal
+                      SET state='ACKNOWLEDGED',mode=CASE WHEN ?<>'' THEN ? ELSE mode END,complete=?,
+                          expected_media_count=CASE WHEN ?>0 THEN ? ELSE expected_media_count END,
+                          media_count=?,primary_message_id=?,message_ids_json=?,acknowledged_at=?,last_error='',updated_at=?
+                    WHERE article_id=?""",
+                (str(mode),str(mode),1 if complete else 0,max(0,int(expected_media_count)),max(0,int(expected_media_count)),
+                 max(0,int(media_count)),str(message_id or ''),json.dumps(merged,ensure_ascii=False,separators=(',',':')),stamp,stamp,int(article_id)),
+            )
+
+    def fail_delivery(self, article_id: int, detail: str, *, outcome_unknown: bool = False) -> None:
+        stamp = now_iso()
+        state = 'UNKNOWN' if outcome_unknown else 'FAILED'
+        with self.connect() as con:
+            con.execute(
+                "UPDATE publication_delivery_journal SET state=?,last_error=?,updated_at=? WHERE article_id=?",
+                (state,str(detail or '')[:2000],stamp,int(article_id)),
+            )
+
+    def delivery_journal_summary(self) -> dict[str, Any]:
+        with self.connect() as con:
+            rows = list(con.execute(
+                "SELECT state,COUNT(*) AS n FROM publication_delivery_journal GROUP BY state ORDER BY state"
+            ))
+            unknown = list(con.execute(
+                """SELECT article_id,channel_id,state,mode,sending_at,updated_at,last_error
+                       FROM publication_delivery_journal
+                      WHERE state IN ('UNKNOWN','SENDING')
+                      ORDER BY updated_at ASC LIMIT 20"""
+            ))
+        counts = {str(r['state']): int(r['n']) for r in rows}
+        return {
+            'counts': counts,
+            'unknown_or_inflight': [dict(r) for r in unknown],
+            'unresolved': sum(counts.get(k,0) for k in ('UNKNOWN','SENDING')),
+        }
+
     def publication_backoff(
         self,
         article_id: int,
@@ -1634,7 +1766,23 @@ class V2Store:
         if not isinstance(delivery,dict):delivery={}
         ids=[str(x) for x in (message_ids or [message_id]) if str(x).strip()]
         if str(message_id) and str(message_id) not in ids:ids.append(str(message_id))
-        delivery.update({"message_ids":ids,"primary_message_id":str(message_id),"media_count":int(media_count),"expected_media_count":int(media_count),"completed_at":now_iso(),"complete":True})
+        stamp=now_iso()
+        delivery.update({"message_ids":ids,"primary_message_id":str(message_id),"media_count":int(media_count),"expected_media_count":int(media_count),"completed_at":stamp,"complete":True})
         layout["telegram_delivery"]=delivery
-        self.update_article(article_id,stage=str(Stage.PUBLISHED),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),published_at=now_iso(),telegram_message_id=str(message_id),telegram_media_count=int(media_count),article_layout_json=json.dumps(layout,ensure_ascii=False,separators=(",",":")),status_detail="")
-        with self.connect() as con: con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?",(now_iso(),int(article_id)))
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                """UPDATE articles SET stage=?,decision=?,blocked_by=?,published_at=?,telegram_message_id=?,
+                          telegram_media_count=?,article_layout_json=?,status_detail='',last_error_code='',last_error_detail='',next_retry_at=''
+                      WHERE id=?""",
+                (str(Stage.PUBLISHED),str(Decision.PUBLISH),str(BlockedBy.NONE),stamp,str(message_id),int(media_count),
+                 json.dumps(layout,ensure_ascii=False,separators=(',',':')),int(article_id)),
+            )
+            con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE article_id=?",(stamp,int(article_id)))
+            con.execute(
+                """UPDATE publication_delivery_journal SET state='COMMITTED',complete=1,media_count=?,
+                          primary_message_id=?,message_ids_json=?,acknowledged_at=CASE WHEN acknowledged_at='' THEN ? ELSE acknowledged_at END,
+                          committed_at=?,last_error='',updated_at=? WHERE article_id=?""",
+                (int(media_count),str(message_id),json.dumps(ids,ensure_ascii=False,separators=(',',':')),stamp,stamp,stamp,int(article_id)),
+            )
+            con.commit()
