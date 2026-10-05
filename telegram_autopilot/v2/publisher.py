@@ -220,6 +220,54 @@ class Publisher:
         )
         self._queue_facebook_after_telegram(article_id, channel, str(message_id))
 
+    def _delivery_preflight(self, article_id: int, channel: Any) -> str:
+        journal = self.store.delivery_journal(article_id)
+        if not journal:
+            return "CONTINUE"
+        state = str(journal.get("state") or "")
+        complete = bool(int(journal.get("complete") or 0))
+        if state == "COMMITTED":
+            row = self.store.get_article(article_id)
+            return "PUBLISHED" if row is not None and str(row["stage"]) == str(Stage.PUBLISHED) else "DELIVERY_COMMITTED"
+        if state == "ACKNOWLEDGED":
+            message_id = str(journal.get("primary_message_id") or "")
+            try:
+                message_ids = json.loads(str(journal.get("message_ids_json") or "[]"))
+            except Exception:
+                message_ids = []
+            clean_ids = [str(x) for x in message_ids if str(x).strip()] if isinstance(message_ids,list) else []
+            if complete and message_id:
+                self._mark_published(
+                    article_id, channel, message_id=message_id, media_count=int(journal.get("media_count") or 0),
+                    message_ids=clean_ids or None,
+                )
+                event("publish", "recovered acknowledged delivery after restart", channel_id=int(channel.id), article_id=article_id, message_id=message_id)
+                return "PUBLISHED"
+            if clean_ids:
+                self.store.record_telegram_media_delivery(article_id, clean_ids, caption_attached=False, caption_message_id="")
+                event("publish", "recovered partial media delivery journal", channel_id=int(channel.id), article_id=article_id, published_media_count=len(clean_ids))
+        if state in {"SENDING", "UNKNOWN"}:
+            detail = str(journal.get("last_error") or "Delivery was in-flight when the previous process stopped; Telegram outcome is unknown.")
+            self.store.fail_delivery(article_id, detail, outcome_unknown=True)
+            self.store.publication_backoff(
+                article_id, blocked_by=BlockedBy.TELEGRAM, error_code="DELIVERY_OUTCOME_UNKNOWN", detail=detail, retry_seconds=None, count_attempt=False,
+            )
+            event("publish", "durable delivery outcome unknown; blind retry blocked", level=40, channel_id=int(channel.id), article_id=article_id)
+            return "DELIVERY_OUTCOME_UNKNOWN"
+        return "CONTINUE"
+
+    def _delivery_sending(self, article_id: int, *, mode: str, expected_media_count: int = 0) -> None:
+        self.store.mark_delivery_sending(article_id, mode=mode, expected_media_count=expected_media_count)
+
+    def _delivery_ack(
+        self, article_id: int, *, message_id: str, message_ids: list[str] | tuple[str, ...], media_count: int,
+        complete: bool, mode: str, expected_media_count: int = 0,
+    ) -> None:
+        self.store.acknowledge_delivery(
+            article_id, message_id=message_id, message_ids=message_ids, media_count=media_count, complete=complete,
+            mode=mode, expected_media_count=expected_media_count,
+        )
+
     def publish_pending_facebook(self, channel_id: int, *, limit: int = 6) -> int:
         rows = self.store.pending_facebook_reposts(channel_id, limit=max(1, int(limit)))
         if not rows:
@@ -341,6 +389,9 @@ class Publisher:
         channel = self.store.get_channel(channel_id)
         if channel is None:
             raise ValueError("CHANNEL_MISSING")
+        delivery_preflight = self._delivery_preflight(article_id, channel)
+        if delivery_preflight != "CONTINUE":
+            return delivery_preflight
         current_text = str(article["final_text"] or "").strip()
         strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
         if strip_body_links:
@@ -472,6 +523,7 @@ class Publisher:
         #     the text remains visually below all preceding media.
         # Media policy (required/preferred/optional) is configured by the operator.
         if not bundle.count:
+            self._delivery_sending(article_id, mode="text", expected_media_count=0)
             try:
                 text_result = send_text_attributed(
                     token,
@@ -483,7 +535,9 @@ class Publisher:
                     timeout=45.0,
                 )
             except TelegramError as exc:
+                self.store.fail_delivery(article_id, str(exc), outcome_unknown=bool(getattr(exc, "outcome_unknown", False)))
                 return self._telegram_failure(article_id, channel_id, exc)
+            self._delivery_ack(article_id, message_id=text_result.message_id, message_ids=list(text_result.message_ids), media_count=0, complete=True, mode="text")
             self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
             event(
                 "publish", "published text", channel_id=channel_id, article_id=article_id,
@@ -525,6 +579,7 @@ class Publisher:
         if not prepared:
             # Preferred/optional may intentionally degrade to text when media cannot
             # be fetched. Required was handled above and can never reach this branch.
+            self._delivery_sending(article_id, mode="text_fallback", expected_media_count=0)
             try:
                 text_result = send_text_attributed(
                     token,
@@ -536,7 +591,9 @@ class Publisher:
                     timeout=45.0,
                 )
             except TelegramError as exc:
+                self.store.fail_delivery(article_id, str(exc), outcome_unknown=bool(getattr(exc, "outcome_unknown", False)))
                 return self._telegram_failure(article_id, channel_id, exc)
+            self._delivery_ack(article_id, message_id=text_result.message_id, message_ids=list(text_result.message_ids), media_count=0, complete=True, mode="text_fallback")
             self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
             event(
                 "publish", "published text after media preparation failure", level=30, channel_id=channel_id, article_id=article_id,
@@ -576,6 +633,7 @@ class Publisher:
         while pending:
             chunk = pending[:10]
             is_final_chunk = sent_count + len(chunk) >= delivery_count
+            self._delivery_sending(article_id, mode="media_final" if is_final_chunk else "media_chunk", expected_media_count=delivery_count)
             try:
                 if len(chunk) == 1:
                     if is_final_chunk:
@@ -603,6 +661,7 @@ class Publisher:
                         timeout=90.0,
                     )
             except TelegramError as exc:
+                self.store.fail_delivery(article_id, str(exc), outcome_unknown=bool(getattr(exc, "outcome_unknown", False)))
                 published_media_count = len(media_ids)
                 event(
                     "media", "local-upload media delivery failed", level=40, channel_id=channel_id, article_id=article_id,
@@ -611,6 +670,7 @@ class Publisher:
                     media_outcome="REJECTED" if exc.media_rejected else "ERROR", detail=str(exc)[:800],
                 )
                 if exc.media_rejected and policy in {"preferred", "optional"} and not media_ids:
+                    self._delivery_sending(article_id, mode="text_after_media_reject", expected_media_count=0)
                     try:
                         text_result = send_text_attributed(
                             token,
@@ -622,7 +682,9 @@ class Publisher:
                             timeout=45.0,
                         )
                     except TelegramError as text_exc:
+                        self.store.fail_delivery(article_id, str(text_exc), outcome_unknown=bool(getattr(text_exc, "outcome_unknown", False)))
                         return self._telegram_failure(article_id, channel_id, text_exc)
+                    self._delivery_ack(article_id, message_id=text_result.message_id, message_ids=list(text_result.message_ids), media_count=0, complete=True, mode="text_after_media_reject")
                     self._mark_published(article_id, channel, message_id=text_result.message_id, media_count=0, message_ids=text_result.message_ids)
                     event(
                         "publish", "published text after preferred/optional local media rejection", level=30,
@@ -650,6 +712,11 @@ class Publisher:
             sent_count += len(chunk)
             if is_final_chunk:
                 final_caption_message_id = str(media_result.message_id)
+            self._delivery_ack(
+                article_id, message_id=str(media_result.message_id or ""), message_ids=media_ids,
+                media_count=len(media_ids), complete=is_final_chunk,
+                mode="media_final" if is_final_chunk else "media_chunk", expected_media_count=delivery_count,
+            )
             self.store.record_telegram_media_delivery(
                 article_id, media_ids,
                 caption_attached=is_final_chunk,
