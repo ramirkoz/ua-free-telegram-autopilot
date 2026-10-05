@@ -74,6 +74,9 @@ class ProviderReply:
     text: str
     model: str
     detail: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
 
 
 def _retry_after(headers: Mapping[str, str]) -> int | None:
@@ -433,6 +436,11 @@ def openai_compatible_chat(
                     timeout_seconds=timeout_seconds,
                 )
                 text, runtime_model = _extract_openai_text(response)
+                usage = response.get("usage") if isinstance(response, dict) else {}
+                usage = usage if isinstance(usage, dict) else {}
+                input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+                total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
                 return ProviderReply(
                     text=text,
                     model=runtime_model or active_model,
@@ -441,6 +449,7 @@ def openai_compatible_chat(
                         if structured_attempt > 0
                         else ("HTTP completion OK" if active_model == str(model) else f"HTTP completion OK via fallback {active_model}")
                     ),
+                    input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
                 )
             except ProviderAPIError as exc:
                 last_error = exc
@@ -529,10 +538,16 @@ def gemini_generate(
             raise ProviderAPIError("Gemini returned an unexpected response structure", kind="bad_response") from exc
         if not text:
             raise ProviderAPIError("Gemini returned an empty response", kind="bad_response")
+        usage = response.get("usageMetadata") if isinstance(response, dict) else {}
+        usage = usage if isinstance(usage, dict) else {}
+        input_tokens = int(usage.get("promptTokenCount") or 0)
+        output_tokens = int(usage.get("candidatesTokenCount") or 0)
+        total_tokens = int(usage.get("totalTokenCount") or (input_tokens + output_tokens))
         return ProviderReply(
             text=text,
             model=active_model,
             detail="HTTP completion OK" if active_model == str(model) else f"HTTP completion OK via fallback {active_model}",
+            input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
         )
 
     if last_error is not None:
