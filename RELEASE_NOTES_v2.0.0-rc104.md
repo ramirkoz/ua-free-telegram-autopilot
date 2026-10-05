@@ -39,3 +39,13 @@ Cluster same-event dedupe shadow mode is not part of RC104 in the current Produc
 - Adds browser OAuth re-authorization inside Autopilot instead of requiring hidden credential recovery.
 - Fixes Google Drive API access for Shared Drives via `supportsAllDrives` / `includeItemsFromAllDrives` on list/create/upload operations.
 - Keeps the pinned telemetry folder after authentication errors instead of falling back to ambiguous name discovery.
+
+
+## RC104 overnight telemetry fixes — 2026-10-05
+
+Live telemetry from the overnight run confirmed runtime/Drive transport stability and exposed three operational defects. This RC104 rebuild fixes them without changing the roadmap version.
+
+- Human-approved backlog telemetry now counts only articles that are actually still `READY/PUBLISH`; archived/rejected/duplicate historical approvals no longer generate false `APPROVED_NOT_PUBLISHED` incidents.
+- HTTP 429 temporary throttling is reported as `RATE_LIMIT`, not `NETWORK_DOWN`, so provider health reflects reality.
+- Third-party images are decoded and re-encoded to a conservative Telegram-safe JPEG before multipart upload to reduce `IMAGE_PROCESS_FAILED` failures.
+- The AI operator table always shows the full six-provider set: Gemini, NVIDIA, Groq, Cloudflare, Local AI, Codex/ChatGPT. Disabled or not-yet-probed providers remain visible instead of disappearing.
