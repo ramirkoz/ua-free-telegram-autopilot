@@ -296,6 +296,32 @@ CREATE TABLE IF NOT EXISTS publication_delivery_journal (
  updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_journal_state ON publication_delivery_journal(state,updated_at,article_id);
+CREATE TABLE IF NOT EXISTS dedupe_shadow_candidates (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+ article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+ candidate_article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+ context TEXT NOT NULL DEFAULT 'pre_ai',
+ score REAL NOT NULL DEFAULT 0,
+ confidence TEXT NOT NULL DEFAULT 'low',
+ reason TEXT NOT NULL DEFAULT '',
+ features_json TEXT NOT NULL DEFAULT '{}',
+ observed_at TEXT NOT NULL DEFAULT '',
+ UNIQUE(article_id,candidate_article_id,context)
+);
+CREATE INDEX IF NOT EXISTS idx_dedupe_shadow_recent ON dedupe_shadow_candidates(channel_id,observed_at DESC,score DESC);
+CREATE TABLE IF NOT EXISTS ai_usage_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ created_at TEXT NOT NULL,
+ provider TEXT NOT NULL DEFAULT '',
+ model TEXT NOT NULL DEFAULT '',
+ purpose TEXT NOT NULL DEFAULT '',
+ input_tokens INTEGER NOT NULL DEFAULT 0,
+ output_tokens INTEGER NOT NULL DEFAULT 0,
+ total_tokens INTEGER NOT NULL DEFAULT 0,
+ estimated_openrouter_usd REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_recent ON ai_usage_events(created_at DESC,provider,model);
 CREATE TABLE IF NOT EXISTS audit_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,stream TEXT NOT NULL,event TEXT NOT NULL,channel_id INTEGER,article_id INTEGER,
  provider TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}'
@@ -1377,11 +1403,60 @@ class V2Store:
                       WHERE state IN ('UNKNOWN','SENDING')
                       ORDER BY updated_at ASC LIMIT 20"""
             ))
+            last_committed = str(con.execute(
+                "SELECT COALESCE(MAX(committed_at),'') FROM publication_delivery_journal WHERE state='COMMITTED'"
+            ).fetchone()[0] or '')
+            committed_24h = int(con.execute(
+                "SELECT COUNT(*) FROM publication_delivery_journal WHERE state='COMMITTED' AND datetime(committed_at)>=datetime('now','-24 hours')"
+            ).fetchone()[0] or 0)
+            recovered_after_retry = int(con.execute(
+                "SELECT COUNT(*) FROM publication_delivery_journal WHERE state='COMMITTED' AND attempt_count>1"
+            ).fetchone()[0] or 0)
         counts = {str(r['state']): int(r['n']) for r in rows}
+        unresolved = sum(counts.get(k,0) for k in ('UNKNOWN','SENDING'))
+        oldest_unresolved = str(unknown[0]['updated_at'] or '') if unknown else ''
         return {
             'counts': counts,
             'unknown_or_inflight': [dict(r) for r in unknown],
-            'unresolved': sum(counts.get(k,0) for k in ('UNKNOWN','SENDING')),
+            'unresolved': unresolved,
+            'oldest_unresolved_at': oldest_unresolved,
+            'last_committed_at': last_committed,
+            'committed_24h': committed_24h,
+            'recovered_after_retry': recovered_after_retry,
+            'duplicate_risk_blocked': int(counts.get('UNKNOWN',0)),
+        }
+
+    def record_ai_usage(self, *, provider: str, model: str, purpose: str, input_tokens: int = 0, output_tokens: int = 0, total_tokens: int = 0, estimated_openrouter_usd: float = 0.0) -> None:
+        inp=max(0,int(input_tokens or 0)); out=max(0,int(output_tokens or 0)); total=max(inp+out,int(total_tokens or 0))
+        with self.connect() as con:
+            con.execute(
+                "INSERT INTO ai_usage_events(created_at,provider,model,purpose,input_tokens,output_tokens,total_tokens,estimated_openrouter_usd) VALUES(?,?,?,?,?,?,?,?)",
+                (now_iso(),str(provider),str(model),str(purpose),inp,out,total,max(0.0,float(estimated_openrouter_usd or 0.0))),
+            )
+
+    def ai_usage_summary(self, hours: int = 24) -> dict[str, Any]:
+        hours=max(1,min(24*31,int(hours or 24)))
+        with self.connect() as con:
+            rows=con.execute(
+                """SELECT provider,model,COUNT(*) calls,SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,
+                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd
+                     FROM ai_usage_events WHERE datetime(created_at)>=datetime('now',?)
+                     GROUP BY provider,model ORDER BY total_tokens DESC""", (f'-{hours} hours',),
+            ).fetchall()
+        items=[{
+            'provider':str(r['provider']),'model':str(r['model']),'calls':int(r['calls'] or 0),
+            'input_tokens':int(r['input_tokens'] or 0),'output_tokens':int(r['output_tokens'] or 0),'total_tokens':int(r['total_tokens'] or 0),
+            'estimated_openrouter_usd':round(float(r['estimated_openrouter_usd'] or 0.0),6),
+        } for r in rows]
+        return {
+            'window_hours':hours,
+            'calls':sum(x['calls'] for x in items),
+            'input_tokens':sum(x['input_tokens'] for x in items),
+            'output_tokens':sum(x['output_tokens'] for x in items),
+            'total_tokens':sum(x['total_tokens'] for x in items),
+            'estimated_openrouter_usd':round(sum(x['estimated_openrouter_usd'] for x in items),6),
+            'by_model':items,
+            'pricing_snapshot':'rc106-2026-10-05-reference',
         }
 
     def publication_backoff(
