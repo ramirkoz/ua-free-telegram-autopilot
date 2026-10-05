@@ -25,6 +25,10 @@ class AIResult:
     model: str
     label: str
     attempted: tuple[str, ...] = ()
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_openrouter_usd: float = 0.0
 
 
 class GatewayExhausted(RuntimeError):
@@ -49,6 +53,18 @@ class CandidateRejected(RuntimeError):
 # V2 owns the reviewed production routing list. Provider discovery may be used for
 # diagnostics, but a newly exposed remote model never becomes an unattended writer
 # until it is explicitly reviewed here.
+_OPENROUTER_REFERENCE_PRICING_PER_M: dict[str, tuple[float, float]] = {
+    "nvidia/nemotron-3-super-120b-a12b": (0.08, 0.45),
+    "nvidia/nemotron-3-ultra-550b-a55b": (0.50, 2.20),
+    "openai/gpt-oss-120b": (0.03, 0.17),
+    "gemini-3.5-flash": (1.50, 9.00),
+}
+
+def _openrouter_reference_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    rates = _OPENROUTER_REFERENCE_PRICING_PER_M.get(str(model or "").strip(), (0.0, 0.0))
+    return (max(0,int(input_tokens or 0)) * rates[0] + max(0,int(output_tokens or 0)) * rates[1]) / 1_000_000.0
+
+
 PRODUCTION_SLOTS: tuple[legacy_ai.Slot, ...] = (
     legacy_ai.Slot(1, "gemini", "gemini-3.5-flash", "Gemini 3.5 Flash / Google", "gemini"),
     legacy_ai.Slot(2, "nvidia", "nvidia/nemotron-3-ultra-550b-a55b", "Nemotron 3 Ultra 550B / NVIDIA"),
@@ -404,11 +420,11 @@ class AIGateway:
         max_output_tokens: int,
         timeout_seconds: int,
         json_mode: bool = False,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
         if provider == "codex":
             try:
-                return str(run_codex(prompt)).strip(), slot.model, slot.label
+                return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0
             except CodexEngineError as exc:
                 low = str(exc).casefold()
                 if any(x in low for x in ("usage limit", "quota", "rate limit", "429", "credits")):
@@ -427,7 +443,7 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
-            return reply.text, reply.model, slot.label
+            return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens
 
         if provider in {"nvidia", "groq", "cloudflare"}:
             key = {
@@ -472,7 +488,7 @@ class AIGateway:
                 low = str(exc).casefold()
                 kind = "timeout" if any(x in low for x in ("timeout", "не завершила", "секунд")) else "temporary"
                 raise ProviderAPIError(str(exc), kind=kind) from exc
-            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label)
+            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label), 0, 0, 0
 
         raise ProviderAPIError(f"Unknown provider {provider}", kind="configuration")
 
@@ -554,7 +570,7 @@ class AIGateway:
                 continue
             try:
                 try:
-                    output, runtime_model, label = self._call_slot(
+                    output, runtime_model, label, input_tokens, output_tokens, total_tokens = self._call_slot(
                         slot,
                         cfg,
                         text_prompt,
@@ -563,6 +579,12 @@ class AIGateway:
                         json_mode=json_mode,
                     )
                     transport_attempts += 1
+                    estimated_cost = _openrouter_reference_cost(runtime_model, input_tokens, output_tokens)
+                    self.store.record_ai_usage(
+                        provider=provider, model=runtime_model, purpose=str(purpose or "content"),
+                        input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
+                        estimated_openrouter_usd=estimated_cost,
+                    )
                 finally:
                     lock.release()
                 if not output:
@@ -610,8 +632,10 @@ class AIGateway:
                     "ai", "AI success", provider=provider, model=runtime_model,
                     elapsed=round(time.monotonic() - started, 2), chars=len(output),
                     provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
+                    input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0), total_tokens=int(total_tokens or 0),
+                    estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
                 )
-                return AIResult(output, provider, runtime_model, label, tuple(attempted))
+                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0))
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
@@ -664,13 +688,18 @@ class AIGateway:
                 continue
             try:
                 try:
-                    text, runtime_model, _label = self._call_slot(
+                    text, runtime_model, _label, input_tokens, output_tokens, total_tokens = self._call_slot(
                         slot,
                         cfg,
                         "Reply with OK only.",
                         max_output_tokens=48 if provider == "local" else 96,
                         timeout_seconds=90 if provider == "local" else 20,
                         json_mode=False,
+                    )
+                    self.store.record_ai_usage(
+                        provider=provider, model=runtime_model, purpose="health_probe",
+                        input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
+                        estimated_openrouter_usd=_openrouter_reference_cost(runtime_model, input_tokens, output_tokens),
                     )
                 finally:
                     lock.release()
