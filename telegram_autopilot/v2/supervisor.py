@@ -504,6 +504,89 @@ class SupervisorService:
         except sqlite3.Error as exc:
             return {"ok": False, "detail": str(exc)[:500]}
 
+    def _shadow_dedupe_snapshot(self) -> dict[str, Any]:
+        cut = datetime.fromtimestamp(time.time() - 86400, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+        try:
+            with self.store.connect() as con:
+                rows = con.execute(
+                    """SELECT channel_id,context,confidence,COUNT(*) n,ROUND(AVG(score),2) avg_score,ROUND(MAX(score),2) max_score
+                         FROM dedupe_shadow_candidates WHERE observed_at>=?
+                         GROUP BY channel_id,context,confidence ORDER BY channel_id,context,confidence""", (cut,),
+                ).fetchall()
+                top = con.execute(
+                    """SELECT channel_id,article_id,candidate_article_id,context,score,confidence,reason,observed_at
+                         FROM dedupe_shadow_candidates WHERE observed_at>=?
+                         ORDER BY score DESC,observed_at DESC LIMIT 20""", (cut,),
+                ).fetchall()
+            return {
+                "mode": "shadow_only", "window_hours": 24,
+                "candidates": sum(int(r["n"] or 0) for r in rows),
+                "groups": [dict(r) for r in rows], "top": [dict(r) for r in top],
+                "blocking_enabled": False,
+            }
+        except sqlite3.Error:
+            return {"mode":"shadow_only","window_hours":24,"candidates":0,"groups":[],"top":[],"blocking_enabled":False}
+
+    @staticmethod
+    def _commercial_reject_category(reason: str) -> str:
+        low = str(reason or "").casefold()
+        if "learning_" in low or "editor-disliked" in low:
+            return "learning_suppression"
+        if any(x in low for x in ("b2b", "пресреліз", "press release", "анонс", "найм", "hiring", "routine")):
+            return "routine_b2b_pr"
+        if any(x in low for x in ("гач", "hook", "широк", "broad", "general_interest", "retell")):
+            return "weak_broad_audience_hook"
+        if any(x in low for x in ("механік", "mechanism", "transfer", "комерційн")):
+            return "weak_commercial_mechanism"
+        if any(x in low for x in ("креатив", "creative", "візуал", "visual", "дивн", "surprise")):
+            return "weak_creative_visual_signal"
+        if "duplicate" in low or "дубл" in low:
+            return "duplicate"
+        return "other"
+
+    def _commercial_throughput_snapshot(self) -> dict[str, Any]:
+        cut=datetime.fromtimestamp(time.time()-7200,tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+        channels=[]
+        with self.store.connect() as con:
+            channel_rows=con.execute("SELECT id,name,editorial_runtime_profile FROM channels WHERE enabled=1").fetchall()
+            for ch in channel_rows:
+                if str(ch["editorial_runtime_profile"] or "") != "commercial_editorial":
+                    continue
+                cid=int(ch["id"]); categories: dict[str,int]={}
+                rejects=con.execute(
+                    """SELECT a.reject_reason,COUNT(*) n FROM jobs j JOIN articles a ON a.id=j.article_id
+                         WHERE j.channel_id=? AND j.state='DONE' AND a.decision='REJECT' AND datetime(j.updated_at)>=datetime(?)
+                         GROUP BY a.reject_reason""", (cid,cut),
+                ).fetchall()
+                for row in rejects:
+                    key=self._commercial_reject_category(str(row["reject_reason"] or "")); categories[key]=categories.get(key,0)+int(row["n"] or 0)
+                publish_candidates=int(con.execute(
+                    "SELECT COUNT(*) FROM articles WHERE channel_id=? AND decision='PUBLISH' AND (stage='READY' OR stage='PUBLISHED')", (cid,),
+                ).fetchone()[0] or 0)
+                channels.append({"channel_id":cid,"name":str(ch["name"]),"reject_categories_2h":categories,"publish_or_ready_now":publish_candidates})
+        return {"window_hours":2,"channels":channels}
+
+    def _media_recovery_snapshot(self) -> dict[str, Any]:
+        items=[]; classes: dict[str,int]={}
+        with self.store.connect() as con:
+            rows=con.execute(
+                """SELECT id,channel_id,last_error_code,last_error_detail,next_retry_at,article_layout_json
+                     FROM articles WHERE stage='READY' AND decision='PUBLISH' AND blocked_by='MEDIA'
+                     ORDER BY datetime(CASE WHEN ready_at<>'' THEN ready_at ELSE discovered_at END) ASC LIMIT 100"""
+            ).fetchall()
+        for row in rows:
+            classification="legacy_or_unclassified"; attempts=0
+            try:
+                layout=json.loads(str(row["article_layout_json"] or "{}")); rec=layout.get("media_recovery") if isinstance(layout,dict) else None
+                if isinstance(rec,dict):
+                    classification=str(rec.get("classification") or classification); attempts=int(rec.get("attempts") or 0)
+            except Exception:
+                pass
+            classes[classification]=classes.get(classification,0)+1
+            items.append({"article_id":int(row["id"]),"channel_id":int(row["channel_id"]),"code":str(row["last_error_code"] or ""),
+                          "classification":classification,"attempts":attempts,"next_retry_at":str(row["next_retry_at"] or "")})
+        return {"blocked":len(items),"classifications":classes,"items":items[:20]}
+
     def build_snapshot(self) -> dict[str, Any]:
         runtime = self.runtime.health_snapshot()
         enabled_rows = self.store.list_channels(enabled_only=True)
@@ -583,9 +666,12 @@ class SupervisorService:
             "providers": providers,
             "models": list(runtime.get("models") or []),
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
+            "ai_usage": self.store.ai_usage_summary(24),
             "queue": queue,
             "delivery": self.store.delivery_journal_summary(),
-            "media": self._media_snapshot(),
+            "dedupe_shadow": self._shadow_dedupe_snapshot(),
+            "commercial_throughput": self._commercial_throughput_snapshot(),
+            "media": {**self._media_snapshot(), "recovery": self._media_recovery_snapshot()},
             "channel_stats": self._channel_stats(),
             "channel_settings": channel_settings,
             "database": self._database_status(),
