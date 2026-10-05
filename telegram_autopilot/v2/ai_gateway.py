@@ -150,6 +150,9 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     if kind in {"bad_response", "validation", "quality"}:
         return ProviderState.UNKNOWN, 0, "task"
     if kind == "temporary":
+        status = int(getattr(exc, "status", 0) or 0)
+        if status == 429:
+            return ProviderState.RATE_LIMIT, max(60, min(900, retry_after or 120)), "model"
         return ProviderState.NETWORK_DOWN, 60, "model"
     return ProviderState.UNKNOWN, 0, "task"
 
