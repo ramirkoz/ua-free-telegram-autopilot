@@ -18,6 +18,7 @@ from . import V2_VERSION
 from .loghub import event
 from .media_pipeline import build_media_bundle
 from .storage import V2Store, now_iso
+from ..secrets_store import load_secrets
 
 
 @dataclass(slots=True)
@@ -508,6 +509,31 @@ class SupervisorService:
         enabled_rows = self.store.list_channels(enabled_only=True)
         enabled = {str(int(r["id"])): str(r["name"]) for r in enabled_rows}
         providers = list(runtime.get("providers") or [])
+        provider_map = {str(p.get("provider") or ""): dict(p) for p in providers}
+        try:
+            secret_cfg = load_secrets()
+        except Exception:
+            secret_cfg = None
+        expected_provider_names = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+        configured_map = {
+            "gemini": bool(getattr(secret_cfg, "gemini_api_key", "")) if secret_cfg else False,
+            "nvidia": bool(getattr(secret_cfg, "nvidia_api_key", "")) if secret_cfg else False,
+            "groq": bool(getattr(secret_cfg, "groq_api_key", "")) if secret_cfg else False,
+            "cloudflare": bool(getattr(secret_cfg, "cloudflare_account_id", "") and getattr(secret_cfg, "cloudflare_api_token", "")) if secret_cfg else False,
+            "local": bool(getattr(secret_cfg, "local_enabled", False)) if secret_cfg else False,
+            "codex": bool(getattr(secret_cfg, "codex_enabled", False)) if secret_cfg else False,
+        }
+        for name in expected_provider_names:
+            if name not in provider_map:
+                provider_map[name] = {
+                    "provider": name,
+                    "state": "UNKNOWN" if configured_map.get(name) else "CONFIG_ERROR",
+                    "model": "codex-chatgpt" if name == "codex" else ("local-model" if name == "local" else ""),
+                    "detail": "Ще немає runtime health-запису" if configured_map.get(name) else "Не налаштовано / вимкнено оператором",
+                    "cooldown_until": "",
+                    "enabled": bool(configured_map.get(name)),
+                }
+        providers = [provider_map[name] for name in expected_provider_names]
         enabled_providers = [p for p in providers if bool(p.get("enabled", True))]
         healthy = sum(1 for p in enabled_providers if str(p.get("state")) == "HEALTHY")
         free = shutil.disk_usage(self.store.path.parent).free
@@ -515,8 +541,9 @@ class SupervisorService:
         with self._lock:
             expected = self._expected_running
         ai_blocked = int(dict(queue.get("blockers") or {}).get("AI", 0) or 0)
-        ai_total = len(enabled_providers)
-        ai_state = "UNKNOWN" if ai_total <= 0 else ("DOWN" if healthy <= 0 else ("HEALTHY" if healthy >= ai_total else "DEGRADED"))
+        ai_total = len(providers)
+        ai_configured = len(enabled_providers)
+        ai_state = "UNKNOWN" if ai_configured <= 0 else ("DOWN" if healthy <= 0 else ("HEALTHY" if healthy >= ai_configured else "DEGRADED"))
         channel_settings: dict[str, dict[str, Any]] = {}
         for row in enabled_rows:
             cid = int(row["id"])
@@ -555,8 +582,9 @@ class SupervisorService:
             "channels": runtime.get("channels") or {},
             "providers": providers,
             "models": list(runtime.get("models") or []),
-            "ai": {"healthy": healthy, "total": ai_total, "state": ai_state, "blocked_jobs": ai_blocked},
+            "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "queue": queue,
+            "delivery": self.store.delivery_journal_summary(),
             "media": self._media_snapshot(),
             "channel_stats": self._channel_stats(),
             "channel_settings": channel_settings,
