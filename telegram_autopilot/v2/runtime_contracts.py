@@ -191,7 +191,7 @@ def _install_supervisor_contract() -> None:
                     """SELECT COUNT(*) n,MIN(ea.created_at) oldest
                        FROM articles a
                        JOIN editorial_actions ea ON ea.article_id=a.id
-                       WHERE a.channel_id=? AND a.stage<>'PUBLISHED'
+                       WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
                          AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                          AND ea.action IN ('approve','edit','publish_attempt')""",
                     (int(channel_id),),
