@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 import json
 import mimetypes
 import re
 from dataclasses import dataclass
 from urllib.parse import unquote, urlencode, urlsplit
+
+from PIL import Image, ImageOps
 
 from .network import NetworkError, fetch_url
 from .media import media_identity, valid_public_media
@@ -409,6 +412,51 @@ def _safe_media_filename(url: str, mime_type: str, kind: str, index: int = 0) ->
     return raw[:120]
 
 
+def _normalize_telegram_photo(data: bytes) -> tuple[bytes, str]:
+    """Re-encode third-party images into a conservative Telegram-safe JPEG."""
+    try:
+        with Image.open(BytesIO(data)) as opened:
+            image = ImageOps.exif_transpose(opened)
+            image.load()
+            if image.width <= 0 or image.height <= 0:
+                raise ValueError("invalid dimensions")
+            w, h = image.size
+            if max(w, h) / max(1, min(w, h)) > 19.5:
+                if w >= h:
+                    target_h = max(h, int((w / 19.5) + 0.999))
+                    canvas = Image.new("RGB", (w, target_h), "white")
+                    canvas.paste(image.convert("RGB"), (0, (target_h - h) // 2))
+                else:
+                    target_w = max(w, int((h / 19.5) + 0.999))
+                    canvas = Image.new("RGB", (target_w, h), "white")
+                    canvas.paste(image.convert("RGB"), ((target_w - w) // 2, 0))
+                image = canvas
+            elif image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+                rgba = image.convert("RGBA")
+                bg = Image.new("RGBA", rgba.size, "white")
+                bg.alpha_composite(rgba)
+                image = bg.convert("RGB")
+            else:
+                image = image.convert("RGB")
+            image.thumbnail((4800, 4800), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            image.save(out, format="JPEG", quality=90, optimize=True, progressive=False)
+            encoded = out.getvalue()
+            if len(encoded) > 9_000_000:
+                out = BytesIO()
+                image.save(out, format="JPEG", quality=78, optimize=True, progressive=False)
+                encoded = out.getvalue()
+            if not encoded or len(encoded) > 9_500_000:
+                raise ValueError("normalized image is too large")
+            return encoded, "image/jpeg"
+    except Exception as exc:
+        raise TelegramError(
+            f"Зображення не вдалося нормалізувати для Telegram: {exc}",
+            retryable=False,
+            media_rejected=True,
+        ) from exc
+
+
 def prepare_telegram_media(media_value: str, *, timeout: float = 35.0, index: int = 0) -> PreparedTelegramMedia:
     """Fetch one source media object locally and validate it for Telegram upload."""
     parsed = valid_public_media(str(media_value or ""))
@@ -446,6 +494,7 @@ def prepare_telegram_media(media_value: str, *, timeout: float = 35.0, index: in
             raise TelegramError(f"Медіа не є зображенням: {mime or 'unknown content-type'}.", retryable=False, media_rejected=True)
         if len(data) > 9_500_000:
             raise TelegramError("Зображення завелике для Telegram upload.", retryable=False, media_rejected=True)
+        data, mime = _normalize_telegram_photo(data)
     else:
         if not mime.startswith("video/"):
             # Some CDNs incorrectly return octet-stream for direct MP4 files.
