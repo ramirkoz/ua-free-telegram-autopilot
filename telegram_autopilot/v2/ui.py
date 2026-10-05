@@ -1589,7 +1589,10 @@ class MainWindow(tk.Tk):
         snap = self.runtime.health_snapshot()
         alive = sum(1 for value in snap["channels"].values() if value["alive"])
         healthy = sum(1 for value in snap["providers"] if value["state"] == "HEALTHY")
+        cfg = load_secrets()
         configured = sum(1 for value in snap["providers"] if not (value["state"] == "CONFIG_ERROR" and str(value.get("detail", "")).casefold().startswith("не налаштовано")))
+        if bool(getattr(cfg, "codex_enabled", False)):
+            configured += 1
         with self.store.connect() as con:
             counts = {row[0]: row[1] for row in con.execute("SELECT stage,COUNT(*) FROM articles GROUP BY stage")}
             rejected = con.execute("SELECT COUNT(*) FROM articles WHERE decision='REJECT'").fetchone()[0]
@@ -1616,7 +1619,7 @@ class MainWindow(tk.Tk):
                 self.status.set("Автопілот: workers не працюють")
             else:
                 self.status.set("Автопілот працює")
-        provider_total = len(snap["providers"])
+        provider_total = 6
         configured_text = f"{configured} налаштовано" if provider_total else "стан ще не перевірено"
         blockers_text = ", ".join(f"{BLOCK_UA.get(key, key)}={value}" for key, value in blocked.items()) or "немає активних"
         text = (
@@ -1695,8 +1698,52 @@ class MainWindow(tk.Tk):
 
     def refresh_ai(self):
         self.ai_tree.delete(*self.ai_tree.get_children())
-        for health in self.store.provider_health():
-            self.ai_tree.insert("", "end", iid=health.provider, values=(health.provider, PROVIDER_UA.get(str(health.state), str(health.state)), health.model, health.success_count, health.failure_count, health.cooldown_until, health.detail[:300]))
+        rows = {health.provider: health for health in self.store.provider_health()}
+        cfg = load_secrets()
+        expected = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+        for provider in expected:
+            health = rows.get(provider)
+            if health is not None:
+                values = (
+                    provider,
+                    PROVIDER_UA.get(str(health.state), str(health.state)),
+                    health.model,
+                    health.success_count,
+                    health.failure_count,
+                    health.cooldown_until,
+                    health.detail[:300],
+                )
+            elif provider == "codex":
+                enabled = bool(getattr(cfg, "codex_enabled", False))
+                values = (
+                    "codex",
+                    "Невідомо" if enabled else "Не налаштовано",
+                    "ChatGPT / Codex",
+                    0,
+                    0,
+                    "",
+                    "Увімкнено; детальний стан у блоці Codex / ChatGPT" if enabled else "Вимкнено оператором",
+                )
+            elif provider == "local":
+                enabled = bool(getattr(cfg, "local_enabled", False))
+                values = (
+                    "local",
+                    "Невідомо" if enabled else "Не налаштовано",
+                    str(getattr(cfg, "local_model", "") or "local-model"),
+                    0,
+                    0,
+                    "",
+                    "Увімкнено; ще немає health-запису" if enabled else "Вимкнено оператором",
+                )
+            else:
+                configured = {
+                    "gemini": bool(getattr(cfg, "gemini_api_key", "")),
+                    "nvidia": bool(getattr(cfg, "nvidia_api_key", "")),
+                    "groq": bool(getattr(cfg, "groq_api_key", "")),
+                    "cloudflare": bool(getattr(cfg, "cloudflare_api_token", "") and getattr(cfg, "cloudflare_account_id", "")),
+                }.get(provider, False)
+                values = (provider, "Невідомо" if configured else "Не налаштовано", "", 0, 0, "", "Ще немає health-запису" if configured else "Ключ не налаштовано")
+            self.ai_tree.insert("", "end", iid=provider, values=values)
 
     def _selected_channel(self):
         ids = self.channel_tree.selection()
