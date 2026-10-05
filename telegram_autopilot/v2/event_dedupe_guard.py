@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from .dedupe import DedupeResult
 from .domain import Decision, DedupeProfile, Stage
 from .loghub import event
+from .storage import now_iso
 from .semantic_dedupe import (
     SemanticDedupeEngine,
     SemanticGuardedPublisher as _BaseSemanticGuardedPublisher,
@@ -349,6 +351,22 @@ def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
     }
 
 
+def _shadow_cluster_score(stats: dict[str, Any]) -> tuple[float, str]:
+    """RC106 non-blocking same-event candidate score."""
+    containment = float(stats.get("containment") or 0.0)
+    salient_containment = float(stats.get("salient_containment") or 0.0)
+    salient = len(stats.get("salient_shared") or ())
+    entities = len(stats.get("shared_entities") or ())
+    actions = len(stats.get("shared_actions") or ())
+    rare = len(stats.get("shared_rare") or ())
+    facts = len(stats.get("quantity_pairs") or ()) + len(stats.get("duration_pairs") or ()) + len(stats.get("numeric_pairs") or ())
+    score = (containment * 30.0 + salient_containment * 25.0 + min(18.0, salient * 2.0) +
+             min(10.0, entities * 5.0) + min(9.0, actions * 3.0) + min(6.0, facts * 2.0) + min(4.0, rare))
+    score = round(min(100.0, score), 2)
+    confidence = "high" if score >= 70 else ("medium" if score >= 55 else "low")
+    return score, confidence
+
+
 def event_fingerprint_same_event(
     current: Any,
     candidate: Any,
@@ -587,6 +605,62 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                 (int(channel_id), int(article_id), self.LEDGER_LIMIT),
             ).fetchall()
 
+    def _record_shadow_candidates(self, current: Any, candidates: list[Any], *, context: str) -> int:
+        current_id = int(current["id"]); channel_id = int(current["channel_id"]); current_source = int(current["source_id"] or 0)
+        ranked: list[tuple[float, str, Any, dict[str, Any]]] = []
+        for candidate in candidates:
+            candidate_source = int(candidate["source_id"] or 0)
+            if current_source and candidate_source and current_source == candidate_source:
+                continue
+            try:
+                if str(candidate["decision"]) == str(Decision.DUPLICATE):
+                    continue
+            except Exception:
+                pass
+            stats = _fingerprint_stats(current, candidate)
+            score, confidence = _shadow_cluster_score(stats)
+            if score < 45.0 or len(stats["salient_shared"]) < 3:
+                continue
+            if not (stats["shared_entities"] or stats["shared_actions"] or stats["quantity_pairs"] or stats["duration_pairs"] or len(stats["salient_shared"]) >= 6):
+                continue
+            ranked.append((score, confidence, candidate, stats))
+        if not ranked:
+            return 0
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        stamp = now_iso(); recorded = 0
+        with self.store.connect() as con:
+            for score, confidence, candidate, stats in ranked[:3]:
+                candidate_id = int(candidate["id"])
+                features = {
+                    "containment": round(float(stats["containment"]), 4),
+                    "salient_containment": round(float(stats["salient_containment"]), 4),
+                    "shared_concepts": len(stats["shared"]),
+                    "shared_salient": len(stats["salient_shared"]),
+                    "entities": sorted(stats["shared_entities"]),
+                    "actions": sorted(stats["shared_actions"]),
+                    "rare": sorted(stats["shared_rare"])[:12],
+                    "numeric_pairs": list(stats["numeric_pairs"][:4]),
+                    "quantity_pairs": list(stats["quantity_pairs"][:4]),
+                    "duration_pairs": list(stats["duration_pairs"][:4]),
+                }
+                reason = (f"shadow same-event candidate score={score:.2f}; salient={len(stats['salient_shared'])}/"
+                          f"{float(stats['salient_containment']):.2f}; entities={','.join(sorted(stats['shared_entities'])) or '-'}; "
+                          f"actions={','.join(sorted(stats['shared_actions'])) or '-'}")
+                con.execute(
+                    """INSERT INTO dedupe_shadow_candidates(channel_id,article_id,candidate_article_id,context,score,confidence,reason,features_json,observed_at)
+                       VALUES(?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(article_id,candidate_article_id,context) DO UPDATE SET
+                         score=excluded.score,confidence=excluded.confidence,reason=excluded.reason,features_json=excluded.features_json,observed_at=excluded.observed_at""",
+                    (channel_id,current_id,candidate_id,str(context),float(score),str(confidence),reason,
+                     json.dumps(features,ensure_ascii=False,separators=(",",":"),default=str),stamp),
+                )
+                recorded += 1
+        if recorded:
+            top = ranked[0]
+            event("dedupe", "RC106 shadow cluster candidate", channel_id=channel_id, article_id=current_id,
+                  candidate_article_id=int(top[2]["id"]), score=float(top[0]), confidence=str(top[1]), context=str(context), blocked=False)
+        return recorded
+
     def _find_duplicate(self, article_id: int, *, published_only: bool = False) -> DedupeResult:
         current = self.store.get_article(article_id)
         if current is None:
@@ -638,6 +712,10 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                         f"rare={len(stats['shared_rare'])}"
                     )
 
+        try:
+            self._record_shadow_candidates(current, list(candidates), context="prepublish" if published_only else "pre_ai")
+        except Exception as exc:
+            event("dedupe", "RC106 shadow cluster recording failed", level=30, channel_id=channel_id, article_id=article_id, detail=str(exc)[:800])
         if published_only:
             event(
                 "publish", "prepublish event trace single", channel_id=channel_id, article_id=article_id,
