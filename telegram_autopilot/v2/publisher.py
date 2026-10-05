@@ -17,7 +17,7 @@ from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle, media_bundle_complete
-from .storage import V2Store
+from .storage import V2Store, now_iso
 from .telegram_attribution import (
     build_attributed_post_text,
     send_prepared_media_group_attributed,
@@ -184,6 +184,46 @@ def _facebook_message(text: str, telegram_post_url: str) -> str:
 class Publisher:
     def __init__(self, store: V2Store):
         self.store = store
+
+    def _media_recovery_plan(self, article: Any, bundle: Any, *, video_expected: bool = False) -> tuple[str, int | None, int]:
+        """Classify missing required media as recoverable/probe/permanent."""
+        article_id = int(article["id"] or 0)
+        try:
+            layout = json.loads(str(article["article_layout_json"] or "{}"))
+        except Exception:
+            layout = {}
+        if not isinstance(layout, dict):
+            layout = {}
+        recovery = layout.get("media_recovery")
+        if not isinstance(recovery, dict):
+            recovery = {}
+        attempts = int(recovery.get("attempts") or 0) + 1
+        provenance = _web_media_provenance(article)
+        source_kind = str(getattr(bundle, "source_kind", "") or "").casefold()
+        source_media_count = int(getattr(bundle, "source_media_count", 0) or getattr(bundle, "declared_media_count", 0) or 0)
+        strong_recoverable = bool(
+            source_media_count > 0 or video_expected or source_kind == "telegram" or
+            provenance in {"body", "jsonld_article_image", "og_image", "twitter_image"}
+        )
+        max_attempts = 4 if strong_recoverable else 2
+        if attempts <= max_attempts:
+            classification = "recoverable" if strong_recoverable else "probe"
+            retry_seconds = min(7200, 600 * (2 ** min(3, attempts - 1)))
+        else:
+            classification = "permanent"
+            retry_seconds = None
+        recovery.update({
+            "attempts": attempts,
+            "classification": classification,
+            "last_attempt_at": now_iso(),
+            "source_media_count": source_media_count,
+            "provenance": provenance,
+            "video_expected": bool(video_expected),
+            "next_retry_seconds": retry_seconds or 0,
+        })
+        layout["media_recovery"] = recovery
+        self.store.update_article(article_id, article_layout_json=json.dumps(layout, ensure_ascii=False, separators=(",", ":")))
+        return classification, retry_seconds, attempts
 
     def _queue_facebook_after_telegram(self, article_id: int, channel: Any, message_id: str) -> None:
         page_ids = [str(x).strip() for x in (getattr(channel, "facebook_page_ids", []) or []) if str(x).strip()]
@@ -496,13 +536,24 @@ class Publisher:
             telegram_video_recovery=video_recovery, web_media_provenance=_web_media_provenance(article),
         )
         if policy == "required" and not bundle.count:
-            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_REQUIRED", detail="Політика каналу вимагає валідне медіа", retry_seconds=None, count_attempt=False)
-            event("media", "required media missing at final publication gate", level=30, channel_id=channel_id, article_id=article_id, source_media_count=source_media_count, bundle_media_count=0)
+            classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
+            detail = f"Політика каналу вимагає валідне медіа; media_recovery={classification}; attempt={media_attempt}"
+            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_REQUIRED", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
+            event(
+                "media", "required media missing at final publication gate", level=30, channel_id=channel_id, article_id=article_id,
+                source_media_count=source_media_count, bundle_media_count=0, media_recovery=classification,
+                media_recovery_attempt=media_attempt, retry_seconds=retry_seconds or 0,
+            )
             return "MEDIA_REQUIRED"
         if policy == "required" and not media_bundle_complete(bundle):
-            detail = f"Джерело має {source_media_count} медіа, але до publication bundle дійшло {bundle.count}."
-            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_INCOMPLETE", detail=detail, retry_seconds=None, count_attempt=False)
-            event("media", "required media bundle incomplete", level=40, channel_id=channel_id, article_id=article_id, source_media_count=source_media_count, bundle_media_count=bundle.count)
+            classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
+            detail = f"Джерело має {source_media_count} медіа, але до publication bundle дійшло {bundle.count}; media_recovery={classification}; attempt={media_attempt}."
+            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_INCOMPLETE", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
+            event(
+                "media", "required media bundle incomplete", level=40, channel_id=channel_id, article_id=article_id,
+                source_media_count=source_media_count, bundle_media_count=bundle.count, media_recovery=classification,
+                media_recovery_attempt=media_attempt, retry_seconds=retry_seconds or 0,
+            )
             return "MEDIA_INCOMPLETE"
 
         secrets = load_secrets()
