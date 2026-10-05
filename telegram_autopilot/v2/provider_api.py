@@ -378,17 +378,22 @@ def openai_compatible_chat(
             if name == "groq":
                 messages = _groq_messages(prompt, json_mode=json_mode, repair=structured_attempt > 0)
             else:
+                structured_contract = (
+                    "\n\nSTRICT STRUCTURED OUTPUT CONTRACT: Return exactly one compact valid JSON object. "
+                    "No markdown fences, commentary or analysis outside JSON. Close the object before the token limit."
+                    if json_mode else ""
+                )
                 messages = [
-                    {"role": "system", "content": _SYSTEM_GUARD},
+                    {"role": "system", "content": _SYSTEM_GUARD + structured_contract},
                     {"role": "user", "content": str(prompt)},
                 ]
 
             active_budget = budget
-            if name == "groq" and json_mode:
-                # The caller intentionally uses tiny budgets for editorial gates, but
-                # Groq reasoning models can consume those tokens before emitting the
-                # JSON document. Give the *completion* enough room while keeping the
-                # prompt/result contract compact and reasoning disabled.
+            if json_mode:
+                # Editorial gates use small logical outputs, but several providers
+                # consume part of max tokens internally or truncate multi-key JSON.
+                # A larger ceiling does not force extra output; it simply lets the
+                # closing brace survive.
                 active_budget = max(budget, 768 if structured_attempt == 0 else 1536)
 
             payload: dict[str, Any] = {
@@ -417,6 +422,8 @@ def openai_compatible_chat(
                     payload["response_format"] = {"type": "json_object"}
             elif name == "nvidia":
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
+                if json_mode:
+                    payload["response_format"] = {"type": "json_object"}
 
             try:
                 _status, _headers, response = _request_json(
@@ -482,9 +489,12 @@ def gemini_generate(
     if not str(api_key or "").strip():
         raise ProviderAPIError("Gemini API key is missing", kind="configuration")
 
+    generation_budget = max(64, min(4096, int(max_output_tokens)))
+    if json_mode:
+        generation_budget = max(generation_budget, 768)
     generation: dict[str, Any] = {
-        "temperature": 0.2,
-        "maxOutputTokens": max(64, min(4096, int(max_output_tokens))),
+        "temperature": 0.0 if json_mode else 0.2,
+        "maxOutputTokens": generation_budget,
     }
     if json_mode:
         generation["responseMimeType"] = "application/json"
