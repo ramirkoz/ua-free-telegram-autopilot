@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -38,17 +39,55 @@ def _clean(value: Any, limit: int = 12000) -> str:
 
 
 def _parse_json(raw: str) -> dict[str, Any]:
-    text = str(raw or "").strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+    text = str(raw or "").strip().lstrip("\ufeff")
+    text = re.sub(r"^```(?:json|javascript|js)?\s*", "", text, flags=re.I)
     text = re.sub(r"\s*```$", "", text)
-    a, b = text.find("{"), text.rfind("}")
-    if a < 0 or b <= a:
+    start = text.find("{")
+    candidate = ""
+    if start >= 0:
+        depth = 0
+        quoted = False
+        escaped = False
+        for idx, ch in enumerate(text[start:], start=start):
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    quoted = False
+                continue
+            if ch == '"':
+                quoted = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start:idx + 1]
+                    break
+    if not candidate:
         raise ValueError("AI не повернув JSON")
-    obj = json.loads(text[a : b + 1])
-    if not isinstance(obj, dict):
-        raise ValueError("AI JSON має бути object")
-    return obj
-
+    variants = [candidate]
+    repaired = candidate.replace("“", '"').replace("”", '"').replace("’", "'")
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    if repaired != candidate:
+        variants.append(repaired)
+    last_error: Exception | None = None
+    for value in variants:
+        try:
+            obj = json.loads(value)
+        except Exception as exc:
+            last_error = exc
+            try:
+                obj = ast.literal_eval(value)
+            except Exception as fallback_exc:
+                last_error = fallback_exc
+                continue
+        if isinstance(obj, dict):
+            return obj
+        last_error = ValueError("AI JSON має бути object")
+    raise ValueError(f"AI повернув пошкоджений JSON: {last_error}")
 
 def _source_pack(article: Any, budget: int = 6000) -> str:
     try:
