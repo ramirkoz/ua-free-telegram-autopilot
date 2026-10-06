@@ -359,6 +359,7 @@ class V2Store:
                 self._ensure_rc69_commercial_broad_audience_policy(con)
                 self._ensure_rc71_commercial_media_quality_policy(con)
                 self._ensure_rc72_channel_policy_tuning(con)
+                self._ensure_rc108_global_media_and_commercial_tuning(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
@@ -872,6 +873,92 @@ class V2Store:
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, "1"),
+        )
+
+    @staticmethod
+    def _ensure_rc108_global_media_and_commercial_tuning(con: sqlite3.Connection) -> None:
+        """RC108: media never blocks publication; tune commercial broad-audience throughput.
+
+        This is an explicit product-level decision, not a hidden channel-name branch.
+        All channel policies are migrated to optional media. Commercial-editorial
+        thresholds and selector guidance remain persisted/editable channel config.
+        """
+        key = "rc108_global_media_and_commercial_tuning_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        stamp = now_iso()
+
+        # Product-level media decision: use source media when valid, otherwise text.
+        con.execute("UPDATE channel_policies SET media_policy='optional',updated_at=?", (stamp,))
+        con.execute(
+            """UPDATE articles
+                  SET blocked_by='NONE',
+                      last_error_code='',
+                      last_error_detail='',
+                      next_retry_at='',
+                      status_detail=CASE
+                        WHEN status_detail LIKE 'Погоджено редактором%' THEN status_detail
+                        ELSE 'RC108: медіа необов’язкове; дозволено текстову публікацію'
+                      END
+                WHERE stage='READY' AND decision='PUBLISH' AND blocked_by='MEDIA'"""
+        )
+
+        # RC108 roadmap item: reduce false-negative pressure in the commercial profile
+        # without turning routine B2B/PR into publishable material. Broad/creative lanes
+        # become slightly easier; classic commercial-case requirements stay deliberate.
+        rows = con.execute(
+            """SELECT id,editorial_thresholds_json
+                 FROM channels WHERE editorial_runtime_profile=?""",
+            (str(EditorialRuntimeProfile.COMMERCIAL_EDITORIAL),),
+        ).fetchall()
+        selector_block = (
+            "[RC108_BROAD_THROUGHPUT] Якщо матеріал має правдоподібний широкий людський, consumer, culture, visual, "
+            "surprise або retellable hook, НЕ відхиляй його категорично на channel-fit етапі лише тому, що це бренд/кампанія/"
+            "продукт. У такому разі decision=publish і дай числовим broad/commercial метрикам вирішити value gate. "
+            "Reject залишай для явних exclusions, рутинного B2B/PR без гачка, HR/personnel, звичайних партнерств та сухих trade updates."
+        )
+        for row in rows:
+            try:
+                thresholds = json.loads(str(row["editorial_thresholds_json"] or "{}"))
+            except Exception:
+                thresholds = {}
+            if not isinstance(thresholds, dict):
+                thresholds = {}
+            thresholds.update({
+                "broad_interest_fit": 45,
+                "broad_interest_score": 42,
+                "broad_general_interest": 46,
+                "broad_retellability": 46,
+                "broad_culture_or_surprise": 42,
+                "creative_case_fit": 60,
+                "creative_case_score": 46,
+                "creative_execution": 62,
+                "creative_anchor": 48,
+                "commercial_case_fit": 60,
+                "commercial_case_score": 52,
+                "commercial_transferability": 45,
+                "commercial_anchor": 58,
+            })
+            con.execute(
+                "UPDATE channels SET editorial_thresholds_json=?,updated_at=? WHERE id=?",
+                (json.dumps(thresholds,ensure_ascii=False,separators=(",",":")),stamp,int(row["id"])),
+            )
+            policy = con.execute(
+                "SELECT selector_extra_prompt FROM channel_policies WHERE channel_id=?",
+                (int(row["id"]),),
+            ).fetchone()
+            existing = str(policy["selector_extra_prompt"] or "") if policy else ""
+            if "[RC108_BROAD_THROUGHPUT]" not in existing:
+                combined = (existing + "\n\n" + selector_block).strip() if existing else selector_block
+                con.execute(
+                    "UPDATE channel_policies SET selector_extra_prompt=?,media_policy='optional',updated_at=? WHERE channel_id=?",
+                    (combined,stamp,int(row["id"])),
+                )
+
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key,"1"),
         )
 
     def run_startup_maintenance(self) -> dict[str, int]:
