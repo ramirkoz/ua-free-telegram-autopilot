@@ -81,7 +81,7 @@ def _copy_policy(policy: rc59.ChannelPolicy) -> rc59.ChannelPolicy:
         extra_instructions=str(policy.extra_instructions or ""),
         selector_extra_prompt=str(policy.selector_extra_prompt or ""),
         writer_extra_prompt=str(policy.writer_extra_prompt or ""),
-        media_policy=str(policy.media_policy or rc59.MEDIA_REQUIRED),
+        media_policy=str(policy.media_policy or rc59.MEDIA_OPTIONAL),
         target_min_chars=int(policy.target_min_chars or 300),
         target_max_chars=int(policy.target_max_chars or 750),
         updated_at=str(policy.updated_at or ""),
@@ -141,11 +141,11 @@ def _policy_editor(main: Any, parent: tk.Toplevel, policy: rc59.ChannelPolicy, m
     media_row = ttk.Frame(selection)
     media_row.pack(fill="x", pady=6)
     ttk.Label(media_row, text="Медіа-політика", width=24).pack(side="left")
-    media_var = tk.StringVar(value=policy.media_policy if policy.media_policy in rc59.MEDIA_VALUES else rc59.MEDIA_REQUIRED)
+    media_var = tk.StringVar(value=policy.media_policy if policy.media_policy in rc59.MEDIA_VALUES else rc59.MEDIA_OPTIONAL)
     ttk.Combobox(media_row, textvariable=media_var, state="readonly", values=rc59.MEDIA_VALUES, width=18).pack(side="left")
     ttk.Label(
         media_row,
-        text="required = без медіа не публікувати · preferred = бажано · optional = не вимагати",
+        text="RC108: медіа додається, якщо є; відсутність медіа ніколи не блокує публікацію",
         foreground="#666",
     ).pack(side="left", padx=12)
 
