@@ -101,7 +101,7 @@ class ProductionIngestService(IngestService):
                     beat()
                 if self._cancelled():
                     return
-                self.store.record_source_success(source.id,duration_ms)
+                self.store.record_source_success(source.id,duration_ms,items=len(items),added=source_added)
                 with self.store.connect() as con:
                     con.execute("UPDATE sources SET initialized=1,last_checked_at=?,last_error='' WHERE id=?",(datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),source.id))
                 event("ingest","source collected",channel_id=channel_id,source_id=source.id,source=source.name,items=len(items),added=source_added,duration_ms=duration_ms)
