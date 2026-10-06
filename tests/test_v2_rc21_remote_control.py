@@ -63,10 +63,12 @@ def test_remote_update_workflow_exports_manifest_and_agent_bundle() -> None:
     assert "$env:UPDATE_MANIFEST" in text
 
 
-def test_manifest_allows_github_fallback_and_rejects_bad_drive_hash(tmp_path: Path) -> None:
+def test_manifest_allows_github_fallback_and_rejects_bad_drive_hash(tmp_path: Path, monkeypatch) -> None:
     import hashlib
     import json
+    import telegram_autopilot.v2.advanced_update_coordinator as auc
     from telegram_autopilot.v2.advanced_update_coordinator import AdvancedUpdateCoordinator
+    monkeypatch.setattr(auc, "verify_manifest_signature", lambda data: True)
 
     mirror = tmp_path / "mirror"
     mirror.mkdir()
