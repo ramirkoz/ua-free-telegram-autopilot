@@ -300,6 +300,10 @@ class RuntimeEngine:
         if state.last_expire_monotonic > 0 and now - state.last_expire_monotonic < 60.0:
             return
         state.last_expire_monotonic = now
+        reconciled = self.store.reconcile_nonpending_jobs(channel_id)
+        if reconciled:
+            state.last_job_activity_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+            event("worker", "ghost backlog reconciled", channel_id=channel_id, count=int(reconciled))
         expired = self.store.expire_stale_jobs(channel_id, max_age_hours)
         if expired:
             state.jobs_expired += int(expired)
