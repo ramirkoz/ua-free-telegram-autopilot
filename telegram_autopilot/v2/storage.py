@@ -1290,13 +1290,97 @@ class V2Store:
                    WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
                      AND (a.blocked_by='NONE' OR (a.next_retry_at<>'' AND datetime(a.next_retry_at)<=datetime(?)))
                    ORDER BY
-                     CASE WHEN a.status_detail LIKE 'Погоджено редактором%' THEN 0 ELSE 1 END ASC,
-                     CASE WHEN a.status_detail LIKE 'Погоджено редактором%' THEN datetime(a.ready_at) END ASC,
+                     CASE WHEN EXISTS (
+                       SELECT 1 FROM editorial_actions ea
+                       WHERE ea.article_id=a.id
+                         AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                         AND ea.action IN ('approve','edit','publish_attempt')
+                     ) THEN 0 ELSE 1 END ASC,
+                     CASE WHEN EXISTS (
+                       SELECT 1 FROM editorial_actions ea
+                       WHERE ea.article_id=a.id
+                         AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                         AND ea.action IN ('approve','edit','publish_attempt')
+                     ) THEN datetime(a.ready_at) END ASC,
                      datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,
                      a.id DESC
                    LIMIT ?""",
                 (int(channel_id), stamp, max(1,int(limit))),
             ))
+
+    def reconcile_human_approved_unpublished(self, channel_id: int | None = None) -> dict[str, int]:
+        """Restore operator-owned approvals that were auto-archived before publication."""
+        params: list[Any] = []
+        channel_clause = ""
+        if channel_id is not None:
+            channel_clause = " AND a.channel_id=?"
+            params.append(int(channel_id))
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                f"""SELECT a.id,a.stage,a.decision,a.blocked_by,a.last_error_code
+                      FROM articles a
+                      JOIN editorial_actions ea ON ea.article_id=a.id
+                     WHERE a.stage<>'PUBLISHED'
+                       {channel_clause}
+                       AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                       AND ea.action IN ('approve','edit','publish_attempt')""",
+                tuple(params),
+            ).fetchall()
+            restored=0
+            preserved_blocked=0
+            for row in rows:
+                aid=int(row["id"])
+                stage=str(row["stage"] or "")
+                decision=str(row["decision"] or "")
+                code=str(row["last_error_code"] or "")
+                if code in {"DELIVERY_OUTCOME_UNKNOWN","TELEGRAM_OUTCOME_UNKNOWN"}:
+                    preserved_blocked += 1
+                    continue
+                if stage=="ARCHIVED" or decision=="REJECT":
+                    blocked=str(row["blocked_by"] or "NONE")
+                    keep_block = blocked if blocked in {"MEDIA","QUALITY","TELEGRAM","SOURCE","CONFIG"} else "NONE"
+                    con.execute(
+                        """UPDATE articles SET stage='READY',decision='PUBLISH',blocked_by=?,
+                           reject_reason='',status_detail='Погоджено редактором вручну · RC107 відновлено',
+                           last_error_code=CASE WHEN ?='NONE' THEN '' ELSE last_error_code END,
+                           last_error_detail=CASE WHEN ?='NONE' THEN '' ELSE last_error_detail END,
+                           next_retry_at=CASE WHEN ?='NONE' THEN '' ELSE next_retry_at END,
+                           ready_at=CASE WHEN ready_at='' THEN ? ELSE ready_at END
+                           WHERE id=?""",
+                        (keep_block,keep_block,keep_block,keep_block,now_iso(),aid),
+                    )
+                    restored += 1
+            con.commit()
+        return {"restored":restored,"preserved_unknown_delivery":preserved_blocked,"operator_owned":len(rows)}
+
+    def human_approved_summary(self, channel_id: int) -> dict[str, Any]:
+        with self.connect() as con:
+            rows=con.execute(
+                """SELECT a.id,a.stage,a.decision,a.blocked_by,a.last_error_code,ea.created_at
+                     FROM articles a
+                     JOIN editorial_actions ea ON ea.article_id=a.id
+                    WHERE a.channel_id=? AND a.stage<>'PUBLISHED'
+                      AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                      AND ea.action IN ('approve','edit','publish_attempt')
+                    ORDER BY datetime(ea.created_at) ASC""",
+                (int(channel_id),),
+            ).fetchall()
+        summary={"total_unpublished":len(rows),"ready":0,"media_blocked":0,"quality_blocked":0,"unknown_delivery":0,"other_blocked":0,"oldest_at":""}
+        if rows:
+            summary["oldest_at"]=str(rows[0]["created_at"] or "")
+        for r in rows:
+            if str(r["last_error_code"] or "") in {"DELIVERY_OUTCOME_UNKNOWN","TELEGRAM_OUTCOME_UNKNOWN"}:
+                summary["unknown_delivery"] += 1
+            elif str(r["stage"] or "")=="READY" and str(r["decision"] or "")=="PUBLISH" and str(r["blocked_by"] or "")=="NONE":
+                summary["ready"] += 1
+            elif str(r["blocked_by"] or "")=="MEDIA":
+                summary["media_blocked"] += 1
+            elif str(r["blocked_by"] or "")=="QUALITY":
+                summary["quality_blocked"] += 1
+            else:
+                summary["other_blocked"] += 1
+        return summary
 
     def delivery_journal(self, article_id: int) -> dict[str, Any]:
         with self.connect() as con:
