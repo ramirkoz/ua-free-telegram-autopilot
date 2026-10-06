@@ -370,6 +370,7 @@ class V2Store:
                 self._ensure_rc71_commercial_media_quality_policy(con)
                 self._ensure_rc72_channel_policy_tuning(con)
                 self._ensure_rc108_global_media_and_commercial_tuning(con)
+                self._ensure_rc109_clear_all_media_blockers(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
@@ -966,6 +967,34 @@ class V2Store:
                     (combined,stamp,int(row["id"])),
                 )
 
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key,"1"),
+        )
+
+    @staticmethod
+    def _ensure_rc109_clear_all_media_blockers(con: sqlite3.Connection) -> None:
+        """Carry RC108 media decision through every pre-publication state."""
+        key = "rc109_clear_all_media_blockers_v1"
+        done = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        if done and str(done[0] or "") == "1":
+            return
+        stamp = now_iso()
+        con.execute(
+            """UPDATE articles
+                  SET blocked_by='NONE',
+                      last_error_code=CASE WHEN last_error_code LIKE 'MEDIA_%' OR last_error_code LIKE 'TELEGRAM_VIDEO_%' OR last_error_code='TELEGRAM_MEDIA_REFRESH_REQUIRED' THEN '' ELSE last_error_code END,
+                      last_error_detail=CASE WHEN blocked_by='MEDIA' THEN '' ELSE last_error_detail END,
+                      next_retry_at=CASE WHEN blocked_by='MEDIA' THEN '' ELSE next_retry_at END
+                WHERE stage<>'PUBLISHED' AND blocked_by='MEDIA'"""
+        )
+        con.execute(
+            """UPDATE jobs
+                  SET state='QUEUED',available_at=?,lease_owner='',lease_until='',error_code='',error_detail='',updated_at=?
+                WHERE state='WAITING'
+                  AND (error_code LIKE 'MEDIA_%' OR error_code LIKE 'TELEGRAM_VIDEO_%' OR error_code='TELEGRAM_MEDIA_REFRESH_REQUIRED')""",
+            (stamp,stamp),
+        )
         con.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key,"1"),
