@@ -10,6 +10,7 @@ from typing import Any
 from .loghub import event
 from .safe_update_protocol import SafeUpdateProtocol
 from .update_coordinator import UpdateCoordinator
+from .update_signing import verify_manifest_signature
 
 _RELEASES_URL = "https://api.github.com/repos/ramirkoz/ua-free-telegram-autopilot/releases?per_page=20"
 _VERSION_RE = re.compile(r"^2\.0\.0-rc(?P<rc>[1-9]\d*)$")
@@ -44,6 +45,8 @@ class AdvancedUpdateCoordinator(UpdateCoordinator):
     @staticmethod
     def _approved_manifest(data: Any) -> dict[str, Any] | None:
         if not isinstance(data, dict):
+            return None
+        if not verify_manifest_signature(data):
             return None
         if not (
             bool(data.get("approved_for_auto_update"))
