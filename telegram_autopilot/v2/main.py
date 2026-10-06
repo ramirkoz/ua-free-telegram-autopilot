@@ -18,6 +18,7 @@ from .provider_compat import install_provider_compat
 from .runtime_hardening import HardenedReadyStore as HardenedV2Store, HardenedRuntimeEngine as RuntimeEngine
 from .ui_hardening import FastMainWindow
 from .update_protocol import UpdateProtocol
+from .update_signing import signing_key_available
 from .first_run_import import maybe_import_legacy_data
 from .migration_repair import repair_polling_baseline
 from .commercial_profile_audit import audit_commercial_profiles
@@ -212,10 +213,13 @@ def main() -> int:
                         return
                     if _manual_test_build():
                         event("update", "manual test build: auto-update disabled", version=V2_VERSION)
+                    elif signing_key_available():
+                        update_coordinator.start()
+                        event("update", "RC107 signed-manifest auto-update enabled", version=V2_VERSION)
                     else:
                         event(
                             "update",
-                            "RC99 safety gate: automatic update disabled until signed-manifest verification is deployed",
+                            "RC107 safety gate: auto-update disabled because no trusted Ed25519 public key is configured",
                             level=30,
                             version=V2_VERSION,
                         )
