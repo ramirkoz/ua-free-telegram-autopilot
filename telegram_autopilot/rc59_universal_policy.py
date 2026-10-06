@@ -42,7 +42,7 @@ class ChannelPolicy:
     extra_instructions: str = ""
     selector_extra_prompt: str = ""
     writer_extra_prompt: str = ""
-    media_policy: str = MEDIA_REQUIRED
+    media_policy: str = MEDIA_OPTIONAL
     target_min_chars: int = 300
     target_max_chars: int = 750
     updated_at: str = ""
@@ -56,9 +56,9 @@ class ChannelPolicy:
                 result = getattr(row, key, default)
             return default if result is None else result
 
-        media = str(value("media_policy", MEDIA_REQUIRED) or MEDIA_REQUIRED).strip().casefold()
+        media = str(value("media_policy", MEDIA_OPTIONAL) or MEDIA_OPTIONAL).strip().casefold()
         if media not in MEDIA_VALUES:
-            media = MEDIA_REQUIRED
+            media = MEDIA_OPTIONAL
         minimum = max(120, int(value("target_min_chars", 300) or 300))
         maximum = max(minimum, int(value("target_max_chars", 750) or 750))
         return cls(
