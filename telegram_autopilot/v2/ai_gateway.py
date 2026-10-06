@@ -229,6 +229,24 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
     return ProviderState.UNKNOWN, 0, "task"
 
 
+
+def _rc111_qa_signature(error: Exception) -> str:
+    """Collapse deterministic QA messages into stable failure classes."""
+    low=str(error or "").casefold()
+    if "понад жорсткий ліміт" in low or "надто довго" in low:
+        return "length"
+    if "ai додав число" in low:
+        return "invented_number"
+    if "source-body qa" in low or "атрибуц" in low or "джерело має лишатися тільки у footer" in low:
+        return "source_attribution"
+    if "суцільна стіна" in low or "надто довгий абзац" in low:
+        return "structure"
+    if "неповернув json" in low or "не повернув json" in low or "пошкоджений json" in low:
+        return "json"
+    return ""
+
+
+
 class AIGateway:
     """Modular V2 AI router with provider-aware health and local full fallback."""
 
@@ -601,6 +619,7 @@ class AIGateway:
         attempted: list[str] = []
         failures: list[str] = []
         validation_failures = 0
+        validation_signatures: dict[str, int] = {}
         transport_attempts = 0
         configured: set[str] = set()
         provider_suppressed: set[str] = set()
@@ -659,6 +678,9 @@ class AIGateway:
                         validator(output)
                     except Exception as first_error:
                         validation_failures += 1
+                        signature=_rc111_qa_signature(first_error)
+                        if signature:
+                            validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
                         self._mark_task_failure(provider, runtime_model, first_error)
                         # Local is our last-resort deterministic engine. One bounded
                         # repair turn is cheaper than throwing the article back into
@@ -688,6 +710,17 @@ class AIGateway:
                                 "ai", "candidate rejected by QA", provider=provider, model=runtime_model,
                                 elapsed=round(time.monotonic() - started, 2), detail=str(first_error)[:600],
                             )
+                            # RC111: if two independent reviewed routes hit the same
+                            # deterministic QA class, a third/fourth model is usually
+                            # pure token burn. Stop this gateway cycle and let the
+                            # bounded job retry policy decide whether another cycle is warranted.
+                            if signature and validation_signatures.get(signature,0)>=2:
+                                event(
+                                    "ai","deterministic QA fail-fast",
+                                    purpose=str(purpose or "content"),signature=signature,
+                                    failures=int(validation_signatures.get(signature,0)),
+                                )
+                                break
                             continue
 
                 self._mark_success(provider, slot.model, runtime_model)
