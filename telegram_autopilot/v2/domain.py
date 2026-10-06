@@ -98,13 +98,15 @@ class ChannelPolicy:
     writer_extra_prompt: str = ""
     source_body_attribution_mode: SourceBodyAttributionMode = SourceBodyAttributionMode.FOOTER_ONLY
     source_body_attribution_marker: str = ""
-    media_policy: str = "required"
+    media_policy: str = "optional"
     target_min_chars: int = 300
     target_max_chars: int = 750
 
     def normalized_media_policy(self) -> str:
-        value = str(self.media_policy or "required").strip().casefold()
-        return value if value in {"required", "preferred", "optional"} else "required"
+        # RC108 product decision: media is opportunistic, never a publication gate.
+        # Persisted legacy values remain readable for compatibility, but runtime
+        # publication always degrades safely to text when no valid media is available.
+        return "optional"
 
 
 @dataclass(slots=True)
