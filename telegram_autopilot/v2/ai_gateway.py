@@ -77,6 +77,62 @@ PRODUCTION_SLOTS: tuple[legacy_ai.Slot, ...] = (
     legacy_ai.Slot(9, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
 )
 
+_RC109_COMPLEX_PURPOSES = {
+    "final_editor", "dedupe_adjudication", "research", "deep_review", "complex_rewrite",
+}
+
+_RC109_CHEAP_MODEL_RANK: dict[str, int] = {
+    "gemini-3.5-flash": 10,
+    "qwen/qwen3.8-27b": 20,
+    "openai/gpt-oss-120b": 25,
+    "nvidia/nemotron-3-super-120b-a12b": 30,
+    "@cf/zai-org/glm-4.7-flash": 35,
+    "@cf/nvidia/nemotron-3-120b-a12b": 40,
+    "nvidia/nemotron-3-ultra-550b-a55b": 80,
+    "local-model": 90,
+    "codex-chatgpt": 100,
+}
+
+
+def _rc109_route_slots(slots: Iterable[legacy_ai.Slot], purpose: str) -> list[legacy_ai.Slot]:
+    """Purpose-aware, cost-conscious route order.
+
+    Free/cheap reviewed routes are attempted before expensive reference routes.
+    Ultra remains available, but moves forward only for explicitly complex tasks.
+    This changes ordering only; health/cooldown/QA still decide actual usability.
+    """
+    value = str(purpose or "content").strip().casefold()
+    complex_task = value in _RC109_COMPLEX_PURPOSES
+    short_json = value in {"editorial_selector", "monitoring_selector", "value_gate", "health_probe"}
+
+    def key(slot: legacy_ai.Slot) -> tuple[int, int]:
+        model = str(slot.model or "")
+        rank = int(_RC109_CHEAP_MODEL_RANK.get(model, 60))
+        if complex_task:
+            if model == "nvidia/nemotron-3-super-120b-a12b":
+                rank = 10
+            elif model == "nvidia/nemotron-3-ultra-550b-a55b":
+                rank = 20
+            elif model == "gemini-3.5-flash":
+                rank = 30
+        elif short_json:
+            if model == "gemini-3.5-flash":
+                rank = 10
+            elif model == "qwen/qwen3.8-27b":
+                rank = 15
+            elif model == "nvidia/nemotron-3-super-120b-a12b":
+                rank = 20
+        else:
+            if model == "nvidia/nemotron-3-super-120b-a12b":
+                rank = 10
+            elif model == "gemini-3.5-flash":
+                rank = 20
+            elif model == "openai/gpt-oss-120b":
+                rank = 25
+        return rank, int(getattr(slot, "priority", 999) or 999)
+
+    return sorted(list(slots), key=key)
+
 
 def _cooldown_active(value: str) -> bool:
     if not value:
@@ -546,7 +602,13 @@ class AIGateway:
         # plain text so no provider-specific JSON mode can corrupt the article body.
         json_mode = validator is not None and int(max_output_tokens) <= 260
 
-        for slot in self._runtime_slots(cfg):
+        route_slots = _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
+        event(
+            "ai", "RC109 route planned",
+            purpose=str(purpose or "content"),
+            route=[f"{slot.provider}:{slot.model}" for slot in route_slots],
+        )
+        for slot in route_slots:
             provider = slot.provider
             if allowed is not None and provider not in allowed:
                 continue
