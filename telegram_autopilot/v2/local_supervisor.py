@@ -241,7 +241,11 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             "telegram": self.local_reporter.status(),
         }
         snapshot["local_telegram_report"] = dict(self._local_report_result)
-        try:\n            snapshot["commercial_profile_audit"] = audit_commercial_profiles(self.store)\n        except Exception as exc:\n            snapshot["commercial_profile_audit"] = {"healthy": False, "error": f"{type(exc).__name__}: {exc}"[:500]}\n        transport = dict(snapshot.get("transport") or {})
+        try:
+            snapshot["commercial_profile_audit"] = audit_commercial_profiles(self.store)
+        except Exception as exc:
+            snapshot["commercial_profile_audit"] = {"healthy": False, "error": f"{type(exc).__name__}: {exc}"[:500]}
+        transport = dict(snapshot.get("transport") or {})
         drive_api = self._drive_api.status()
         snapshot["transport"] = {
             **transport,
