@@ -1461,7 +1461,7 @@ class V2Store:
         args: list[Any]=[]
         channel_clause=""
         if channel_id is not None:
-            channel_clause=" AND j.channel_id=?"
+            channel_clause=" AND channel_id=?"
             args.append(int(channel_id))
         with self.transaction() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -2033,7 +2033,7 @@ class V2Store:
                 """INSERT INTO source_health(
                      source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at,
                      success_count,failure_count,zero_result_streak,slow_streak,last_items,last_added
-                   ) VALUES(?,0,?,?,?,?,?,1,0,?,?,?,?,?)
+                   ) VALUES(?,0,?,?,?,?,?,1,0,?,?,?,?)
                    ON CONFLICT(source_id) DO UPDATE SET
                      consecutive_failures=0,cooldown_until=excluded.cooldown_until,last_duration_ms=excluded.last_duration_ms,
                      last_outcome=excluded.last_outcome,last_error='',updated_at=excluded.updated_at,
