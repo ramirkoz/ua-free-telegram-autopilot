@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS channel_policies (
  channel_id INTEGER PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 1,purpose TEXT NOT NULL DEFAULT '',
  audience TEXT NOT NULL DEFAULT '',selection_rules TEXT NOT NULL DEFAULT '',rejection_rules TEXT NOT NULL DEFAULT '',writing_rules TEXT NOT NULL DEFAULT '',
  style_rules TEXT NOT NULL DEFAULT '',positive_examples TEXT NOT NULL DEFAULT '',negative_examples TEXT NOT NULL DEFAULT '',extra_instructions TEXT NOT NULL DEFAULT '',
- selector_extra_prompt TEXT NOT NULL DEFAULT '',writer_extra_prompt TEXT NOT NULL DEFAULT '',source_body_attribution_mode TEXT NOT NULL DEFAULT 'footer_only',source_body_attribution_marker TEXT NOT NULL DEFAULT '',media_policy TEXT NOT NULL DEFAULT 'required',
+ selector_extra_prompt TEXT NOT NULL DEFAULT '',writer_extra_prompt TEXT NOT NULL DEFAULT '',source_body_attribution_mode TEXT NOT NULL DEFAULT 'footer_only',source_body_attribution_marker TEXT NOT NULL DEFAULT '',media_policy TEXT NOT NULL DEFAULT 'optional',
  target_min_chars INTEGER NOT NULL DEFAULT 300,target_max_chars INTEGER NOT NULL DEFAULT 750,updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sources (
@@ -1141,7 +1141,7 @@ class V2Store:
             style_rules=str(_row_get(p,"style_rules","") or ""),positive_examples=str(_row_get(p,"positive_examples","") or ""),negative_examples=str(_row_get(p,"negative_examples","") or ""),
             extra_instructions=str(_row_get(p,"extra_instructions","") or ""),selector_extra_prompt=str(_row_get(p,"selector_extra_prompt","") or ""),writer_extra_prompt=str(_row_get(p,"writer_extra_prompt","") or ""),
             source_body_attribution_mode=SourceBodyAttributionMode(str(_row_get(p,"source_body_attribution_mode","footer_only") or "footer_only")),source_body_attribution_marker=str(_row_get(p,"source_body_attribution_marker","") or ""),
-            media_policy=str(_row_get(p,"media_policy","required") or "required"),target_min_chars=int(_row_get(p,"target_min_chars",300) or 300),target_max_chars=int(_row_get(p,"target_max_chars",750) or 750),
+            media_policy=str(_row_get(p,"media_policy","optional") or "optional"),target_min_chars=int(_row_get(p,"target_min_chars",300) or 300),target_max_chars=int(_row_get(p,"target_max_chars",750) or 750),
         )
         mode=ChannelMode.MONITORING if str(row["channel_mode"]).casefold()=="monitoring" else ChannelMode.EDITORIAL
         try:
