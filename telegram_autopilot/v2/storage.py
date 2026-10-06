@@ -1343,6 +1343,7 @@ class V2Store:
                           WHEN COALESCE(sh.last_outcome,'') IN ('HTTP_403','HTTP_429') THEN 200
                           WHEN COALESCE(sh.last_outcome,'') IN ('TIMEOUT','NETWORK','ERROR') THEN 100
                           WHEN COALESCE(sh.last_outcome,'')='SLOW' THEN 60
+                          WHEN COALESCE(sh.last_outcome,'')='SLOW_EMPTY' THEN 50
                           WHEN COALESCE(sh.last_outcome,'')='EMPTY' THEN 30
                           ELSE 0 END) ASC,
                        s.id ASC""",
@@ -2060,17 +2061,24 @@ class V2Store:
         items=max(0,int(items))
         added=max(0,int(added))
         current=self.source_health(source_id)
-        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if items==0 and added==0 else 0
-        slow_streak=(int(_row_get(current,"slow_streak",0) or 0)+1) if duration>=120000 else 0
+        # RC111 treats "no new material added" as low-yield even when the source
+        # returned already-known items. This is the expensive pattern seen in live
+        # collector telemetry: 20-40 fetched items, zero additions, every 15 minutes.
+        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if added==0 else 0
+        slow_streak=(int(_row_get(current,"slow_streak",0) or 0)+1) if duration>=30000 else 0
         cooldown=""
         outcome="OK"
         if duration>=120000:
             outcome="SLOW"
+            seconds=min(14400,1800*(2**min(3,max(0,slow_streak-1))))
+            cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
+        elif duration>=30000 and added==0:
+            outcome="SLOW_EMPTY"
             seconds=min(7200,1800*(2**min(2,max(0,slow_streak-1))))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        elif zero_streak>=4:
+        elif zero_streak>=3:
             outcome="EMPTY"
-            seconds=min(14400,3600*(2**min(2,zero_streak-4)))
+            seconds=min(10800,2700*(2**min(2,zero_streak-3)))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
         with self.connect() as con:
             con.execute(
