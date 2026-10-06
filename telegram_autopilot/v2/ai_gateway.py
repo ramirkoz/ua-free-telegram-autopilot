@@ -603,11 +603,6 @@ class AIGateway:
         json_mode = validator is not None and int(max_output_tokens) <= 260
 
         route_slots = _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
-        event(
-            "ai", "RC109 route planned",
-            purpose=str(purpose or "content"),
-            route=[f"{slot.provider}:{slot.model}" for slot in route_slots],
-        )
         for slot in route_slots:
             provider = slot.provider
             if allowed is not None and provider not in allowed:
