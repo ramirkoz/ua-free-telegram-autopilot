@@ -333,13 +333,37 @@ class SupervisorService:
                 last_source_check = str(con.execute("SELECT COALESCE(MAX(last_checked_at),'') FROM sources WHERE channel_id=? AND enabled=1", (cid,)).fetchone()[0] or "")
                 sources_cooling_down = int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
                     WHERE s.channel_id=? AND s.enabled=1 AND sh.cooldown_until<>'' AND datetime(sh.cooldown_until)>datetime(?)""", (cid, now_value)).fetchone()[0] or 0)
-                health_rows = con.execute("""SELECT s.name,sh.last_duration_ms,sh.consecutive_failures,sh.cooldown_until,sh.last_outcome
+                health_rows = con.execute("""SELECT s.name,sh.last_duration_ms,sh.consecutive_failures,sh.cooldown_until,sh.last_outcome,
+                           sh.last_error,sh.zero_result_streak,sh.slow_streak,sh.success_count,sh.failure_count,sh.last_items,sh.last_added
                     FROM source_health sh JOIN sources s ON s.id=sh.source_id WHERE s.channel_id=? AND s.enabled=1
                     ORDER BY sh.last_duration_ms DESC LIMIT 5""", (cid,)).fetchall()
                 slow_sources = [
-                    {"name": str(r["name"]), "duration_ms": int(r["last_duration_ms"] or 0), "failures": int(r["consecutive_failures"] or 0), "cooldown_until": str(r["cooldown_until"] or ""), "outcome": str(r["last_outcome"] or "")}
+                    {
+                        "name": str(r["name"]),
+                        "duration_ms": int(r["last_duration_ms"] or 0),
+                        "failures": int(r["consecutive_failures"] or 0),
+                        "cooldown_until": str(r["cooldown_until"] or ""),
+                        "outcome": str(r["last_outcome"] or ""),
+                        "zero_result_streak": int(r["zero_result_streak"] or 0),
+                        "slow_streak": int(r["slow_streak"] or 0),
+                        "success_count": int(r["success_count"] or 0),
+                        "failure_count": int(r["failure_count"] or 0),
+                        "last_items": int(r["last_items"] or 0),
+                        "last_added": int(r["last_added"] or 0),
+                        "last_error": str(r["last_error"] or "")[:500],
+                    }
                     for r in health_rows
                 ]
+                source_health_summary = {
+                    "http_403": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='HTTP_403'""",(cid,)).fetchone()[0] or 0),
+                    "rate_limited": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='HTTP_429'""",(cid,)).fetchone()[0] or 0),
+                    "slow": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='SLOW'""",(cid,)).fetchone()[0] or 0),
+                    "empty_streak_4plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=4""",(cid,)).fetchone()[0] or 0),
+                }
                 out[str(cid)] = {
                     "name": str(ch["name"]),
                     "max_age_hours": int(ch["max_age_hours"] or 0),
@@ -380,6 +404,7 @@ class SupervisorService:
                     "recent_source_errors_15m": recent_source_errors,
                     "sources_cooling_down": sources_cooling_down,
                     "slow_sources": slow_sources,
+                    "source_health": source_health_summary,
                     "last_source_check": last_source_check,
                 }
         return out
