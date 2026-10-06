@@ -158,9 +158,11 @@ def _manifest(version: str, sha: str) -> dict[str, object]:
     }
 
 
-def test_manifest_can_request_github_fallback_without_drive_zip(tmp_path: Path) -> None:
+def test_manifest_can_request_github_fallback_without_drive_zip(tmp_path: Path, monkeypatch) -> None:
     sha = "a" * 64
     (tmp_path / "release_manifest.json").write_text(json.dumps(_manifest("2.0.0-rc32", sha)), encoding="utf-8")
+    import telegram_autopilot.v2.advanced_update_coordinator as auc
+    monkeypatch.setattr(auc, "verify_manifest_signature", lambda data: True)
     coordinator = AdvancedUpdateCoordinator.__new__(AdvancedUpdateCoordinator)
     coordinator.supervisor = SimpleNamespace(
         config=SimpleNamespace(mirror_dir=str(tmp_path)),
