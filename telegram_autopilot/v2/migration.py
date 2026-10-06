@@ -217,7 +217,7 @@ def import_legacy_data(legacy_path: str | Path, store: V2Store, *, reevaluate_ho
                         (cid,_bool(p.get("enabled"),True),purpose,str(p.get("audience") or "Україномовна аудиторія каналу."),selection,
                          str(p.get("rejection_rules") or ""),str(p.get("writing_rules") or ""),str(p.get("style_rules") or ""),
                          str(p.get("positive_examples") or ""),str(p.get("negative_examples") or ""),str(p.get("extra_instructions") or ""),
-                         str(p.get("selector_extra_prompt") or ""),str(p.get("writer_extra_prompt") or ""),str(p.get("media_policy") or "required"),
+                         str(p.get("selector_extra_prompt") or ""),str(p.get("writer_extra_prompt") or ""),str(p.get("media_policy") or "optional"),
                          _int(p.get("target_min_chars"),300),_int(p.get("target_max_chars"),750),str(p.get("updated_at") or stamp)),
                     )
                     report.channels_imported += 1
