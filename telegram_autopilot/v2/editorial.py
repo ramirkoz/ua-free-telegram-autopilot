@@ -17,7 +17,7 @@ from ..ukrainian_quality import apply_safe_ukrainian_fixes, final_language_block
 from .ai_gateway import AIGateway, GatewayExhausted
 from .source_attribution import (
     require_source_context, source_body_attribution_issues, source_body_context_name, source_body_instruction,
-    source_body_hard_limit, source_context_name,
+    source_body_hard_limit, source_context_name, strip_forbidden_source_body_attribution,
 )
 from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
 from .loghub import event
@@ -291,6 +291,49 @@ def _source_body_policy_issues(channel: ChannelConfig, article: Any, value: str)
         if redundant:
             issues.append("у тіло повернуто непрактичне посилання на матеріал/джерело, яке дублює footer")
     return tuple(dict.fromkeys(issues))
+
+
+
+def _trim_candidate_to_hard_limit(text: str, hard_max_chars: int, *, min_chars: int=80) -> str:
+    """Deterministically shorten over-limit text without asking another model."""
+    value=" ".join(str(text or "").replace("\r","\n").split()) if "\n" not in str(text or "") else str(text or "").strip()
+    limit=max(80,int(hard_max_chars))
+    if len(value)<=limit:
+        return value
+    window=value[:limit+1].rstrip()
+    # Prefer a complete sentence/paragraph near the limit.
+    candidates=[window.rfind(mark) for mark in (".","!","?","\n")]
+    cut=max(candidates)
+    floor=max(80,int(min_chars)*2//3)
+    if cut>=floor:
+        return window[:cut+1].strip()
+    # Fallback to a word boundary rather than splitting a token.
+    cut=window.rfind(" ")
+    if cut>=floor:
+        return window[:cut].rstrip(" ,;:-")
+    return window[:limit].rstrip(" ,;:-")
+
+
+def _rc111_prepare_candidate(
+    channel: ChannelConfig,
+    article: Any,
+    raw: str,
+    *,
+    hard_max_chars: int,
+    min_chars: int,
+) -> str:
+    """Safe local repairs for deterministic QA failures.
+
+    Only formatting/attribution/length is changed. Facts and numbers are never
+    synthesized or deleted here.
+    """
+    value=str(raw or "").strip()
+    if channel.mode == ChannelMode.MONITORING:
+        value=restore_practical_literals(article,value,hard_max_chars=hard_max_chars)
+        value=strip_non_actionable_article_urls(article,value)
+    value=strip_forbidden_source_body_attribution(channel,article,value)
+    value=_trim_candidate_to_hard_limit(value,hard_max_chars,min_chars=min_chars)
+    return value
 
 
 def validate_writer_output(
@@ -708,11 +751,11 @@ SOURCE:
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def prepared_text(raw: str) -> str:
-            value = str(raw or "").strip()
-            if channel.mode == ChannelMode.MONITORING:
-                value = restore_practical_literals(article, value, hard_max_chars=validation_hard_max)
-                value = strip_non_actionable_article_urls(article, value)
-            return value
+            return _rc111_prepare_candidate(
+                channel, article, raw,
+                hard_max_chars=validation_hard_max,
+                min_chars=effective_min,
+            )
 
         slop_profile = _anti_slop_profile(channel)
 
@@ -789,11 +832,11 @@ SOURCE:
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
-            value = str(raw or "").strip()
-            if channel.mode == ChannelMode.MONITORING:
-                value = restore_practical_literals(article, value, hard_max_chars=final_hard_max)
-                value = strip_non_actionable_article_urls(article, value)
-            return value
+            return _rc111_prepare_candidate(
+                channel, article, raw,
+                hard_max_chars=final_hard_max,
+                min_chars=min_chars,
+            )
 
         slop_profile = _anti_slop_profile(channel)
 
