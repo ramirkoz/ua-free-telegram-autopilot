@@ -189,6 +189,10 @@ def media_required(channel: ChannelConfig) -> bool:
 
 def processing_media_gate(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> tuple[bool, str]:
     raw = build_media_bundle(article)
+    # RC108+ product rule: media integrity is diagnostic/enrichment only. Missing,
+    # stale or not-yet-hydrated media must never prevent text processing/publication.
+    if channel.policy.normalized_media_policy() == "optional":
+        return True, "OK"
     if raw.source_kind == "telegram":
         video_recovery = ""
         video_seen = False
