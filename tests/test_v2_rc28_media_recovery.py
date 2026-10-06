@@ -124,7 +124,7 @@ def test_archived_media_miss_revives_when_source_refresh_gets_media(tmp_path: Pa
     assert job["state"] == "QUEUED"
 
 
-def test_required_media_sweeper_waits_for_refresh_grace(tmp_path: Path) -> None:
+def test_required_media_sweeper_does_not_archive_under_optional_media(tmp_path: Path) -> None:
     store = HardenedV2Store(tmp_path / "v2.sqlite3")
     _seed_monitoring(store)
     aid = store.insert_collected(
@@ -140,16 +140,19 @@ def test_required_media_sweeper_waits_for_refresh_grace(tmp_path: Path) -> None:
     store.update_article(aid, blocked_by="MEDIA", last_error_code="MEDIA_REQUIRED", last_error_detail="waiting")
     with store.connect() as con:
         con.execute("UPDATE jobs SET state='WAITING',error_code='MEDIA_REQUIRED' WHERE article_id=?", (aid,))
+        con.execute("DELETE FROM meta WHERE key='rc109_clear_all_media_blockers_v1'")
+        store._ensure_rc109_clear_all_media_blockers(con)
 
     runtime = ProductionRuntimeEngine(store)
     assert runtime._resolve_confirmed_media_misses() == 0
-    assert store.get_article(aid)["decision"] == "PENDING"
-
-    old = (datetime.now(timezone.utc) - timedelta(minutes=11)).astimezone().isoformat(timespec="seconds")
+    row = store.get_article(aid)
+    assert row["decision"] == "PENDING"
+    assert row["blocked_by"] == "NONE"
+    assert row["last_error_code"] == ""
     with store.connect() as con:
-        con.execute("UPDATE articles SET discovered_at=? WHERE id=?", (old, aid))
-    assert runtime._resolve_confirmed_media_misses() == 1
-    assert store.get_article(aid)["last_error_code"] == "MEDIA_REQUIRED_SKIPPED"
+        job = con.execute("SELECT state,error_code FROM jobs WHERE article_id=?", (aid,)).fetchone()
+    assert job["state"] == "QUEUED"
+    assert job["error_code"] == ""
 
 
 def test_supervisor_detects_media_starvation(tmp_path: Path) -> None:
