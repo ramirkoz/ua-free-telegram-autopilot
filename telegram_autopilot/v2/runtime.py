@@ -55,6 +55,18 @@ class ChannelRuntimeState:
 
 
 
+
+def _rc111_quality_retry_limit(detail: str) -> int:
+    """Maximum completed QUALITY retries after the initial processing attempt."""
+    low=str(detail or "").casefold()
+    if "ai додав число" in low or "не повернув json" in low or "пошкоджений json" in low:
+        return 1
+    if "понад жорсткий ліміт" in low or "source-body qa" in low or "атрибуц" in low:
+        return 1
+    return 2
+
+
+
 def _media_gate_retry_seconds(channel: ChannelConfig, reason: str) -> int:
     """Retry cadence for media gates without channel-name special cases.
 
@@ -373,7 +385,19 @@ class RuntimeEngine:
         except GatewayExhausted as exc:
             blocker = BlockedBy.AI if exc.provider_outage else BlockedBy.QUALITY
             code = "WAITING_AI" if exc.provider_outage else "QUALITY_RETRY"
-            retry = exc.retry_seconds if exc.provider_outage else min(3600, max(180, exc.retry_seconds * (1 + int(job["attempts"] or 0))))
+            attempts=int(job["attempts"] or 0)
+            if not exc.provider_outage and attempts >= _rc111_quality_retry_limit(str(exc)):
+                outcome=self.store.exhaust_quality_job(job_id, detail=str(exc))
+                self._job_activity(state, "completed")
+                if outcome == "REJECTED":
+                    self._job_activity(state, "rejected")
+                event(
+                    "worker","quality retry budget exhausted",level=logging.WARNING,
+                    channel_id=channel_id,article_id=article_id,job_id=job_id,
+                    attempts=attempts,outcome=outcome,detail=str(exc)[:700],
+                )
+                return True
+            retry = exc.retry_seconds if exc.provider_outage else min(3600, max(180, exc.retry_seconds * (1 + attempts)))
             self.store.defer_job(job_id, blocked_by=blocker, error_code=code, detail=str(exc), retry_seconds=retry, count_attempt=not exc.provider_outage)
             self._job_activity(state, "deferred")
             event("worker", "job deferred", channel_id=channel_id, article_id=article_id, blocked_by=str(blocker), code=code, retry_seconds=retry, detail=str(exc)[:700])
