@@ -39,7 +39,7 @@ def test_updater_cannot_race_fresh_runtime_start():
     # automatic update application is not scheduled at all until authenticated
     # manifest verification is deployed. Manual/test update paths remain available.
     assert "app.after(30000, update_coordinator.start)" not in src
-    assert "automatic update disabled until signed-manifest verification is deployed" in src
+    assert "auto-update disabled because no trusted Ed25519 public key is configured" in src
 
 
 def test_windows_single_instance_uses_kernel_mutex_not_portable_file_lock():
