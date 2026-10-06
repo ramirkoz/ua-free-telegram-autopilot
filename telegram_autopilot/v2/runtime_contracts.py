@@ -162,11 +162,19 @@ def _install_recovery_contract() -> None:
     def hardened_maintenance(self):
         stats = original_hardened_maintenance(self)
         stats["terminal_human_rejects_reasserted"] = _enforce_terminal_human_rejects(self)
+        try:
+            stats["human_approvals_reconciled"] = dict(self.reconcile_human_approved_unpublished())
+        except Exception as exc:
+            stats["human_approvals_reconciled"] = {"error": str(exc)[:700]}
         return stats
 
     def recover_nonrequired(self):
         changed = original_recover_nonrequired(self)
         _enforce_terminal_human_rejects(self)
+        try:
+            self.reconcile_human_approved_unpublished()
+        except Exception as exc:
+            event("editorial", "RC107 approval reconciliation failed after media recovery", level=40, detail=str(exc)[:700])
         return changed
 
     HardenedV2Store.run_startup_maintenance = hardened_maintenance
@@ -187,17 +195,15 @@ def _install_supervisor_contract() -> None:
         with self.store.connect() as con:
             for channel_id, raw in list(stats_all.items()):
                 stats = dict(raw or {})
-                row = con.execute(
-                    """SELECT COUNT(*) n,MIN(ea.created_at) oldest
-                       FROM articles a
-                       JOIN editorial_actions ea ON ea.article_id=a.id
-                       WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
-                         AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
-                         AND ea.action IN ('approve','edit','publish_attempt')""",
-                    (int(channel_id),),
-                ).fetchone()
-                stats["human_approved_pending"] = int(row["n"] or 0) if row else 0
-                stats["human_approved_oldest_at"] = str(row["oldest"] or "") if row else ""
+                approval = self.store.human_approved_summary(int(channel_id))
+                stats["human_approved_pending"] = int(approval.get("total_unpublished") or 0)
+                stats["human_approved_oldest_at"] = str(approval.get("oldest_at") or "")
+                stats["human_approved_total_unpublished"] = int(approval.get("total_unpublished") or 0)
+                stats["human_approved_ready"] = int(approval.get("ready") or 0)
+                stats["human_approved_media_blocked"] = int(approval.get("media_blocked") or 0)
+                stats["human_approved_quality_blocked"] = int(approval.get("quality_blocked") or 0)
+                stats["human_approved_unknown_delivery"] = int(approval.get("unknown_delivery") or 0)
+                stats["human_approved_other_blocked"] = int(approval.get("other_blocked") or 0)
                 stats_all[str(channel_id)] = stats
         snapshot["channel_stats"] = stats_all
         return snapshot
@@ -215,7 +221,7 @@ def _install_supervisor_contract() -> None:
                     "WARNING",
                     f"APPROVED_NOT_PUBLISHED_{cid}",
                     f"Погоджений редактором матеріал у «{name}» не опубліковано",
-                    f"human_approved_pending={pending}; oldest_age={int(age)//60} хв; READY blockers={stats.get('ready_blockers') or {}}.",
+                    f"human_approved_pending={pending}; oldest_age={int(age)//60} хв; ready={stats.get('human_approved_ready',0)}; media={stats.get('human_approved_media_blocked',0)}; quality={stats.get('human_approved_quality_blocked',0)}; unknown_delivery={stats.get('human_approved_unknown_delivery',0)}.",
                 ))
         return incidents
 
