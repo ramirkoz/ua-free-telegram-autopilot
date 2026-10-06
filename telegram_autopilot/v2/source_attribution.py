@@ -116,6 +116,44 @@ def source_body_attribution_issues(
     return ()
 
 
+
+def strip_forbidden_source_body_attribution(
+    channel: ChannelConfig, article: Mapping[str, Any] | Any, text: str
+) -> str:
+    """RC111 deterministic cleanup for footer-only source policy.
+
+    This intentionally removes only obvious attribution wrappers/aliases. It does
+    not rewrite substantive sentences or invent replacement wording.
+    """
+    if source_body_attribution_allowed(channel, article):
+        return str(text or "")
+    value=str(text or "")
+    name=clean_source_name(_value(article, "source_name", ""))
+    # Remove leading/generic attribution wrappers that can safely disappear.
+    value=re.sub(
+        r"(?iu)(?:^|(?<=[.!?]\s))\s*(?:за\s+(?:інформацією|даними|матеріалами)\s+[^,.:;]{2,120}[,:]?\s*"
+        r"|(?:джерело|редакція|видання|канал|сторінка)\s+(?:повідомляє|інформує|пише)[,:]?\s*)",
+        "",
+        value,
+    )
+    if name:
+        for alias in _source_aliases(name):
+            escaped=r"\s+".join(re.escape(part) for part in alias.split())
+            # Safe forms: "SOURCE повідомляє/пише/інформує, що ..." and
+            # "за даними SOURCE, ...". Preserve the substantive continuation.
+            value=re.sub(
+                rf"(?iu)(?:^|(?<=[.!?]\s))\s*{escaped}\s+(?:повідомляє|інформує|пише)\s*,?\s*(?:що\s+)?",
+                "",
+                value,
+            )
+            value=re.sub(
+                rf"(?iu)(?:^|(?<=[.!?]\s))\s*за\s+(?:даними|інформацією|матеріалами)\s+{escaped}\s*,?\s*",
+                "",
+                value,
+            )
+    return re.sub(r"[ \t]{2,}", " ", value).strip()
+
+
 def source_footer_label(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> str:
     name = source_context_name(channel, article)
     return f"Читати у «{name}»" if name else ""
