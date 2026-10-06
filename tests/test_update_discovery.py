@@ -66,6 +66,7 @@ def test_github_release_manifest_is_discovered_without_drive(tmp_path: Path, mon
         return releases if url == updater._RELEASES_URL else manifest
 
     monkeypatch.setattr(updater, "_read_json_url", fake_read)
+    monkeypatch.setattr(updater, "verify_manifest_signature", lambda data: True)
     coordinator = _coordinator(tmp_path)
 
     request = coordinator._github_manifest_request()
@@ -98,6 +99,7 @@ def test_unapproved_manifest_is_ignored(tmp_path: Path, monkeypatch) -> None:
         "_read_json_url",
         lambda url, timeout=12: releases if url == updater._RELEASES_URL else manifest,
     )
+    monkeypatch.setattr(updater, "verify_manifest_signature", lambda data: True)
     coordinator = _coordinator(tmp_path)
 
     assert coordinator._github_manifest_request() is None
