@@ -1994,28 +1994,79 @@ class V2Store:
         except Exception:
             return False, until
 
-    def record_source_success(self, source_id: int, duration_ms: int) -> None:
-        stamp = now_iso()
+    def record_source_success(self, source_id: int, duration_ms: int, *, items: int=0, added: int=0) -> None:
+        """Record healthy collection with adaptive cooldown for slow/empty sources."""
+        stamp=now_iso()
+        duration=max(0,int(duration_ms))
+        items=max(0,int(items))
+        added=max(0,int(added))
+        current=self.source_health(source_id)
+        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if items==0 and added==0 else 0
+        slow_streak=(int(_row_get(current,"slow_streak",0) or 0)+1) if duration>=120000 else 0
+        cooldown=""
+        outcome="OK"
+        if duration>=120000:
+            outcome="SLOW"
+            seconds=min(7200,1800*(2**min(2,max(0,slow_streak-1))))
+            cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
+        elif zero_streak>=4:
+            outcome="EMPTY"
+            seconds=min(14400,3600*(2**min(2,zero_streak-4)))
+            cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
         with self.connect() as con:
-            con.execute("""INSERT INTO source_health(source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at)
-                           VALUES(?,0,'',?,'OK','',?)
-                           ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=0,cooldown_until='',last_duration_ms=excluded.last_duration_ms,last_outcome='OK',last_error='',updated_at=excluded.updated_at""",
-                        (int(source_id), max(0,int(duration_ms)), stamp))
+            con.execute(
+                """INSERT INTO source_health(
+                     source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at,
+                     success_count,failure_count,zero_result_streak,slow_streak,last_items,last_added
+                   ) VALUES(?,0,?,?,?,?,?,1,0,?,?,?,?,?)
+                   ON CONFLICT(source_id) DO UPDATE SET
+                     consecutive_failures=0,cooldown_until=excluded.cooldown_until,last_duration_ms=excluded.last_duration_ms,
+                     last_outcome=excluded.last_outcome,last_error='',updated_at=excluded.updated_at,
+                     success_count=source_health.success_count+1,
+                     zero_result_streak=excluded.zero_result_streak,slow_streak=excluded.slow_streak,
+                     last_items=excluded.last_items,last_added=excluded.last_added""",
+                (int(source_id),cooldown,duration,outcome,"",stamp,zero_streak,slow_streak,items,added),
+            )
 
     def record_source_failure(self, source_id: int, duration_ms: int, detail: str) -> tuple[int, str]:
-        current = self.source_health(source_id)
-        failures = int(_row_get(current, "consecutive_failures", 0) or 0) + 1
-        cooldown = ""
-        if failures >= 2:
-            seconds = min(21600, 900 * (2 ** min(5, failures - 2)))
-            cooldown = (datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        stamp = now_iso()
+        current=self.source_health(source_id)
+        failures=int(_row_get(current,"consecutive_failures",0) or 0)+1
+        low=str(detail or "").casefold()
+        # RC110 adapts immediately for deterministic hostile/limited sources, while
+        # transient generic failures still require repetition before a long cooldown.
+        if "403" in low or "відхилив автоматич" in low or "forbidden" in low:
+            kind="HTTP_403"
+            seconds=min(86400,21600*(2**min(2,failures-1)))
+        elif "429" in low or "rate limit" in low or "too many requests" in low:
+            kind="HTTP_429"
+            seconds=min(43200,3600*(2**min(3,failures-1)))
+        elif any(x in low for x in ("timeout","timed out","не заверш","deadline")):
+            kind="TIMEOUT"
+            seconds=min(14400,900*(2**min(4,failures-1)))
+        elif any(x in low for x in ("dns","connection","network","ssl","tls","temporary failure")):
+            kind="NETWORK"
+            seconds=min(7200,600*(2**min(3,failures-1)))
+        else:
+            kind="ERROR"
+            seconds=0 if failures<2 else min(21600,900*(2**min(5,failures-2)))
+        cooldown=""
+        if seconds>0:
+            cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
+        stamp=now_iso()
         with self.connect() as con:
-            con.execute("""INSERT INTO source_health(source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at)
-                           VALUES(?,?,?,?, 'ERROR', ?, ?)
-                           ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,last_duration_ms=excluded.last_duration_ms,last_outcome='ERROR',last_error=excluded.last_error,updated_at=excluded.updated_at""",
-                        (int(source_id), failures, cooldown, max(0,int(duration_ms)), str(detail)[:1200], stamp))
-        return failures, cooldown
+            con.execute(
+                """INSERT INTO source_health(
+                     source_id,consecutive_failures,cooldown_until,last_duration_ms,last_outcome,last_error,updated_at,
+                     success_count,failure_count,zero_result_streak,slow_streak,last_items,last_added
+                   ) VALUES(?,?,?,?,?,?,?,0,1,0,0,0,0)
+                   ON CONFLICT(source_id) DO UPDATE SET
+                     consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,
+                     last_duration_ms=excluded.last_duration_ms,last_outcome=excluded.last_outcome,
+                     last_error=excluded.last_error,updated_at=excluded.updated_at,
+                     failure_count=source_health.failure_count+1""",
+                (int(source_id),failures,cooldown,max(0,int(duration_ms)),kind,str(detail)[:1200],stamp),
+            )
+        return failures,cooldown
 
     def provider_health(self) -> list[ProviderHealth]:
         with self.connect() as con: rows=con.execute("SELECT * FROM provider_health ORDER BY provider").fetchall()
