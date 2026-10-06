@@ -214,7 +214,7 @@ class ReadyBacklogStore(MediaRecoveryStore):
                              SELECT 1 FROM editorial_actions ea
                              WHERE ea.article_id=a.id
                                AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
-                               AND ea.action IN ('approve','edit')
+                               AND ea.action IN ('approve','edit','publish_attempt')
                          )""",
                     (int(channel_id),),
                 ).fetchall()
