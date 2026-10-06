@@ -517,7 +517,14 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
-            return reply.text, reply.model, slot.label
+            return (
+                reply.text,
+                reply.model,
+                slot.label,
+                int(getattr(reply, "input_tokens", 0) or 0),
+                int(getattr(reply, "output_tokens", 0) or 0),
+                int(getattr(reply, "total_tokens", 0) or 0),
+            )
 
         if provider == "local":
             requested = int(max_output_tokens)
