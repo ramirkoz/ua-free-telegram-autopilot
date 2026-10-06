@@ -36,7 +36,7 @@ def test_rc104_human_approved_ready_has_priority(tmp_path) -> None:
                         'auto','2026-10-04T16:55:00+03:00','x','2026-10-04T16:50:00+03:00')""",
             (source_id,),
         )
-        con.execute(
+        cur = con.execute(
             """INSERT INTO articles(
                    channel_id,source_id,external_id,title,source_url,canonical_source_url,
                    raw_text,content_hash,source_published_at,stage,decision,blocked_by,
@@ -46,6 +46,12 @@ def test_rc104_human_approved_ready_has_priority(tmp_path) -> None:
                         'Погоджено редактором вручну','2026-10-04T16:00:00+03:00','x',
                         '2026-10-01T10:00:00+03:00')""",
             (source_id,),
+        )
+        human_id = int(cur.lastrowid)
+        con.execute(
+            """INSERT INTO editorial_actions(article_id,channel_id,action,title,before_text,after_text,detail,created_at)
+               VALUES(?,1,'approve','HUMAN','x','x','','2026-10-04T16:00:00+03:00')""",
+            (human_id,),
         )
 
     rows = store.ready_articles(1, limit=10)
