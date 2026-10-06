@@ -15,6 +15,7 @@ def _gateway() -> AIGateway:
         set_provider_health=lambda *args: None,
         set_ai_model_health=lambda *args: None,
         wake_blocked=lambda *args, **kwargs: 0,
+        record_ai_usage=lambda *args, **kwargs: None,
     )
     return gateway
 
@@ -30,7 +31,7 @@ def test_local_call_is_real_full_writer_fallback(monkeypatch) -> None:
         return "готовий текст", SimpleNamespace(model="qwen3:4b", label="qwen3:4b / Ollama")
 
     monkeypatch.setattr("telegram_autopilot.v2.ai_gateway.generate_local_text", fake_generate_local_text)
-    text, model, _label = gateway._call_slot(slot, cfg, "x" * 9000, max_output_tokens=1100, timeout_seconds=30)
+    text, model, _label, _input, _output, _total = gateway._call_slot(slot, cfg, "x" * 9000, max_output_tokens=1100, timeout_seconds=30)
     assert text == "готовий текст"
     assert model == "qwen3:4b"
     assert captured["max_output_tokens"] == 720
@@ -77,7 +78,7 @@ def test_gateway_uses_local_for_long_form_when_cloud_routes_unavailable(monkeypa
     monkeypatch.setattr(gateway, "_configured", lambda provider, _cfg: provider == "local")
     monkeypatch.setattr(gateway, "_provider_blocked", lambda provider: False)
     monkeypatch.setattr(gateway, "_model_blocked", lambda provider, model: False)
-    monkeypatch.setattr(gateway, "_call_slot", lambda *args, **kwargs: ("локальний повний текст", "qwen3:4b", "local"))
+    monkeypatch.setattr(gateway, "_call_slot", lambda *args, **kwargs: ("локальний повний текст", "qwen3:4b", "local", 0, 0, 0))
     monkeypatch.setattr(gateway, "_mark_success", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         gateway,
@@ -100,7 +101,7 @@ def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:
     def fake_call(slot, _cfg, prompt, *, max_output_tokens, timeout_seconds, json_mode=False):
         captured["budget"] = max_output_tokens
         captured["timeout"] = timeout_seconds
-        return "OK", "qwen3:4b", "qwen3:4b / Ollama"
+        return "OK", "qwen3:4b", "qwen3:4b / Ollama", 0, 0, 0
 
     monkeypatch.setattr(gateway, "_call_slot", fake_call)
     monkeypatch.setattr(gateway, "_mark_success", lambda *args, **kwargs: None)
