@@ -379,7 +379,12 @@ class Publisher:
             return False, "CHANNEL_DISABLED"
         if not channel.publish_24h and not _inside_window(channel.publish_start, channel.publish_end):
             return False, "OUTSIDE_WINDOW"
-        if not _last_gap_ok(self.store.last_published_at(channel_id), channel.min_publish_interval_minutes):
+        # RC110: a durable human approval is editorial intent, not ordinary READY
+        # inventory. Catch-up keeps the configured publication window but reduces
+        # the spacing to one minute so multi-day approved backlogs drain promptly
+        # without dumping a burst of posts in one loop.
+        gap_minutes = 1 if bool(getattr(self, "_rc110_human_catchup", False)) else channel.min_publish_interval_minutes
+        if not _last_gap_ok(self.store.last_published_at(channel_id), gap_minutes):
             return False, "MIN_INTERVAL"
         return True, "OK"
 
@@ -817,22 +822,33 @@ class Publisher:
         for article in self.store.ready_articles(channel_id, limit=max(1, channel.max_posts_per_cycle * 4)):
             if count >= max(1, channel.max_posts_per_cycle):
                 break
-            ok, _ = self.can_publish_now(channel_id)
-            if not ok:
-                break
             article_id = int(article["id"])
+            approved = bool(self.store.is_human_approved_unpublished(article_id))
+            previous_catchup = bool(getattr(self, "_rc110_human_catchup", False))
             try:
-                result = self.publish_one(article_id, heartbeat=heartbeat)
-            except Exception as exc:
-                retry_at = self.store.publication_backoff(
-                    article_id, blocked_by=BlockedBy.TELEGRAM, error_code="PUBLISH_EXCEPTION",
-                    detail=str(exc), retry_seconds=300,
-                )
-                event(
-                    "publish", "publication exception deferred", level=40, channel_id=channel_id,
-                    article_id=article_id, next_retry_at=retry_at, detail=str(exc)[:1000],
-                )
-                continue
+                self._rc110_human_catchup = approved
+                ok, reason = self.can_publish_now(channel_id)
+                if not ok:
+                    if approved:
+                        event(
+                            "editorial", "human-approved catch-up waiting",
+                            channel_id=channel_id, article_id=article_id, reason=reason,
+                        )
+                    break
+                try:
+                    result = self.publish_one(article_id, heartbeat=heartbeat)
+                except Exception as exc:
+                    retry_at = self.store.publication_backoff(
+                        article_id, blocked_by=BlockedBy.TELEGRAM, error_code="PUBLISH_EXCEPTION",
+                        detail=str(exc), retry_seconds=300,
+                    )
+                    event(
+                        "publish", "publication exception deferred", level=40, channel_id=channel_id,
+                        article_id=article_id, next_retry_at=retry_at, detail=str(exc)[:1000],
+                    )
+                    continue
+            finally:
+                self._rc110_human_catchup = previous_catchup
             if result == "PUBLISHED":
                 count += 1
             elif result in {"MIN_INTERVAL", "OUTSIDE_WINDOW"}:
