@@ -1331,8 +1331,23 @@ class V2Store:
             return list(con.execute("SELECT * FROM facebook_reposts WHERE article_id=? ORDER BY page_id",(int(article_id),)))
 
     def sources_for_channel(self, channel_id: int, *, enabled_only: bool=True) -> list[sqlite3.Row]:
-        clause=" AND enabled=1" if enabled_only else ""
-        with self.connect() as con: return list(con.execute(f"SELECT * FROM sources WHERE channel_id=?{clause} ORDER BY priority,id",(int(channel_id),)))
+        clause=" AND s.enabled=1" if enabled_only else ""
+        with self.connect() as con:
+            return list(con.execute(
+                f"""SELECT s.*
+                      FROM sources s
+                      LEFT JOIN source_health sh ON sh.source_id=s.id
+                     WHERE s.channel_id=?{clause}
+                     ORDER BY
+                       (s.priority + CASE
+                          WHEN COALESCE(sh.last_outcome,'') IN ('HTTP_403','HTTP_429') THEN 200
+                          WHEN COALESCE(sh.last_outcome,'') IN ('TIMEOUT','NETWORK','ERROR') THEN 100
+                          WHEN COALESCE(sh.last_outcome,'')='SLOW' THEN 60
+                          WHEN COALESCE(sh.last_outcome,'')='EMPTY' THEN 30
+                          ELSE 0 END) ASC,
+                       s.id ASC""",
+                (int(channel_id),),
+            ))
 
     def source_strip_body_links(self, source_id: int) -> bool:
         with self.connect() as con:
