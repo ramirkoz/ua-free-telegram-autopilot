@@ -19,6 +19,7 @@ from .loghub import event
 from .media_pipeline import build_media_bundle
 from .storage import V2Store, now_iso
 from ..secrets_store import load_secrets
+from .provider_discovery import provider_discovery_snapshot
 
 
 @dataclass(slots=True)
@@ -667,6 +668,7 @@ class SupervisorService:
             "models": list(runtime.get("models") or []),
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "ai_usage": self.store.ai_usage_summary(24),
+            "provider_discovery": provider_discovery_snapshot(),
             "queue": queue,
             "delivery": self.store.delivery_journal_summary(),
             "dedupe_shadow": self._shadow_dedupe_snapshot(),
