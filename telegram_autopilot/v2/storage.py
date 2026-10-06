@@ -1903,6 +1903,50 @@ class V2Store:
             con.execute("UPDATE jobs SET state='WAITING',available_at=?,lease_owner='',lease_until='',attempts=attempts+?,error_code=?,error_detail=?,updated_at=? WHERE id=?",(available,1 if count_attempt else 0,str(error_code)[:120],str(detail)[:2000],stamp,int(job_id)))
             con.execute("UPDATE articles SET blocked_by=?,last_error_code=?,last_error_detail=?,next_retry_at=?,retry_count=retry_count+? WHERE id=?",(str(blocked_by),str(error_code)[:120],str(detail)[:2000],available,1 if count_attempt else 0,int(row["article_id"])))
 
+    def exhaust_quality_job(self, job_id: int, *, detail: str) -> str:
+        """Terminate bounded QUALITY retries without discarding an existing rewrite."""
+        stamp=now_iso()
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row=con.execute(
+                """SELECT j.article_id,a.final_text,a.stage,a.decision
+                     FROM jobs j JOIN articles a ON a.id=j.article_id WHERE j.id=?""",
+                (int(job_id),),
+            ).fetchone()
+            if row is None:
+                con.commit()
+                return "MISSING"
+            aid=int(row["article_id"])
+            final_text=str(row["final_text"] or "").strip()
+            con.execute(
+                """UPDATE jobs SET state='DONE',lease_owner='',lease_until='',
+                           error_code='QUALITY_RETRY_EXHAUSTED',error_detail=?,updated_at=?
+                     WHERE id=?""",
+                (str(detail)[:2000],stamp,int(job_id)),
+            )
+            if final_text:
+                # Preserve the canonical editorial-review invariant.
+                con.execute(
+                    """UPDATE articles SET stage='READY',decision='PUBLISH',blocked_by='QUALITY',
+                           status_detail='QUALITY retry budget exhausted · human review required',
+                           last_error_code='QUALITY_RETRY_EXHAUSTED',last_error_detail=?,next_retry_at=''
+                     WHERE id=?""",
+                    (str(detail)[:2000],aid),
+                )
+                outcome="READY_FOR_REVIEW"
+            else:
+                reason="QUALITY retry budget exhausted: "+str(detail)[:1500]
+                con.execute(
+                    """UPDATE articles SET stage='ARCHIVED',decision='REJECT',blocked_by='NONE',
+                           reject_reason=?,status_detail=?,last_error_code='QUALITY_RETRY_EXHAUSTED',
+                           last_error_detail=?,next_retry_at=''
+                     WHERE id=?""",
+                    (reason[:1800],reason[:1800],str(detail)[:2000],aid),
+                )
+                outcome="REJECTED"
+            con.commit()
+            return outcome
+
     def expire_stale_jobs(self, channel_id:int, max_age_hours:int) -> int:
         """Archive pending work older than the channel maximum age.
 
