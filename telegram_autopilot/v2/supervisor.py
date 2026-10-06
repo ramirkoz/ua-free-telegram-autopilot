@@ -360,9 +360,9 @@ class SupervisorService:
                     "rate_limited": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
                         WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='HTTP_429'""",(cid,)).fetchone()[0] or 0),
                     "slow": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
-                        WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='SLOW'""",(cid,)).fetchone()[0] or 0),
-                    "empty_streak_4plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
-                        WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=4""",(cid,)).fetchone()[0] or 0),
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome IN ('SLOW','SLOW_EMPTY')""",(cid,)).fetchone()[0] or 0),
+                    "empty_streak_3plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=3""",(cid,)).fetchone()[0] or 0),
                 }
                 out[str(cid)] = {
                     "name": str(ch["name"]),
@@ -613,6 +613,27 @@ class SupervisorService:
                           "classification":classification,"attempts":attempts,"next_retry_at":str(row["next_retry_at"] or "")})
         return {"blocked":len(items),"classifications":classes,"items":items[:20]}
 
+    def _quality_efficiency_snapshot(self) -> dict[str, Any]:
+        cutoff=(datetime.fromtimestamp(time.time()-3600,tz=timezone.utc).astimezone().isoformat(timespec="seconds"))
+        with self.store.connect() as con:
+            retries=int(con.execute(
+                "SELECT COUNT(*) FROM jobs WHERE error_code='QUALITY_RETRY' AND updated_at>=?",(cutoff,)
+            ).fetchone()[0] or 0)
+            exhausted=int(con.execute(
+                "SELECT COUNT(*) FROM jobs WHERE error_code='QUALITY_RETRY_EXHAUSTED' AND updated_at>=?",(cutoff,)
+            ).fetchone()[0] or 0)
+            quality_active=int(con.execute(
+                """SELECT COUNT(DISTINCT j.article_id)
+                     FROM jobs j JOIN articles a ON a.id=j.article_id
+                    WHERE j.state IN ('QUEUED','WAITING','LEASED') AND a.blocked_by='QUALITY'"""
+            ).fetchone()[0] or 0)
+        return {
+            "window_minutes":60,
+            "quality_retries":retries,
+            "quality_exhausted":exhausted,
+            "quality_active":quality_active,
+        }
+
     def build_snapshot(self) -> dict[str, Any]:
         runtime = self.runtime.health_snapshot()
         enabled_rows = self.store.list_channels(enabled_only=True)
@@ -694,6 +715,7 @@ class SupervisorService:
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "ai_usage": self.store.ai_usage_summary(24),
             "provider_discovery": provider_discovery_snapshot(),
+            "quality_efficiency": self._quality_efficiency_snapshot(),
             "queue": queue,
             "delivery": self.store.delivery_journal_summary(),
             "dedupe_shadow": self._shadow_dedupe_snapshot(),
