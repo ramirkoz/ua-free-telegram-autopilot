@@ -367,6 +367,38 @@ def _shadow_cluster_score(stats: dict[str, Any]) -> tuple[float, str]:
     return score, confidence
 
 
+def _validated_cluster_same_event(stats: dict[str, Any], *, commercial_profile: bool = False) -> tuple[bool, str]:
+    """RC107 activation lane for only the strongest RC106 shadow candidates."""
+    score, confidence = _shadow_cluster_score(stats)
+    salient = len(stats.get("salient_shared") or ())
+    salient_containment = float(stats.get("salient_containment") or 0.0)
+    entities = set(stats.get("shared_entities") or ())
+    actions = set(stats.get("shared_actions") or ())
+    scientific = set(stats.get("shared_scientific") or ())
+    fact_pairs = (
+        len(stats.get("quantity_pairs") or ())
+        + len(stats.get("duration_pairs") or ())
+        + len(stats.get("numeric_pairs") or ())
+    )
+    threshold = 74.0 if commercial_profile else 70.0
+    if confidence != "high" or score < threshold:
+        return False, ""
+    strong_anchor = (
+        bool(scientific)
+        or (bool(entities) and bool(actions))
+        or (bool(entities) and fact_pairs >= 1)
+    )
+    if not strong_anchor or salient < 6 or salient_containment < 0.45:
+        return False, ""
+    reason = (
+        f"RC107 validated cluster duplicate score={score:.2f}; "
+        f"salient={salient}/{salient_containment:.2f}; "
+        f"entities={','.join(sorted(entities)) or '-'}; "
+        f"actions={','.join(sorted(actions)) or '-'}; facts={fact_pairs}"
+    )
+    return True, reason
+
+
 def event_fingerprint_same_event(
     current: Any,
     candidate: Any,
@@ -699,8 +731,25 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
             )
             if same:
                 return DedupeResult("DUPLICATE", int(candidate["id"]), match_reason)
+            stats = _fingerprint_stats(current, candidate)
+            validated, validated_reason = _validated_cluster_same_event(
+                stats, commercial_profile=commercial_profile
+            )
+            if validated:
+                try:
+                    self._record_shadow_candidates(
+                        current, [candidate], context="prepublish" if published_only else "pre_ai"
+                    )
+                except Exception:
+                    pass
+                event(
+                    "dedupe", "RC107 validated shadow cluster activated",
+                    channel_id=channel_id, article_id=article_id,
+                    candidate_article_id=int(candidate["id"]), reason=validated_reason,
+                    published_only=bool(published_only),
+                )
+                return DedupeResult("DUPLICATE", int(candidate["id"]), validated_reason)
             if published_only:
-                stats = _fingerprint_stats(current, candidate)
                 strength = float(stats["containment"]) * 10.0 + len(stats["shared"]) + 4.0 * len(stats["shared_entities"]) + 8.0 * len(stats["shared_scientific"]) + 1.5 * len(stats["shared_rare"])
                 if strength > best_strength:
                     best_strength = strength
