@@ -65,9 +65,10 @@ def audit_commercial_profiles(store) -> dict[str, Any]:
         if "BROAD_AUDIENCE" not in rejection:
             notes.append("broad_audience_rejection_marker_absent")
 
-        media_policy = str(row["media_policy"] or "").strip().lower()
-        if media_policy not in {"required", "preferred", "optional"}:
+        configured_media_policy = str(row["media_policy"] or "").strip().lower()
+        if configured_media_policy not in {"required", "preferred", "optional"}:
             issues.append("invalid_media_policy")
+        media_policy = "optional"
 
         issue_total += len(issues)
         results.append({
@@ -79,6 +80,7 @@ def audit_commercial_profiles(store) -> dict[str, Any]:
             "media_first_allowed": bool(int(row["media_first_allowed"] or 0)),
             "media_min_text_chars": int(row["media_min_text_chars"] or 0),
             "media_policy": media_policy,
+            "configured_media_policy": configured_media_policy,
             "missing_thresholds": missing_thresholds,
         })
 
