@@ -322,6 +322,16 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
  estimated_openrouter_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_recent ON ai_usage_events(created_at DESC,provider,model);
+CREATE TABLE IF NOT EXISTS editorial_actions(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+ channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+ action TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',
+ before_text TEXT NOT NULL DEFAULT '',after_text TEXT NOT NULL DEFAULT '',
+ detail TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_editorial_actions_channel_time ON editorial_actions(channel_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_editorial_actions_article_id ON editorial_actions(article_id,id DESC);
 CREATE TABLE IF NOT EXISTS audit_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,created_at TEXT NOT NULL,stream TEXT NOT NULL,event TEXT NOT NULL,channel_id INTEGER,article_id INTEGER,
  provider TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '',payload_json TEXT NOT NULL DEFAULT '{}'
