@@ -82,6 +82,33 @@ jobs:
           }
           if (Test-Path (Join-Path $check 'Data')) { throw 'Update contains Data' }
 
+      - name: Sign release manifest
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM }}
+        run: |
+          $ErrorActionPreference='Stop'
+          if (-not $env:UPDATE_SIGNING_PRIVATE_KEY_PEM) { throw 'UPDATE_SIGNING_PRIVATE_KEY_PEM secret is required; unsigned auto-update manifests are forbidden' }
+          python -m pip install --disable-pip-version-check "cryptography>=42,<47"
+          @'
+import base64, json, os
+from pathlib import Path
+from cryptography.hazmat.primitives import serialization
+from telegram_autopilot.v2.update_signing import canonical_manifest_bytes
+
+path = Path(os.environ["UPDATE_MANIFEST"])
+data = json.loads(path.read_text(encoding="utf-8-sig"))
+private = serialization.load_pem_private_key(
+    os.environ["UPDATE_SIGNING_PRIVATE_KEY_PEM"].replace("\\n", "\n").encode("utf-8"),
+    password=None,
+)
+signature = private.sign(canonical_manifest_bytes(data))
+data["signature_algorithm"] = "ed25519"
+data["key_id"] = "autopilot-update-v1"
+data["signature_b64"] = base64.b64encode(signature).decode("ascii")
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+'@ | python -
+
       - name: Validate release manifest
         shell: pwsh
         run: |
@@ -92,6 +119,7 @@ jobs:
           $actual=(Get-FileHash $env:UPDATE_ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($manifest.sha256 -ne $actual) { throw 'Manifest SHA mismatch' }
           if (-not $manifest.approved_for_auto_update -or -not $manifest.ci_passed -or -not $manifest.windows_build_passed) { throw 'Manifest approval flags missing' }
+          if ($manifest.signature_algorithm -ne 'ed25519' -or -not $manifest.signature_b64) { throw 'Manifest signature missing' }
 
       - name: Upload overlay bundle for remote agent
         uses: actions/upload-artifact@v4
