@@ -213,7 +213,10 @@ CREATE INDEX IF NOT EXISTS idx_sources_channel ON sources(channel_id,enabled,pri
 CREATE TABLE IF NOT EXISTS source_health (
  source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,consecutive_failures INTEGER NOT NULL DEFAULT 0,
  cooldown_until TEXT NOT NULL DEFAULT '',last_duration_ms INTEGER NOT NULL DEFAULT 0,last_outcome TEXT NOT NULL DEFAULT '',
- last_error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT ''
+ last_error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT '',
+ success_count INTEGER NOT NULL DEFAULT 0,failure_count INTEGER NOT NULL DEFAULT 0,
+ zero_result_streak INTEGER NOT NULL DEFAULT 0,slow_streak INTEGER NOT NULL DEFAULT 0,
+ last_items INTEGER NOT NULL DEFAULT 0,last_added INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_source_health_cooldown ON source_health(cooldown_until);
 CREATE TABLE IF NOT EXISTS articles (
@@ -371,6 +374,7 @@ class V2Store:
                 self._ensure_rc72_channel_policy_tuning(con)
                 self._ensure_rc108_global_media_and_commercial_tuning(con)
                 self._ensure_rc109_clear_all_media_blockers(con)
+                self._ensure_rc110_source_health_columns(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
@@ -392,6 +396,22 @@ class V2Store:
         for name, ddl in additions.items():
             if name not in columns:
                 con.execute(f"ALTER TABLE channels ADD COLUMN {name} {ddl}")
+
+    @staticmethod
+    def _ensure_rc110_source_health_columns(con: sqlite3.Connection) -> None:
+        """Backfill adaptive source-health telemetry on carried databases."""
+        columns={str(row[1]) for row in con.execute("PRAGMA table_info(source_health)").fetchall()}
+        additions={
+            "success_count":"INTEGER NOT NULL DEFAULT 0",
+            "failure_count":"INTEGER NOT NULL DEFAULT 0",
+            "zero_result_streak":"INTEGER NOT NULL DEFAULT 0",
+            "slow_streak":"INTEGER NOT NULL DEFAULT 0",
+            "last_items":"INTEGER NOT NULL DEFAULT 0",
+            "last_added":"INTEGER NOT NULL DEFAULT 0",
+        }
+        for name,ddl in additions.items():
+            if name not in columns:
+                con.execute(f"ALTER TABLE source_health ADD COLUMN {name} {ddl}")
 
     @staticmethod
     def _ensure_rc85_polling_baseline(con: sqlite3.Connection) -> None:
@@ -1399,6 +1419,53 @@ class V2Store:
         with self.connect() as con:
             row=con.execute("SELECT published_at FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND published_at<>'' ORDER BY datetime(published_at) DESC,id DESC LIMIT 1",(int(channel_id),)).fetchone()
             return str(row[0] or "") if row else ""
+
+    def is_human_approved_unpublished(self, article_id: int) -> bool:
+        """True only when the latest durable human action still owns the article."""
+        with self.connect() as con:
+            row=con.execute(
+                """SELECT a.stage,ea.action
+                     FROM articles a
+                     LEFT JOIN editorial_actions ea ON ea.article_id=a.id
+                      AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
+                    WHERE a.id=?""",
+                (int(article_id),),
+            ).fetchone()
+        if row is None or str(row["stage"] or "")=="PUBLISHED":
+            return False
+        return str(row["action"] or "").strip().casefold() in {"approve","edit","publish_now","publish_attempt"}
+
+    def reconcile_nonpending_jobs(self, channel_id: int | None = None) -> int:
+        """Close ghost processing jobs that can no longer be leased.
+
+        READY/PUBLISHED/REJECT/DUPLICATE rows are not processable by claim_job(), so
+        leaving their old QUEUED/WAITING/LEASED rows alive pollutes due/backlog
+        telemetry forever. This cleanup never touches PENDING work.
+        """
+        stamp=now_iso()
+        args: list[Any]=[]
+        channel_clause=""
+        if channel_id is not None:
+            channel_clause=" AND j.channel_id=?"
+            args.append(int(channel_id))
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            cur=con.execute(
+                f"""UPDATE jobs
+                       SET state='DONE',lease_owner='',lease_until='',
+                           error_code=CASE WHEN error_code='' THEN 'RC110_NONPENDING_RECONCILED' ELSE error_code END,
+                           error_detail=CASE WHEN error_detail='' THEN 'Job closed because article is no longer PENDING' ELSE error_detail END,
+                           updated_at=?
+                     WHERE state IN ('QUEUED','WAITING','LEASED')
+                       {channel_clause}
+                       AND article_id IN (
+                           SELECT id FROM articles
+                            WHERE decision<>'PENDING' OR stage IN ('READY','PUBLISHED','ARCHIVED','DEDUPED')
+                       )""",
+                (stamp,*args),
+            )
+            con.commit()
+            return int(cur.rowcount or 0)
 
     def ready_articles(self, channel_id: int, limit: int=100) -> list[sqlite3.Row]:
         """Return publishable READY rows without retry-storming blocked articles.
