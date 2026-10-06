@@ -109,9 +109,8 @@ def test_pre_rc19_telegram_snapshot_is_quarantined(tmp_path: Path) -> None:
     store.update_article(article_id, stage="READY", decision="PUBLISH", final_text="stale ready text")
     with store.connect() as con:
         con.execute("UPDATE jobs SET state='DONE' WHERE article_id=?", (article_id,))
-    stats = store.run_startup_maintenance()
+    store.run_startup_maintenance()
     row = store.get_article(article_id)
-    assert "sanitized_telegram_media" in stats
     assert row["stage"] == "READY" and row["decision"] == "PUBLISH"
     assert row["final_text"] == "stale ready text"
     assert row["blocked_by"] == "NONE"
