@@ -1614,20 +1614,39 @@ class V2Store:
                      FROM ai_usage_events WHERE datetime(created_at)>=datetime('now',?)
                      GROUP BY provider,model ORDER BY total_tokens DESC""", (f'-{hours} hours',),
             ).fetchall()
+            purpose_rows=con.execute(
+                """SELECT purpose,COUNT(*) calls,SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,
+                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd
+                     FROM ai_usage_events WHERE datetime(created_at)>=datetime('now',?)
+                     GROUP BY purpose ORDER BY total_tokens DESC""", (f'-{hours} hours',),
+            ).fetchall()
         items=[{
             'provider':str(r['provider']),'model':str(r['model']),'calls':int(r['calls'] or 0),
             'input_tokens':int(r['input_tokens'] or 0),'output_tokens':int(r['output_tokens'] or 0),'total_tokens':int(r['total_tokens'] or 0),
             'estimated_openrouter_usd':round(float(r['estimated_openrouter_usd'] or 0.0),6),
         } for r in rows]
+        purposes=[{
+            'purpose':str(r['purpose'] or 'content'),
+            'calls':int(r['calls'] or 0),
+            'input_tokens':int(r['input_tokens'] or 0),
+            'output_tokens':int(r['output_tokens'] or 0),
+            'total_tokens':int(r['total_tokens'] or 0),
+            'estimated_openrouter_usd':round(float(r['estimated_openrouter_usd'] or 0.0),6),
+        } for r in purpose_rows]
+        total_cost=round(sum(x['estimated_openrouter_usd'] for x in items),6)
+        ultra_cost=round(sum(x['estimated_openrouter_usd'] for x in items if 'ultra' in x['model'].casefold()),6)
         return {
             'window_hours':hours,
             'calls':sum(x['calls'] for x in items),
             'input_tokens':sum(x['input_tokens'] for x in items),
             'output_tokens':sum(x['output_tokens'] for x in items),
             'total_tokens':sum(x['total_tokens'] for x in items),
-            'estimated_openrouter_usd':round(sum(x['estimated_openrouter_usd'] for x in items),6),
+            'estimated_openrouter_usd':total_cost,
+            'ultra_reference_usd':ultra_cost,
+            'ultra_reference_share':round((ultra_cost/total_cost),4) if total_cost>0 else 0.0,
             'by_model':items,
-            'pricing_snapshot':'rc106-2026-10-05-reference',
+            'by_purpose':purposes,
+            'pricing_snapshot':'rc109-2026-10-06-reference',
         }
 
     def publication_backoff(
