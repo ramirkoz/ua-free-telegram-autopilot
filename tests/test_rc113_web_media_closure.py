@@ -31,9 +31,9 @@ def test_rc113_recovers_article_bound_page_hero_outside_article() -> None:
         html,
         "https://www.fastcompany.com/91617559/new-research-3-word-phrases-that-sound-like-ai-generated-writing-chatgpt",
     )
-    assert out.media_urls == ["image|https://cdn.example.com/ai-writing-research.jpg"]
+    assert out.media_urls == ["https://cdn.example.com/ai-writing-research.jpg"]
     layout = json.loads(out.layout_json)
-    assert layout["featured"] == "image|https://cdn.example.com/ai-writing-research.jpg"
+    assert layout["featured"] == "https://cdn.example.com/ai-writing-research.jpg"
     assert layout["featured_meta"]["provenance"] == "page_hero"
     assert layout["media_diagnostics"]["page_image_candidates"] == 1
     assert layout["media_diagnostics"]["selected_provenance"] == "page_hero"
@@ -82,6 +82,6 @@ def test_rc113_explicit_hero_wrapper_can_recover_weak_alt() -> None:
     </html>
     """
     out = extract_article_content(html, "https://example.com/stone-jackets-slate-clothing")
-    assert out.media_urls == ["image|https://cdn.example.com/hero-3918.jpg"]
+    assert out.media_urls == ["https://cdn.example.com/hero-3918.jpg"]
     layout = json.loads(out.layout_json)
     assert layout["featured_meta"]["provenance"] == "page_hero"
