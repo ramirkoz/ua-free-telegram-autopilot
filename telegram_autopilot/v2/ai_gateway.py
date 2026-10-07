@@ -772,8 +772,9 @@ class AIGateway:
                     provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
                     input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0), total_tokens=int(total_tokens or 0),
                     estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
+                    actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )
-                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0))
+                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0), float(actual_cost or 0.0))
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
