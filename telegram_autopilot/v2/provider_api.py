@@ -31,6 +31,7 @@ _ALLOWED_HOSTS = {
     "api.groq.com",
     "api.cloudflare.com",
     "generativelanguage.googleapis.com",
+    "openrouter.ai",
 }
 
 _SYSTEM_GUARD = (
@@ -49,6 +50,7 @@ _HOST_MIN_INTERVAL_SECONDS = {
     "generativelanguage.googleapis.com": 3.10,
     "integrate.api.nvidia.com": 1.00,
     "api.cloudflare.com": 0.75,
+    "openrouter.ai": 1.00,
 }
 _HOST_PACE_LOCKS = {host: threading.Lock() for host in _ALLOWED_HOSTS}
 _HOST_LAST_START: dict[str, float] = {}
@@ -77,6 +79,7 @@ class ProviderReply:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    actual_cost_usd: float = 0.0
 
 
 def _retry_after(headers: Mapping[str, str]) -> int | None:
@@ -362,6 +365,8 @@ def openai_compatible_chat(
         if not account:
             raise ProviderAPIError("Cloudflare account id is missing", kind="configuration")
         url = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/chat/completions"
+    elif name == "openrouter":
+        url = "https://openrouter.ai/api/v1/chat/completions"
     else:
         raise ProviderAPIError(f"Unsupported OpenAI-compatible provider: {provider}", kind="configuration")
     if not str(api_key or "").strip():
@@ -410,6 +415,10 @@ def openai_compatible_chat(
             else:
                 payload["max_tokens"] = active_budget
 
+            if name == "openrouter":
+                payload["usage"] = {"include": True}
+                if json_mode:
+                    payload["response_format"] = {"type": "json_object"}
             if name == "groq":
                 if "gpt-oss" in active_model.casefold():
                     payload["reasoning_effort"] = "none" if json_mode else "low"
@@ -431,7 +440,10 @@ def openai_compatible_chat(
             try:
                 _status, _headers, response = _request_json(
                     url,
-                    headers={"Authorization": f"Bearer {str(api_key).strip()}"},
+                    headers={
+                        "Authorization": f"Bearer {str(api_key).strip()}",
+                        **({"HTTP-Referer": "https://github.com/ramirkoz/ua-free-telegram-autopilot", "X-Title": "UA FREE Telegram Autopilot"} if name == "openrouter" else {}),
+                    },
                     payload=payload,
                     timeout_seconds=timeout_seconds,
                 )
@@ -441,6 +453,12 @@ def openai_compatible_chat(
                 input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
                 output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
                 total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+                actual_cost_usd = 0.0
+                if name == "openrouter":
+                    try:
+                        actual_cost_usd = max(0.0, float(usage.get("cost") or response.get("cost") or 0.0))
+                    except (TypeError, ValueError):
+                        actual_cost_usd = 0.0
                 return ProviderReply(
                     text=text,
                     model=runtime_model or active_model,
@@ -450,6 +468,7 @@ def openai_compatible_chat(
                         else ("HTTP completion OK" if active_model == str(model) else f"HTTP completion OK via fallback {active_model}")
                     ),
                     input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
+                    actual_cost_usd=actual_cost_usd,
                 )
             except ProviderAPIError as exc:
                 last_error = exc

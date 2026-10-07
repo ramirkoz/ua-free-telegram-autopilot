@@ -29,6 +29,7 @@ class AIResult:
     output_tokens: int = 0
     total_tokens: int = 0
     estimated_openrouter_usd: float = 0.0
+    actual_openrouter_usd: float = 0.0
 
 
 class GatewayExhausted(RuntimeError):
@@ -129,6 +130,8 @@ def _rc109_route_slots(slots: Iterable[legacy_ai.Slot], purpose: str) -> list[le
                 rank = 20
             elif model == "openai/gpt-oss-120b":
                 rank = 25
+        if str(slot.provider or "").casefold() == "openrouter":
+            rank = 55
         return rank, int(getattr(slot, "priority", 999) or 999)
 
     return sorted(list(slots), key=key)
@@ -250,7 +253,7 @@ def _rc111_qa_signature(error: Exception) -> str:
 class AIGateway:
     """Modular V2 AI router with provider-aware health and local full fallback."""
 
-    PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+    PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
     LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     LOCAL_LONG_MAX_OUTPUT = 720
     _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}
@@ -286,17 +289,47 @@ class AIGateway:
             return bool(cfg.groq_api_key)
         if provider == "cloudflare":
             return bool(cfg.cloudflare_account_id and cfg.cloudflare_api_token)
+        if provider == "openrouter":
+            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", "") and list(getattr(cfg, "openrouter_models", []) or []))
         if provider == "local":
             return bool(cfg.local_enabled)
         return False
 
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
-        del cfg
-        return list(PRODUCTION_SLOTS)
+        slots = list(PRODUCTION_SLOTS)
+        if bool(getattr(cfg, "openrouter_enabled", False)) and str(getattr(cfg, "openrouter_api_key", "") or "").strip():
+            for index, model in enumerate(list(getattr(cfg, "openrouter_models", []) or [])[:12], start=1):
+                model_id = str(model or "").strip()
+                if not model_id:
+                    continue
+                slots.append(legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter"))
+        return slots
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
         return [slot for slot in self._runtime_slots(cfg) if slot.provider == provider]
 
+    def _openrouter_budget_status(self, cfg) -> tuple[bool, str]:
+        daily=max(0.0,float(getattr(cfg,"openrouter_daily_budget_usd",0.0) or 0.0))
+        monthly=max(0.0,float(getattr(cfg,"openrouter_monthly_budget_usd",0.0) or 0.0))
+        spent_24h=self.store.openrouter_spend_usd(hours=24)
+        spent_month=self.store.openrouter_spend_usd(month=True)
+        if daily > 0 and spent_24h >= daily:
+            return False, f"24h budget exhausted: ${spent_24h:.4f}/${daily:.4f}"
+        if monthly > 0 and spent_month >= monthly:
+            return False, f"monthly budget exhausted: ${spent_month:.4f}/${monthly:.4f}"
+        return True, f"24h ${spent_24h:.4f}/${daily:.4f} · month ${spent_month:.4f}/${monthly:.4f}"
+
+    def _mark_openrouter_budget_block(self, cfg) -> None:
+        ok, detail=self._openrouter_budget_status(cfg)
+        if ok:
+            return
+        health=self._health_map().get("openrouter", ProviderHealth(provider="openrouter"))
+        health.state=ProviderState.QUOTA
+        health.detail=detail
+        health.cooldown_until=_until(300)
+        health.updated_at=now_iso()
+        self.store.set_provider_health(health)
+        event("ai","OpenRouter budget blocked",provider="openrouter",detail=detail)
     def _provider_blocked(self, provider: str) -> bool:
         current = self._health_map().get(provider)
         return bool(
@@ -391,6 +424,16 @@ class AIGateway:
             current.updated_at = now_iso()
             self.store.set_provider_health(current)
             return current
+        if provider == "openrouter":
+            budget_ok, budget_detail = self._openrouter_budget_status(cfg)
+            if not budget_ok:
+                current.state = ProviderState.QUOTA
+                current.model = ""
+                current.detail = budget_detail
+                current.cooldown_until = _until(300)
+                current.updated_at = now_iso()
+                self.store.set_provider_health(current)
+                return current
 
         models = {slot.model for slot in self._provider_slots(provider, cfg)}
         rows = [item for item in self.store.ai_model_health(provider) if item.model in models]
@@ -485,6 +528,19 @@ class AIGateway:
             self.store.set_provider_health(health)
         return state, scope
 
+    def _set_last_actual_cost(self, value: float) -> None:
+        ctx = getattr(self, "_openrouter_cost_context", None)
+        if ctx is None:
+            ctx = threading.local()
+            self._openrouter_cost_context = ctx
+        ctx.value = max(0.0, float(value or 0.0))
+
+    def _consume_last_actual_cost(self) -> float:
+        ctx = getattr(self, "_openrouter_cost_context", None)
+        value = max(0.0, float(getattr(ctx, "value", 0.0) or 0.0)) if ctx is not None else 0.0
+        if ctx is not None:
+            ctx.value = 0.0
+        return value
     def _call_slot(
         self,
         slot: legacy_ai.Slot,
@@ -496,6 +552,7 @@ class AIGateway:
         json_mode: bool = False,
     ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
+        self._set_last_actual_cost(0.0)
         if provider == "codex":
             try:
                 return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0
@@ -519,11 +576,12 @@ class AIGateway:
             )
             return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens
 
-        if provider in {"nvidia", "groq", "cloudflare"}:
+        if provider in {"nvidia", "groq", "cloudflare", "openrouter"}:
             key = {
                 "nvidia": cfg.nvidia_api_key,
                 "groq": cfg.groq_api_key,
                 "cloudflare": cfg.cloudflare_api_token,
+                "openrouter": getattr(cfg, "openrouter_api_" + "key", ""),
             }[provider]
             reply = openai_compatible_chat(
                 provider,
@@ -535,6 +593,7 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
+            self._set_last_actual_cost(float(getattr(reply, "actual_cost_usd", 0.0) or 0.0))
             return (
                 reply.text,
                 reply.model,
@@ -636,6 +695,11 @@ class AIGateway:
             if not self._configured(provider, cfg):
                 continue
             configured.add(provider)
+            if provider == "openrouter":
+                budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
+                if not budget_ok:
+                    self._mark_openrouter_budget_block(cfg)
+                    continue
             if provider in provider_suppressed or self._provider_blocked(provider):
                 continue
             if self._model_blocked(provider, slot.model):
@@ -661,12 +725,14 @@ class AIGateway:
                         timeout_seconds=timeout_seconds,
                         json_mode=json_mode,
                     )
+                    actual_cost = self._consume_last_actual_cost()
                     transport_attempts += 1
                     estimated_cost = _openrouter_reference_cost(runtime_model, input_tokens, output_tokens)
                     self.store.record_ai_usage(
                         provider=provider, model=runtime_model, purpose=str(purpose or "content"),
                         input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
                         estimated_openrouter_usd=estimated_cost,
+                        actual_openrouter_usd=actual_cost,
                     )
                 finally:
                     lock.release()
@@ -731,8 +797,9 @@ class AIGateway:
                     provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
                     input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0), total_tokens=int(total_tokens or 0),
                     estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
+                    actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )
-                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0))
+                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0), float(actual_cost or 0.0))
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
@@ -773,6 +840,11 @@ class AIGateway:
     def _probe_provider(self, provider: str, cfg) -> ProviderHealth:
         if not self._configured(provider, cfg):
             return self._refresh_provider_summary(provider, cfg)
+        if provider == "openrouter":
+            budget_ok, _detail = self._openrouter_budget_status(cfg)
+            if not budget_ok:
+                self._mark_openrouter_budget_block(cfg)
+                return self._refresh_provider_summary(provider, cfg)
 
         # Probes intentionally ignore stale model cooldowns. An upgrade/restart is a
         # legitimate opportunity to prove a token/network/model recovered and clear
@@ -793,10 +865,12 @@ class AIGateway:
                         timeout_seconds=90 if provider == "local" else 20,
                         json_mode=False,
                     )
+                    actual_cost = self._consume_last_actual_cost()
                     self.store.record_ai_usage(
                         provider=provider, model=runtime_model, purpose="health_probe",
                         input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
                         estimated_openrouter_usd=_openrouter_reference_cost(runtime_model, input_tokens, output_tokens),
+                        actual_openrouter_usd=actual_cost,
                     )
                 finally:
                     lock.release()
@@ -819,6 +893,11 @@ class AIGateway:
                 continue
         return self._refresh_provider_summary(provider, cfg)
 
+    def probe_provider(self, provider: str) -> ProviderHealth:
+        name = str(provider or "").strip().casefold()
+        if name not in self.PROVIDER_ORDER:
+            raise ValueError(f"Unknown AI provider: {provider}")
+        return self._probe_provider(name, load_secrets())
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
         by_provider: dict[str, ProviderHealth] = {}

@@ -667,15 +667,42 @@ class MainWindow(tk.Tk):
 
     def _build_ai(self):
         panel = self.tabs["ai"]
+        try:
+            _ai_cfg = load_secrets()
+        except Exception:
+            _ai_cfg = None
+
+        openrouter_box = ttk.LabelFrame(panel, text="OpenRouter", padding=8)
+        openrouter_box.pack(fill="x", padx=8, pady=(8, 4))
+        self.openrouter_enabled_var = tk.BooleanVar(value=bool(getattr(_ai_cfg, "openrouter_enabled", False)))
+        self.openrouter_key_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_api_key", "") or ""))
+        self.openrouter_models_var = tk.StringVar(value=", ".join(list(getattr(_ai_cfg, "openrouter_models", []) or [])))
+        self.openrouter_daily_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_daily_budget_usd", 1.0) or 0.0))
+        self.openrouter_monthly_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_monthly_budget_usd", 10.0) or 0.0))
+        self.openrouter_status_var = tk.StringVar(value="OpenRouter: очікує перевірки")
+        ttk.Checkbutton(openrouter_box, text="Увімкнути OpenRouter у AI Router", variable=self.openrouter_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ttk.Label(openrouter_box, text="API key").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_key_var, show="•", width=78).grid(row=1, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Дозволені моделі").grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_models_var, width=95).grid(row=2, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Через кому. У production потрапляють тільки ці перевірені model ID; каталог сам нічого не вмикає.", foreground="#555").grid(row=3, column=1, columnspan=3, sticky="w", padx=6, pady=(0, 4))
+        ttk.Label(openrouter_box, text="Ліміт 24 год, $").grid(row=4, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_daily_budget_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Ліміт місяць, $").grid(row=4, column=2, sticky="w", padx=12, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_monthly_budget_var, width=12).grid(row=4, column=3, sticky="w", padx=6, pady=4)
+        or_bar = ttk.Frame(openrouter_box)
+        or_bar.grid(row=5, column=0, columnspan=4, sticky="w", padx=4, pady=(6, 4))
+        ttk.Button(or_bar, text="Зберегти OpenRouter", command=self.save_openrouter_settings).pack(side="left")
+        ttk.Button(or_bar, text="Перевірити OpenRouter", command=self.test_openrouter).pack(side="left", padx=6)
+        ttk.Label(openrouter_box, textvariable=self.openrouter_status_var, foreground="#555").grid(row=6, column=0, columnspan=4, sticky="w", padx=4, pady=(4, 0))
+        openrouter_box.columnconfigure(1, weight=1)
+        self._update_openrouter_status()
+
         codex_box = ttk.LabelFrame(panel, text="Codex / ChatGPT", padding=8)
         codex_box.pack(fill="x", padx=8, pady=(8, 4))
         self.codex_status = tk.StringVar(value="Стан Codex: не перевірявся")
         self.codex_route_status = tk.StringVar(value="У маршрутизації AI: ВИМКНЕНО")
-        try:
-            _ai_cfg = load_secrets()
-            _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False))
-        except Exception:
-            _codex_enabled = False
+        _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False)) if _ai_cfg is not None else False
         self.codex_enabled_var = tk.BooleanVar(value=_codex_enabled)
         ttk.Checkbutton(
             codex_box, text="Дозволити автоматичне використання Codex у AI Router",
@@ -1514,6 +1541,77 @@ class MainWindow(tk.Tk):
                 "У маршрутизації AI: УВІМКНЕНО" if enabled else "У маршрутизації AI: ВИМКНЕНО"
             )
 
+    def _update_openrouter_status(self) -> None:
+        if not hasattr(self, "openrouter_status_var"):
+            return
+        try:
+            cfg = load_secrets()
+            enabled = bool(getattr(cfg, "openrouter_enabled", False))
+            models = list(getattr(cfg, "openrouter_models", []) or [])
+            spend_24h = self.store.openrouter_spend_usd(hours=24)
+            spend_month = self.store.openrouter_spend_usd(month=True)
+            daily = float(getattr(cfg, "openrouter_daily_budget_usd", 0.0) or 0.0)
+            monthly = float(getattr(cfg, "openrouter_monthly_budget_usd", 0.0) or 0.0)
+            state = "УВІМКНЕНО" if enabled else "ВИМКНЕНО"
+            self.openrouter_status_var.set(
+                f"OpenRouter: {state} · моделей {len(models)} · 24h ${spend_24h:.4f}/${daily:.4f} · "
+                f"місяць ${spend_month:.4f}/${monthly:.4f}"
+            )
+        except Exception as exc:
+            self.openrouter_status_var.set(f"OpenRouter: помилка стану — {exc}")
+
+    def save_openrouter_settings(self, *, quiet: bool = False) -> None:
+        try:
+            models = [
+                item.strip()
+                for item in str(self.openrouter_models_var.get() or "").replace("\n", ",").split(",")
+                if item.strip()
+            ]
+            daily = max(0.0, float(str(self.openrouter_daily_budget_var.get() or "0").replace(",", ".")))
+            monthly = max(0.0, float(str(self.openrouter_monthly_budget_var.get() or "0").replace(",", ".")))
+            enabled = bool(self.openrouter_enabled_var.get())
+            key = str(self.openrouter_key_var.get() or "").strip()
+            if enabled and not key:
+                raise ValueError("Для увімкненого OpenRouter потрібен API key")
+            if enabled and not models:
+                raise ValueError("Для увімкненого OpenRouter вкажіть хоча б один model ID")
+            cfg = load_secrets()
+            cfg.openrouter_enabled = enabled
+            cfg.openrouter_api_key = key
+            cfg.openrouter_models = models[:12]
+            cfg.openrouter_daily_budget_usd = daily
+            cfg.openrouter_monthly_budget_usd = monthly
+            save_secrets(cfg)
+            self._update_openrouter_status()
+            self.refresh_ai()
+            self.refresh_home()
+            if not quiet:
+                self.status.set("OpenRouter налаштування збережено.")
+        except Exception as exc:
+            if quiet:
+                raise
+            messagebox.showerror("OpenRouter", str(exc), parent=self)
+
+    def test_openrouter(self) -> None:
+        try:
+            self.save_openrouter_settings(quiet=True)
+        except Exception as exc:
+            messagebox.showerror("OpenRouter", str(exc), parent=self)
+            return
+        self.openrouter_status_var.set("OpenRouter: виконую живий health probe…")
+
+        def work() -> None:
+            try:
+                health = self.runtime.gateway.probe_provider("openrouter")
+                msg = (
+                    f"OpenRouter: {PROVIDER_UA.get(str(health.state), str(health.state))} · "
+                    f"{health.model or 'без активної моделі'} · {health.detail}"
+                )
+            except Exception as exc:
+                msg = f"OpenRouter: тест не пройдено — {exc}"
+            self.after(0, lambda: (self.openrouter_status_var.set(msg), self.refresh_ai(), self.refresh_home()))
+
+        threading.Thread(target=work, daemon=True, name="V2-OpenRouter-Test").start()
     def save_codex_preference(self):
         try:
             cfg = load_secrets()
@@ -1620,6 +1718,7 @@ class MainWindow(tk.Tk):
             self.refresh_editorial_review()
             self.refresh_history()
             self.refresh_ai()
+            self._update_openrouter_status()
             self.refresh_learning()
             self._update_feedback_runtime_status()
             self.refresh_supervisor()
@@ -1661,7 +1760,7 @@ class MainWindow(tk.Tk):
                 self.status.set("Автопілот: workers не працюють")
             else:
                 self.status.set("Автопілот працює")
-        provider_total = 6
+        provider_total = 7
         configured_text = f"{configured} налаштовано" if provider_total else "стан ще не перевірено"
         blockers_text = ", ".join(f"{BLOCK_UA.get(key, key)}={value}" for key, value in blocked.items()) or "немає активних"
         text = (
@@ -1742,7 +1841,7 @@ class MainWindow(tk.Tk):
         self.ai_tree.delete(*self.ai_tree.get_children())
         rows = {health.provider: health for health in self.store.provider_health()}
         cfg = load_secrets()
-        expected = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+        expected = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
         for provider in expected:
             health = rows.get(provider)
             if health is not None:
@@ -1765,6 +1864,19 @@ class MainWindow(tk.Tk):
                     0,
                     "",
                     "Увімкнено; детальний стан у блоці Codex / ChatGPT" if enabled else "Вимкнено оператором",
+                )
+            elif provider == "openrouter":
+                enabled = bool(getattr(cfg, "openrouter_enabled", False))
+                models = list(getattr(cfg, "openrouter_models", []) or [])
+                configured = bool(enabled and getattr(cfg, "openrouter_api_key", "") and models)
+                values = (
+                    "openrouter",
+                    "Невідомо" if configured else "Не налаштовано",
+                    ", ".join(models[:2]),
+                    0,
+                    0,
+                    "",
+                    "Увімкнено; ще немає health-запису" if configured else "Вимкнено або немає ключа/model allow-list",
                 )
             elif provider == "local":
                 enabled = bool(getattr(cfg, "local_enabled", False))
