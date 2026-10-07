@@ -31,7 +31,7 @@ _GALLERY_CONTEXT_MARKERS = (
 _NOISE_PHRASES = (
     "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertorial",
     "sponsored", "sponsor", "affiliate", "newsletter", "related-content",
-    "related_content", "recommended-content", "recommended_content", "recommendation-widget", "outbrain",
+    "related_content", "recommended-content", "recommended_content", "recommendation-widget", "recommendation-card", "recommendation_card", "outbrain",
     "taboola", "revcontent", "ad-slot", "ad_slot", "ad-unit", "ad_unit", "ad-container", "ad_container",
     "google-ad", "google_ad", "doubleclick", "native-ad", "native_ad", "commercial-widget",
 )
@@ -589,6 +589,62 @@ def _media_url_tokens(value: str) -> set[str]:
     return _meaningful_tokens(path.replace("-", " ").replace("_", " "))
 
 
+
+
+def _page_hero_candidate(
+    candidates: list[dict[str, object]],
+    title: str,
+    base_url: str,
+) -> str:
+    """Return a strongly article-bound page-level hero image.
+
+    Some publishers render the lead image as a sibling of <article>/<main>. We already
+    collect those images for gallery diagnostics; RC113 promotes only candidates with
+    strong article identity evidence instead of accepting the first page image.
+    """
+    title_tokens = _meaningful_tokens(title)
+    if not title_tokens:
+        return ""
+    best: tuple[float, str] | None = None
+    for idx, row in enumerate(candidates[:32]):
+        url = str(row.get("url") or "").strip()
+        if not url:
+            continue
+        alt = str(row.get("alt") or "")
+        context = str(row.get("context") or "")
+        alt_tokens = _meaningful_tokens(alt)
+        url_tokens = _media_url_tokens(url)
+        overlap = len(title_tokens & (alt_tokens | url_tokens))
+        strong_context = any(
+            token in context.casefold()
+            for token in ("hero", "lead", "featured", "feature-image", "article-image", "story-image", "main-image")
+        )
+        try:
+            width = int(row.get("width") or 0)
+            height = int(row.get("height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+
+        # Require article evidence. A generic large image is not enough because many
+        # publisher pages place recommendation cards and house ads near the story.
+        if overlap <= 0 and not strong_context:
+            continue
+        if strong_context and overlap <= 0 and width and height and (width < 600 or height < 300):
+            continue
+
+        score = float(overlap * 20)
+        if strong_context:
+            score += 12.0
+        if width >= 900 and height >= 450:
+            score += 8.0
+        elif width >= 600 and height >= 300:
+            score += 4.0
+        # Earlier page images are more likely to be the lead visual.
+        score += max(0.0, 6.0 - idx * 0.25)
+        if best is None or score > best[0]:
+            best = (score, encode_media("image", url))
+    return best[1] if best else ""
+
 def _safe_og_featured(
     featured: str,
     alt: str,
@@ -907,16 +963,25 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
             media.insert(0, video_poster)
             provenance = "verified_video_poster"
         else:
-            selected_featured = _safe_og_featured(
-                parser.featured_media, parser.featured_alt, title,
-                meta_title=parser.featured_title, meta_url=parser.featured_url,
-                meta_type=parser.featured_type, base_url=base_url,
-            )
+            # RC113: recover a lead image that lives outside <article>/<main> when
+            # the asset itself is strongly tied to the article title/URL or an
+            # explicit hero/featured wrapper. This covers publishers such as
+            # FastCompany without accepting arbitrary recommendation images.
+            selected_featured = _page_hero_candidate(parser.page_image_candidates, title, base_url)
             if selected_featured:
                 media.insert(0, selected_featured)
-                provenance = "verified_og"
-            elif parser.featured_media:
-                provenance = "rejected_foreign"
+                provenance = "page_hero"
+            else:
+                selected_featured = _safe_og_featured(
+                    parser.featured_media, parser.featured_alt, title,
+                    meta_title=parser.featured_title, meta_url=parser.featured_url,
+                    meta_type=parser.featured_type, base_url=base_url,
+                )
+                if selected_featured:
+                    media.insert(0, selected_featured)
+                    provenance = "verified_og"
+                elif parser.featured_media:
+                    provenance = "rejected_foreign"
 
     layout_json = json.dumps({
         "version": 7,
@@ -927,6 +992,14 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
             "provenance": provenance,
             "page_title": parser.featured_title,
             "page_url": parser.featured_url,
+        },
+        "media_diagnostics": {
+            "page_image_candidates": len(parser.page_image_candidates),
+            "explicit_gallery_signal": bool(parser.explicit_gallery_signal),
+            "explicit_gallery_candidates": len(parser.explicit_gallery_candidates),
+            "jsonld_images": len(jsonld_images),
+            "body_media": len([item for item in article_media if not str(item).startswith("iframe|")]),
+            "selected_provenance": provenance,
         },
         "blocks": blocks,
     }, ensure_ascii=False, separators=(",", ":"))
