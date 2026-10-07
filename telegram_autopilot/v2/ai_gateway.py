@@ -671,6 +671,11 @@ class AIGateway:
             if not self._configured(provider, cfg):
                 continue
             configured.add(provider)
+            if provider == "openrouter":
+                budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
+                if not budget_ok:
+                    self._mark_openrouter_budget_block(cfg)
+                    continue
             if provider in provider_suppressed or self._provider_blocked(provider):
                 continue
             if self._model_blocked(provider, slot.model):
