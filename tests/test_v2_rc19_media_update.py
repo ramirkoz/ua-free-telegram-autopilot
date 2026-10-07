@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from telegram_autopilot.v2 import V2_VERSION
 from telegram_autopilot.v2.ingest import TelegramEntry
 from telegram_autopilot.v2.strict_ingest import StrictTelegramParser, strict_stitch_telegram
 from telegram_autopilot.v2.hardened_storage import HardenedV2Store
