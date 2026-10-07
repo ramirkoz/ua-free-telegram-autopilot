@@ -176,11 +176,19 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
         # Preserve source order for body/gallery media. Iframe embeds are links, not
         # uploadable Telegram media; their preview is appended separately.
         candidates = []
-        if prepared.featured is not None:
-            candidates.append(prepared.featured)
-        candidates.extend(list(prepared.body or []))
-        if prepared.video_preview is not None:
-            candidates.append(prepared.video_preview)
+        featured = getattr(prepared, "featured", None)
+        body = list(getattr(prepared, "body", []) or [])
+        video_preview = getattr(prepared, "video_preview", None)
+        if featured is not None:
+            candidates.append(featured)
+        candidates.extend(body)
+        if video_preview is not None:
+            candidates.append(video_preview)
+        # Compatibility for older test/runtime adapters that expose only telegram_hero.
+        if not candidates:
+            hero = getattr(prepared, "telegram_hero", None)
+            if hero is not None:
+                candidates.append(hero)
 
         seen: set[str] = set()
         for item in candidates:
