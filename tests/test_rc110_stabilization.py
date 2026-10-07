@@ -120,7 +120,7 @@ def test_rc110_slow_success_is_cooled_and_zero_streak_is_tracked(tmp_path: Path)
     # Clear the slow cooldown and establish repeated empty-but-successful fetches.
     with store.connect() as con:
         con.execute("UPDATE source_health SET cooldown_until='',slow_streak=0 WHERE source_id=?", (source_id,))
-    for _ in range(4):
+    for _ in range(6):
         store.record_source_success(source_id, 1000, items=0, added=0)
     row = store.source_health(source_id)
     assert row["last_outcome"] == "EMPTY"
