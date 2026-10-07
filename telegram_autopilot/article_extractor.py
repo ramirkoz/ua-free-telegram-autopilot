@@ -22,6 +22,11 @@ _VOID_TAGS = {
 }
 _ALWAYS_SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "footer", "form", "aside"}
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "li", "blockquote", "pre"}
+_GALLERY_CONTEXT_MARKERS = (
+    "gallery", "carousel", "slideshow", "slider", "swiper", "slick-slide",
+    "gallery-item", "gallery__item", "image-gallery", "photo-gallery",
+    "view-gallery", "lightbox", "flickity", "splide",
+)
 
 _NOISE_PHRASES = (
     "cocoon ai summary", "ai-summary", "ai_summary", "ai summary", "advertorial",
@@ -181,6 +186,7 @@ class _ArticleHTMLParser(HTMLParser):
         self.twitter_card = ""
         self.featured_video = ""
         self.featured_video_poster = ""
+        self.gallery_depths: list[int] = []
 
     @property
     def in_article(self) -> bool:
@@ -189,6 +195,15 @@ class _ArticleHTMLParser(HTMLParser):
     @property
     def skipping(self) -> bool:
         return bool(self.skip_depths)
+
+    @property
+    def in_gallery(self) -> bool:
+        return bool(self.gallery_depths)
+
+    @staticmethod
+    def _gallery_context(value: str) -> bool:
+        low=str(value or "").casefold()
+        return any(marker in low for marker in _GALLERY_CONTEXT_MARKERS)
 
     @staticmethod
     def _attrs_text(values: dict[str, str]) -> str:
@@ -273,6 +288,12 @@ class _ArticleHTMLParser(HTMLParser):
         elif tag == "main" and self.include_main and not self.skipping:
             self.main_seen = True
             self.article_depths.append(self.depth)
+
+        # RC112: publisher galleries/carousels are editorial media in their own right.
+        # They are frequently siblings of <article> instead of descendants, so a strict
+        # article-only scope loses the actual story visuals even though the browser shows them.
+        if tag in {"div","section","ul","ol","figure","aside"} and not self.skipping and self._gallery_context(self._context(own_context)):
+            self.gallery_depths.append(self.depth)
         if tag == "title":
             self.in_title = True
 
@@ -307,7 +328,7 @@ class _ArticleHTMLParser(HTMLParser):
                 if url:
                     self.featured_video = encode_media(kind, url)
 
-        if self.in_article and not self.skipping:
+        if (self.in_article or self.in_gallery) and not self.skipping:
             if tag == "figure" and self.figure is None:
                 self._finish_text_capture()
                 self.figure = {"depth": self.depth, "candidates": [], "caption_chunks": []}
@@ -323,7 +344,7 @@ class _ArticleHTMLParser(HTMLParser):
                         self.figure["candidates"].append(candidate)  # type: ignore[index]
                     else:
                         self._finish_text_capture()
-                        self.blocks.append({"type": "media", **candidate, "caption": ""})
+                        self.blocks.append({"type": "media", **candidate, "caption": "", "gallery": bool(self.in_gallery)})
             elif tag == "video":
                 poster = (values.get("poster") or values.get("data-poster") or values.get("data-poster-src") or "").strip()
                 if poster and not self.featured_video_poster:
@@ -392,7 +413,9 @@ class _ArticleHTMLParser(HTMLParser):
                         })
 
         if tag in _VOID_TAGS:
-            self.context_by_depth.pop(self.depth, None)
+            if self.gallery_depths and self.gallery_depths[-1] == self.depth:
+            self.gallery_depths.pop()
+        self.context_by_depth.pop(self.depth, None)
             if self.skip_depths and self.skip_depths[-1] == self.depth:
                 self.skip_depths.pop()
             self.depth = max(0, self.depth - 1)
@@ -471,9 +494,10 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str, featured_v
             "width": int(block.get("width") or 0),
             "height": int(block.get("height") or 0),
             "context": " ".join(str(block.get("context") or "").split())[:800],
+            "gallery": bool(block.get("gallery")),
         })
         media_urls.append(encoded)
-        if marker >= 16:
+        if marker >= 24:
             break
 
     if featured and featured not in media_urls:
