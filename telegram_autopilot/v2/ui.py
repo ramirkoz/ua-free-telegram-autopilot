@@ -523,7 +523,7 @@ class MainWindow(tk.Tk):
         self.migration = MigrationManager(store.path)
         self.supervisor = LocalOnlyProductionSupervisorService(store, runtime, logs_dir)
         self.feedback = FeedbackService(store)
-        self.feedback_runtime = FeedbackRuntime(self.feedback, store)
+        self.feedback_runtime = FeedbackRuntime(self.feedback, store, on_refresh=self._on_feedback_auto_refresh)
         self.learning = LearningEngine(store)
         self.review = EditorialReviewService(store)
         self.review.ensure_schema()
@@ -904,8 +904,49 @@ class MainWindow(tk.Tk):
         bar.pack(fill="x", padx=8, pady=(0, 8))
         self.learning_refresh_one_button = ttk.Button(bar, text="Оновити вибрану публікацію", command=self.learning_refresh_selected)
         self.learning_refresh_one_button.pack(side="left")
-        ttk.Label(bar, text="Навчальне вікно: 7 днів · автооновлення: кожні 15 хв, окремим фоновим модулем").pack(side="right")
+        self.learning_auto_hours = tk.StringVar(value=f"{self.feedback_runtime.interval_seconds / 3600:g}")
+        ttk.Button(bar, text="Зберегти інтервал", command=self.learning_save_auto_interval).pack(side="right", padx=(6,0))
+        ttk.Entry(bar, textvariable=self.learning_auto_hours, width=6).pack(side="right")
+        ttk.Label(bar, text="Автооновлення, год:").pack(side="right", padx=(12,4))
+        self.learning_auto_status = tk.StringVar(value="")
+        ttk.Label(p, textvariable=self.learning_auto_status, wraplength=1220, justify="left", foreground="#555").pack(anchor="w", padx=10, pady=(0,5))
         self._set_learning_buttons(False)
+        self._update_feedback_runtime_status()
+
+    def learning_save_auto_interval(self) -> None:
+        try:
+            hours = float(str(self.learning_auto_hours.get() or "").replace(",", "."))
+            seconds = self.feedback_runtime.configure_interval(int(hours * 3600))
+            self.learning_auto_hours.set(f"{seconds / 3600:g}")
+            self._update_feedback_runtime_status()
+        except Exception:
+            messagebox.showerror("Статистика / навчання", "Інтервал має бути числом від 0.25 до 24 годин", parent=self)
+
+    def _update_feedback_runtime_status(self) -> None:
+        if not hasattr(self, "learning_auto_status"):
+            return
+        snap = self.feedback_runtime.status_snapshot()
+        interval_h = float(snap.get("interval_seconds") or 0) / 3600.0
+        last = str(snap.get("last_success") or "ще не було")
+        error = str(snap.get("last_error") or "")
+        next_s = int(snap.get("next_in_seconds") or 0)
+        next_text = "після першого циклу" if next_s <= 0 else f"через {max(1, round(next_s / 60))} хв"
+        suffix = f" · остання помилка: {error}" if error else ""
+        self.learning_auto_status.set(
+            f"Автооновлення: кожні {interval_h:g} год · останнє успішне: {last} · наступне: {next_text}{suffix}"
+        )
+
+    def _on_feedback_auto_refresh(self, payload: dict[str, object]) -> None:
+        def apply() -> None:
+            try:
+                self.refresh_learning()
+                self._update_feedback_runtime_status()
+            except Exception:
+                pass
+        try:
+            self.after(0, apply)
+        except Exception:
+            pass
 
     def _set_learning_buttons(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
@@ -1580,6 +1621,7 @@ class MainWindow(tk.Tk):
             self.refresh_history()
             self.refresh_ai()
             self.refresh_learning()
+            self._update_feedback_runtime_status()
             self.refresh_supervisor()
         finally:
             if self.winfo_exists():
