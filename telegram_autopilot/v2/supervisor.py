@@ -361,8 +361,8 @@ class SupervisorService:
                         WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='HTTP_429'""",(cid,)).fetchone()[0] or 0),
                     "slow": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
                         WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome IN ('SLOW','SLOW_EMPTY')""",(cid,)).fetchone()[0] or 0),
-                    "empty_streak_3plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
-                        WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=3""",(cid,)).fetchone()[0] or 0),
+                    "empty_streak_6plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                        WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=6""",(cid,)).fetchone()[0] or 0),
                 }
                 out[str(cid)] = {
                     "name": str(ch["name"]),
