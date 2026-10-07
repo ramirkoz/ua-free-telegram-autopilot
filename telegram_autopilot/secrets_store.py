@@ -22,6 +22,11 @@ class SecretConfig:
     groq_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
+    openrouter_enabled: bool = False
+    openrouter_api_key: str = ""
+    openrouter_models: list[str] = field(default_factory=list)
+    openrouter_daily_budget_usd: float = 1.0
+    openrouter_monthly_budget_usd: float = 10.0
     codex_enabled: bool = False
     local_enabled: bool = False
     local_base_url: str = "http://127.0.0.1:8080/v1"
@@ -54,6 +59,15 @@ class SecretConfig:
             groq_api_key=self.groq_api_key.strip(),
             cloudflare_account_id=self.cloudflare_account_id.strip(),
             cloudflare_api_token=self.cloudflare_api_token.strip(),
+            openrouter_enabled=bool(self.openrouter_enabled),
+            openrouter_api_key=str(self.openrouter_api_key or "").strip(),
+            openrouter_models=[
+                str(item).strip()
+                for item in (self.openrouter_models or [])
+                if str(item).strip()
+            ][:12],
+            openrouter_daily_budget_usd=max(0.0, float(self.openrouter_daily_budget_usd or 0.0)),
+            openrouter_monthly_budget_usd=max(0.0, float(self.openrouter_monthly_budget_usd or 0.0)),
             codex_enabled=bool(self.codex_enabled),
             local_enabled=bool(self.local_enabled),
             local_base_url=self.local_base_url.strip() or "http://127.0.0.1:8080/v1",
