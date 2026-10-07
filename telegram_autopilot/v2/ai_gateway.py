@@ -29,6 +29,7 @@ class AIResult:
     output_tokens: int = 0
     total_tokens: int = 0
     estimated_openrouter_usd: float = 0.0
+    actual_openrouter_usd: float = 0.0
 
 
 class GatewayExhausted(RuntimeError):
@@ -108,6 +109,8 @@ def _rc109_route_slots(slots: Iterable[legacy_ai.Slot], purpose: str) -> list[le
     def key(slot: legacy_ai.Slot) -> tuple[int, int]:
         model = str(slot.model or "")
         rank = int(_RC109_CHEAP_MODEL_RANK.get(model, 60))
+        if str(slot.provider or "").casefold() == "openrouter":
+            rank = 55
         if complex_task:
             if model == "nvidia/nemotron-3-super-120b-a12b":
                 rank = 10
@@ -250,7 +253,7 @@ def _rc111_qa_signature(error: Exception) -> str:
 class AIGateway:
     """Modular V2 AI router with provider-aware health and local full fallback."""
 
-    PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+    PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
     LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     LOCAL_LONG_MAX_OUTPUT = 720
     _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}
@@ -286,13 +289,21 @@ class AIGateway:
             return bool(cfg.groq_api_key)
         if provider == "cloudflare":
             return bool(cfg.cloudflare_account_id and cfg.cloudflare_api_token)
+        if provider == "openrouter":
+            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", "") and list(getattr(cfg, "openrouter_models", []) or []))
         if provider == "local":
             return bool(cfg.local_enabled)
         return False
 
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
-        del cfg
-        return list(PRODUCTION_SLOTS)
+        slots = list(PRODUCTION_SLOTS)
+        if bool(getattr(cfg, "openrouter_enabled", False)) and str(getattr(cfg, "openrouter_api_key", "") or "").strip():
+            for index, model in enumerate(list(getattr(cfg, "openrouter_models", []) or [])[:12], start=1):
+                model_id = str(model or "").strip()
+                if not model_id:
+                    continue
+                slots.append(legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter"))
+        return slots
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
         return [slot for slot in self._runtime_slots(cfg) if slot.provider == provider]
