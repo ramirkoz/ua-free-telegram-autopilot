@@ -415,6 +415,19 @@ class Publisher:
         if not ok:
             if reason == "SOURCE_MISSING":
                 self.store.block_article(article_id, blocked_by=BlockedBy.SOURCE, error_code=reason, detail="Немає canonical source URL")
+            elif reason == "SOURCE_BINDING_MISMATCH":
+                row = self.store.get_article(article_id)
+                self.store.block_article(
+                    article_id, blocked_by=BlockedBy.SOURCE, error_code=reason,
+                    detail="Source URL/content identity changed after READY; publication blocked to prevent wrong-source attribution.",
+                )
+                event(
+                    "publish", "source binding mismatch blocked publication", level=40,
+                    channel_id=int(row["channel_id"] if row else 0), article_id=article_id,
+                    source_id=int(row["source_id"] if row else 0),
+                    source_url=str(row["source_url"] if row else ""),
+                    canonical_source_url=str(row["canonical_source_url"] if row else ""),
+                )
             elif reason == "TEXT_MISSING":
                 self.store.block_article(article_id, blocked_by=BlockedBy.QUALITY, error_code=reason, detail="Порожній final_text")
             elif reason.startswith("ALREADY_PUBLISHED:"):
@@ -512,6 +525,14 @@ class Publisher:
                 event("media", "VIDEO_EXPECTED_BUT_NOT_FOUND", level=30, channel_id=channel_id, article_id=article_id, source_url=source_url)
 
         text = str(article["final_text"] or "").strip()
+        event(
+            "publish", "publication source binding",
+            channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
+            article_title=str(article["title"] or "")[:300],
+            source_url=str(article["source_url"] or ""),
+            canonical_source_url=str(article["canonical_source_url"] or ""),
+            published_source_url=source_url,
+        )
         try:
             post_text = build_attributed_post_text(
                 text,

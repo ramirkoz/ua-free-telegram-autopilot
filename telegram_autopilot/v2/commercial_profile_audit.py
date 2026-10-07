@@ -68,7 +68,7 @@ def audit_commercial_profiles(store) -> dict[str, Any]:
         configured_media_policy = str(row["media_policy"] or "").strip().lower()
         if configured_media_policy not in {"required", "preferred", "optional"}:
             issues.append("invalid_media_policy")
-        media_policy = "optional"
+        media_policy = configured_media_policy if configured_media_policy in {"required", "preferred", "optional"} else "optional"
 
         issue_total += len(issues)
         results.append({

@@ -1830,35 +1830,58 @@ class V2Store:
         stamp=now_iso(); canonical=normalize_url(str(source_url or "").strip())
         source_published_at = _normalize_datetime_value(str(source_published_at or ""))
         is_telegram_snapshot = _layout_source_kind(article_layout_json) == "telegram"
+        original_external_id = str(external_id)
         with self.transaction() as con:
             try:
                 con.execute("BEGIN IMMEDIATE")
-                row=con.execute("SELECT id,stage,decision,media_json,article_layout_json,last_error_code FROM articles WHERE channel_id=? AND source_id=? AND external_id=?",(int(channel_id),int(source_id),str(external_id))).fetchone()
+                row=con.execute(
+                    "SELECT id,stage,decision,media_json,article_layout_json,last_error_code,source_url,canonical_source_url FROM articles WHERE channel_id=? AND source_id=? AND external_id=?",
+                    (int(channel_id),int(source_id),str(external_id)),
+                ).fetchone()
                 if row:
-                    aid = int(row["id"])
-                    # Telegram/web pages can reveal the media part one poll later than
-                    # the text. Refresh non-published rows instead of freezing the first
-                    # incomplete snapshot forever.
-                    if str(row["stage"]) != str(Stage.PUBLISHED):
-                        refreshed_media = _clean_media_json(str(media_json or "[]")) if is_telegram_snapshot else _merge_media_json(str(row["media_json"] or "[]"), str(media_json or "[]"))
-                        refreshed_layout = _refresh_layout(str(row["article_layout_json"] or "{}"), str(article_layout_json or "{}"))
-                        media_ready = _media_json_count(refreshed_media) > 0
-                        clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
-                        prior_error = str(row["last_error_code"] or "")
-                        refreshed_video_ok = _telegram_video_recovery(refreshed_layout) in {"direct_video", "exact_post_video"} and _media_json_has_video(refreshed_media)
-                        clear_media_block = (
-                            (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot)
-                            or (prior_error == "TELEGRAM_VIDEO_PENDING" and refreshed_video_ok)
-                            or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
-                        )
-                        clear_flag = 1 if clear_media_block else 0
-                        con.execute(
-                            "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
-                            (str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
-                        )
-                        if clear_media_block:
-                            con.execute("UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=? AND state='WAITING'",(stamp,stamp,aid))
-                    con.commit(); return aid
+                    existing_canonical = normalize_url(str(row["canonical_source_url"] or row["source_url"] or "").strip())
+                    # RC112 source-integrity hotfix: a publisher/feed reusing the same
+                    # GUID/external id for a different URL must never overwrite a READY
+                    # article and leave its already-generated text attached to another story.
+                    if canonical and existing_canonical and canonical != existing_canonical:
+                        suffix = uuid.uuid5(uuid.NAMESPACE_URL, canonical).hex[:16]
+                        external_id = f"{original_external_id}::url::{suffix}"[:1000]
+                        row = con.execute(
+                            "SELECT id,stage,decision,media_json,article_layout_json,last_error_code,source_url,canonical_source_url FROM articles WHERE channel_id=? AND source_id=? AND external_id=?",
+                            (int(channel_id),int(source_id),str(external_id)),
+                        ).fetchone()
+                    if row:
+                        aid = int(row["id"])
+                        stage = str(row["stage"] or "")
+                        # READY/PUBLISHED content identity is immutable. A later poll may
+                        # repair media/layout, but it cannot rewrite title/source URL/raw
+                        # text/content hash underneath an already generated final_text.
+                        if stage != str(Stage.PUBLISHED):
+                            refreshed_media = _clean_media_json(str(media_json or "[]")) if is_telegram_snapshot else _merge_media_json(str(row["media_json"] or "[]"), str(media_json or "[]"))
+                            refreshed_layout = _refresh_layout(str(row["article_layout_json"] or "{}"), str(article_layout_json or "{}"))
+                            media_ready = _media_json_count(refreshed_media) > 0
+                            clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
+                            prior_error = str(row["last_error_code"] or "")
+                            refreshed_video_ok = _telegram_video_recovery(refreshed_layout) in {"direct_video", "exact_post_video"} and _media_json_has_video(refreshed_media)
+                            clear_media_block = (
+                                (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot)
+                                or (prior_error == "TELEGRAM_VIDEO_PENDING" and refreshed_video_ok)
+                                or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
+                            )
+                            clear_flag = 1 if clear_media_block else 0
+                            if stage == str(Stage.READY):
+                                con.execute(
+                                    "UPDATE articles SET media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
+                                    (refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
+                                )
+                            else:
+                                con.execute(
+                                    "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
+                                    (str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
+                                )
+                            if clear_media_block:
+                                con.execute("UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=? AND state='WAITING'",(stamp,stamp,aid))
+                        con.commit(); return aid
                 # Hard identity guard: the same article URL must not become a second DB row
                 # merely because the publisher changed utm_/itm_/ref style tracking parameters.
                 if canonical:
@@ -2212,10 +2235,25 @@ class V2Store:
     def mark_ready(self, article_id:int) -> None:
         row=self.get_article(article_id)
         if row is None: raise KeyError(article_id)
-        canonical=str(row["canonical_source_url"] or "").strip()
+        canonical=normalize_url(str(row["canonical_source_url"] or row["source_url"] or "").strip())
         if not canonical.startswith(("http://","https://")):
             self.update_article(article_id,blocked_by=str(BlockedBy.SOURCE),last_error_code="SOURCE_MISSING",last_error_detail="Немає canonical source URL; READY/PUBLISH заборонено"); raise ValueError("SOURCE_MISSING")
-        self.update_article(article_id,stage=str(Stage.READY),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),ready_at=now_iso(),last_error_code="",last_error_detail="")
+        try:
+            layout=json.loads(str(row["article_layout_json"] or "{}"))
+        except Exception:
+            layout={}
+        if not isinstance(layout,dict): layout={}
+        layout["publication_source_binding"]={
+            "source_id":int(row["source_id"]),
+            "external_id":str(row["external_id"] or ""),
+            "source_url":canonical,
+            "content_hash":str(row["content_hash"] or ""),
+        }
+        self.update_article(
+            article_id,stage=str(Stage.READY),decision=str(Decision.PUBLISH),blocked_by=str(BlockedBy.NONE),
+            ready_at=now_iso(),last_error_code="",last_error_detail="",canonical_source_url=canonical,
+            article_layout_json=json.dumps(layout,ensure_ascii=False,separators=(",",":")),
+        )
 
     def publication_guard(self, article_id:int) -> tuple[bool,str]:
         row=self.get_article(article_id)
@@ -2225,6 +2263,23 @@ class V2Store:
         if not canonical.startswith(("http://","https://")):return False,"SOURCE_MISSING"
         if canonical != str(row["canonical_source_url"] or ""):
             self.update_article(article_id,canonical_source_url=canonical)
+        try:
+            layout=json.loads(str(row["article_layout_json"] or "{}"))
+        except Exception:
+            layout={}
+        binding=layout.get("publication_source_binding") if isinstance(layout,dict) else None
+        if isinstance(binding,dict):
+            bound_url=normalize_url(str(binding.get("source_url") or "").strip())
+            bound_source_id=int(binding.get("source_id") or 0)
+            bound_external_id=str(binding.get("external_id") or "")
+            bound_hash=str(binding.get("content_hash") or "")
+            if (
+                (bound_url and bound_url != canonical)
+                or (bound_source_id and bound_source_id != int(row["source_id"]))
+                or (bound_external_id and bound_external_id != str(row["external_id"] or ""))
+                or (bound_hash and bound_hash != str(row["content_hash"] or ""))
+            ):
+                return False,"SOURCE_BINDING_MISMATCH"
         if not str(row["final_text"] or "").strip():return False,"TEXT_MISSING"
         channel=self.get_channel(int(row["channel_id"]))
         hours=int(channel.dedupe_window_hours if channel else 72)
