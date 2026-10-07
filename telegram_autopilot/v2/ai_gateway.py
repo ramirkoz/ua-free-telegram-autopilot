@@ -576,6 +576,7 @@ class AIGateway:
                 int(getattr(reply, "input_tokens", 0) or 0),
                 int(getattr(reply, "output_tokens", 0) or 0),
                 int(getattr(reply, "total_tokens", 0) or 0),
+                float(getattr(reply, "actual_cost_usd", 0.0) or 0.0),
             )
 
         if provider == "local":
