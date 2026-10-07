@@ -666,19 +666,33 @@ def _jsonld_node_matches_article(node: dict, *, title: str, base_url: str) -> bo
     return False
 
 
-def _jsonld_article_image_candidate(html: str, base_url: str, title: str = "") -> str:
-    """Return a schema.org Article image tied to the current article, not a related card."""
+def _jsonld_article_image_candidates(html: str, base_url: str, title: str = "", *, limit: int = 24) -> list[str]:
+    """Return all schema.org Article images tied to the current article, in source order."""
     article_nodes = [node for node in _jsonld_nodes(html) if _node_types(node) & _ARTICLE_TYPES]
     ordered = [node for node in article_nodes if _jsonld_node_matches_article(node, title=title, base_url=base_url)]
     if len(article_nodes) == 1 and article_nodes[0] not in ordered:
         ordered.append(article_nodes[0])
+    out: list[str] = []
+    seen: set[str] = set()
     for node in ordered:
         for key in ("image", "thumbnailUrl", "primaryImageOfPage"):
             for candidate in _image_values(node.get(key)):
                 url = editorial_media_candidate(base_url, candidate, context="schema article image", featured=True)
-                if url:
-                    return encode_media("image", url)
-    return ""
+                if not url:
+                    continue
+                encoded=encode_media("image", url)
+                if encoded in seen:
+                    continue
+                seen.add(encoded)
+                out.append(encoded)
+                if len(out) >= max(1,min(24,int(limit))):
+                    return out
+    return out
+
+
+def _jsonld_article_image_candidate(html: str, base_url: str, title: str = "") -> str:
+    items=_jsonld_article_image_candidates(html,base_url,title,limit=1)
+    return items[0] if items else ""
 
 
 def _video_object_values(node: dict, base_url: str) -> tuple[str, str]:
@@ -784,6 +798,30 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
         text = _clean_text("".join(parser.all_chunks))
 
     title = " ".join(parser.title_chunks or article_parser.title_chunks).strip()
+
+    # RC112: recover complete schema.org Article.image lists. Many campaign/design
+    # publishers render a browser gallery from JSON/JS while the semantic HTML shows
+    # only the hero. If the schema node is tied to this article, keep the full set.
+    jsonld_images=_jsonld_article_image_candidates(html,base_url,title,limit=24)
+    if jsonld_images:
+        existing=set(media)
+        gallery_flag=len(jsonld_images)>1
+        next_index=max([int(block.get("index") or 0) for block in blocks if block.get("type")=="media"] or [0])
+        for encoded in jsonld_images:
+            if encoded in existing:
+                continue
+            try:
+                kind,url=encoded.split("|",1)
+            except ValueError:
+                kind,url="image",encoded
+            next_index+=1
+            blocks.append({
+                "type":"media","index":next_index,"kind":kind,"url":url,
+                "caption":"","alt":"","position":0.05,"width":0,"height":0,
+                "context":"schema article gallery","gallery":gallery_flag,
+            })
+            media.append(encoded)
+            existing.add(encoded)
 
     # Recover JS-rendered publisher video + thumbnail from schema.org VideoObject.
     jsonld_video, jsonld_video_poster = _jsonld_video_media_candidates(html, base_url, title)
