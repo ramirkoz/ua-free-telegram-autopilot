@@ -644,12 +644,13 @@ class SupervisorService:
             secret_cfg = load_secrets()
         except Exception:
             secret_cfg = None
-        expected_provider_names = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+        expected_provider_names = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
         configured_map = {
             "gemini": bool(getattr(secret_cfg, "gemini_api_key", "")) if secret_cfg else False,
             "nvidia": bool(getattr(secret_cfg, "nvidia_api_key", "")) if secret_cfg else False,
             "groq": bool(getattr(secret_cfg, "groq_api_key", "")) if secret_cfg else False,
             "cloudflare": bool(getattr(secret_cfg, "cloudflare_account_id", "") and getattr(secret_cfg, "cloudflare_api_token", "")) if secret_cfg else False,
+            "openrouter": bool(getattr(secret_cfg, "openrouter_enabled", False) and getattr(secret_cfg, "openrouter_api_key", "") and list(getattr(secret_cfg, "openrouter_models", []) or [])) if secret_cfg else False,
             "local": bool(getattr(secret_cfg, "local_enabled", False)) if secret_cfg else False,
             "codex": bool(getattr(secret_cfg, "codex_enabled", False)) if secret_cfg else False,
         }
@@ -715,6 +716,14 @@ class SupervisorService:
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "ai_usage": self.store.ai_usage_summary(24),
             "provider_discovery": provider_discovery_snapshot(),
+            "openrouter": {
+                "enabled": bool(getattr(secret_cfg, "openrouter_enabled", False)) if secret_cfg else False,
+                "models": list(getattr(secret_cfg, "openrouter_models", []) or []) if secret_cfg else [],
+                "spend_24h_usd": round(self.store.openrouter_spend_usd(hours=24), 6),
+                "spend_month_usd": round(self.store.openrouter_spend_usd(month=True), 6),
+                "daily_budget_usd": float(getattr(secret_cfg, "openrouter_daily_budget_usd", 0.0) or 0.0) if secret_cfg else 0.0,
+                "monthly_budget_usd": float(getattr(secret_cfg, "openrouter_monthly_budget_usd", 0.0) or 0.0) if secret_cfg else 0.0,
+            },
             "quality_efficiency": self._quality_efficiency_snapshot(),
             "queue": queue,
             "delivery": self.store.delivery_journal_summary(),
