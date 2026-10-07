@@ -53,7 +53,7 @@ def test_windows_single_instance_uses_kernel_mutex_not_portable_file_lock():
 
 def test_current_version_metadata_is_consistent():
     version = _read("VERSION.txt").strip()
-    assert version.startswith("2.0.0-rc")
+    assert version == "2.0.0" or version.startswith("2.0.0-rc")
     assert _read("PUBLIC_VERSION.txt").strip() == version
     assert _read("V2_VERSION.txt").strip() == version
     assert f'__version__ = "{version}"' in _read("telegram_autopilot/__init__.py")
