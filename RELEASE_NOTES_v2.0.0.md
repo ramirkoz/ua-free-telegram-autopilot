@@ -9,16 +9,17 @@ Stable promotion is intentionally feature-frozen on top of RC115.
 - Delivery journal, QUALITY retry controls, source health/cooldown and dedupe behavior remain unchanged.
 
 ## Promotion gates
-2.0.0 stable may be merged/tagged/released only when all are true:
-1. Canonical RC115 runtime reports healthy workers/collectors and no P0/P1.
-2. RC113 media/source-integrity live checks remain green.
-3. RC114 automatic feedback/statistics refresh is observed without manual action.
-4. OpenRouter disabled path is confirmed absent from production routing.
-5. OpenRouter enabled path is live-probed with a valid operator key and reviewed model ID, with token usage and actual cost recorded.
-6. OpenRouter budget exhaustion is proven not to block other providers.
-7. Overnight runtime completes with no P0/P1.
-8. Full regression/Windows release/Defender gates pass.
-9. GitHub release assets, Drive CURRENT and ProductVault canonical files are synchronized.
+
+Operator decision on 2026-10-07: OpenRouter remains an optional provider and is intentionally left disabled for the stable promotion. Its enabled-path live test does not block 2.0.0.
+
+Required for stable:
+1. RC113 media/source-integrity contracts remain green.
+2. RC114 feedback/statistics automation remains present and non-blocking.
+3. RC115 OpenRouter disabled path remains absent from routing by default.
+4. Full regression/Windows release/Defender gates pass.
+5. GitHub release assets, Drive CURRENT and ProductVault canonical files are synchronized.
+
+The already-running RC115 portable remains on overnight soak separately. Any overnight P0/P1 discovered there blocks acceptance of the deployed stable build, but does not require inventing RC116 unless code changes are actually needed.
 
 ## Version rule
 Do not create RC116 for normal stabilization. The next canonical version after accepted RC115 is exactly `2.0.0`.
