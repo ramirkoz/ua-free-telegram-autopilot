@@ -832,7 +832,7 @@ class AIGateway:
                 continue
             try:
                 try:
-                    text, runtime_model, _label, input_tokens, output_tokens, total_tokens = self._call_slot(
+                    text, runtime_model, _label, input_tokens, output_tokens, total_tokens, actual_cost = self._call_slot(
                         slot,
                         cfg,
                         "Reply with OK only.",
