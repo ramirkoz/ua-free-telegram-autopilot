@@ -49,6 +49,7 @@ class PreparedMedia:
     context: str = ""
     classification: str = "unknown"
     relevance_score: float = 0.0
+    gallery: bool = False
 
     @property
     def filename(self) -> str:
@@ -406,6 +407,7 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     index=index, kind=kind, url=url, caption=str(block.get("caption") or "")[:1000],
                     alt=str(block.get("alt") or "")[:500], context=str(block.get("context") or "")[:800],
                     position=max(0.0, min(1.0, position)), width=width, height=height,
+                    gallery=bool(block.get("gallery")),
                 ))
     if not body:
         for idx, raw in enumerate(fallback_urls[:12], start=1):
@@ -474,7 +476,11 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and resolved.position <= 0.20:
+            if marketing_context and not semantic_ok and (resolved.gallery or resolved.position <= 0.65):
+                # Commercial/editorial source media is already structurally scoped to the
+                # story by article_extractor. Explicit gallery items and ordinary body
+                # images may have weak/empty alt text, so lexical overlap is not a safe
+                # rejection criterion here. Hard-noise and binary validation still apply.
                 resolved.relevance_score = max(40.0, resolved.relevance_score)
                 semantic_ok = True
             if not semantic_ok:
@@ -491,7 +497,7 @@ def prepare_article_media(
             )
             video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
             semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
-            if marketing_context and item.position <= 0.20:
+            if marketing_context and (item.gallery or item.position <= 0.65):
                 semantic_ok = True
                 item.relevance_score = max(40.0, item.relevance_score)
             if not video_story and not semantic_ok:
@@ -503,7 +509,7 @@ def prepare_article_media(
             seen_urls.add(item.url)
             prepared.append(item)
         seen_identities.add(identity)
-        if len(prepared) >= 3:
+        if len(prepared) >= 24:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
     result = PreparedArticleMedia(featured, prepared)
