@@ -1541,6 +1541,77 @@ class MainWindow(tk.Tk):
                 "У маршрутизації AI: УВІМКНЕНО" if enabled else "У маршрутизації AI: ВИМКНЕНО"
             )
 
+    def _update_openrouter_status(self) -> None:
+        if not hasattr(self, "openrouter_status_var"):
+            return
+        try:
+            cfg = load_secrets()
+            enabled = bool(getattr(cfg, "openrouter_enabled", False))
+            models = list(getattr(cfg, "openrouter_models", []) or [])
+            spend_24h = self.store.openrouter_spend_usd(hours=24)
+            spend_month = self.store.openrouter_spend_usd(month=True)
+            daily = float(getattr(cfg, "openrouter_daily_budget_usd", 0.0) or 0.0)
+            monthly = float(getattr(cfg, "openrouter_monthly_budget_usd", 0.0) or 0.0)
+            state = "УВІМКНЕНО" if enabled else "ВИМКНЕНО"
+            self.openrouter_status_var.set(
+                f"OpenRouter: {state} · моделей {len(models)} · 24h ${spend_24h:.4f}/${daily:.4f} · "
+                f"місяць ${spend_month:.4f}/${monthly:.4f}"
+            )
+        except Exception as exc:
+            self.openrouter_status_var.set(f"OpenRouter: помилка стану — {exc}")
+
+    def save_openrouter_settings(self, *, quiet: bool = False) -> None:
+        try:
+            models = [
+                item.strip()
+                for item in str(self.openrouter_models_var.get() or "").replace("\n", ",").split(",")
+                if item.strip()
+            ]
+            daily = max(0.0, float(str(self.openrouter_daily_budget_var.get() or "0").replace(",", ".")))
+            monthly = max(0.0, float(str(self.openrouter_monthly_budget_var.get() or "0").replace(",", ".")))
+            enabled = bool(self.openrouter_enabled_var.get())
+            key = str(self.openrouter_key_var.get() or "").strip()
+            if enabled and not key:
+                raise ValueError("Для увімкненого OpenRouter потрібен API key")
+            if enabled and not models:
+                raise ValueError("Для увімкненого OpenRouter вкажіть хоча б один model ID")
+            cfg = load_secrets()
+            cfg.openrouter_enabled = enabled
+            cfg.openrouter_api_key = key
+            cfg.openrouter_models = models[:12]
+            cfg.openrouter_daily_budget_usd = daily
+            cfg.openrouter_monthly_budget_usd = monthly
+            save_secrets(cfg)
+            self._update_openrouter_status()
+            self.refresh_ai()
+            self.refresh_home()
+            if not quiet:
+                self.status.set("OpenRouter налаштування збережено.")
+        except Exception as exc:
+            if quiet:
+                raise
+            messagebox.showerror("OpenRouter", str(exc), parent=self)
+
+    def test_openrouter(self) -> None:
+        try:
+            self.save_openrouter_settings(quiet=True)
+        except Exception as exc:
+            messagebox.showerror("OpenRouter", str(exc), parent=self)
+            return
+        self.openrouter_status_var.set("OpenRouter: виконую живий health probe…")
+
+        def work() -> None:
+            try:
+                health = self.runtime.gateway.probe_provider("openrouter")
+                msg = (
+                    f"OpenRouter: {PROVIDER_UA.get(str(health.state), str(health.state))} · "
+                    f"{health.model or 'без активної моделі'} · {health.detail}"
+                )
+            except Exception as exc:
+                msg = f"OpenRouter: тест не пройдено — {exc}"
+            self.after(0, lambda: (self.openrouter_status_var.set(msg), self.refresh_ai(), self.refresh_home()))
+
+        threading.Thread(target=work, daemon=True, name="V2-OpenRouter-Test").start()
     def save_codex_preference(self):
         try:
             cfg = load_secrets()
