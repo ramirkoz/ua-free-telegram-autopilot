@@ -413,7 +413,9 @@ def openai_compatible_chat(
             if name in {"groq", "cloudflare"}:
                 payload["max_completion_tokens"] = active_budget
             else:
-                payload["max_tokens"] = active_budget            if name == "openrouter":
+                payload["max_tokens"] = active_budget
+
+            if name == "openrouter":
                 payload["usage"] = {"include": True}
                 if json_mode:
                     payload["response_format"] = {"type": "json_object"}
