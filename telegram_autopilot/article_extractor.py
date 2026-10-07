@@ -414,8 +414,8 @@ class _ArticleHTMLParser(HTMLParser):
 
         if tag in _VOID_TAGS:
             if self.gallery_depths and self.gallery_depths[-1] == self.depth:
-            self.gallery_depths.pop()
-        self.context_by_depth.pop(self.depth, None)
+                self.gallery_depths.pop()
+            self.context_by_depth.pop(self.depth, None)
             if self.skip_depths and self.skip_depths[-1] == self.depth:
                 self.skip_depths.pop()
             self.depth = max(0, self.depth - 1)
@@ -440,6 +440,8 @@ class _ArticleHTMLParser(HTMLParser):
             self.article_depths.pop()
         if self.skip_depths and self.skip_depths[-1] == self.depth:
             self.skip_depths.pop()
+        if self.gallery_depths and self.gallery_depths[-1] == self.depth:
+            self.gallery_depths.pop()
         self.context_by_depth.pop(self.depth, None)
         self.depth = max(0, self.depth - 1)
 
