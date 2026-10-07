@@ -103,10 +103,11 @@ class ChannelPolicy:
     target_max_chars: int = 750
 
     def normalized_media_policy(self) -> str:
-        # RC108 product decision: media is opportunistic, never a publication gate.
-        # Persisted legacy values remain readable for compatibility, but runtime
-        # publication always degrades safely to text when no valid media is available.
-        return "optional"
+        # RC112 same-version hotfix: operator configuration is authoritative.
+        # The RC108 global optional fallback silently ignored persisted `required`
+        # and allowed commercial posts with visible source media to degrade to text.
+        value = str(self.media_policy or "optional").strip().casefold()
+        return value if value in {"required", "preferred", "optional"} else "optional"
 
 
 @dataclass(slots=True)
