@@ -20,7 +20,7 @@ from . import V2_VERSION
 from .loghub import event
 
 _REPO = "ramirkoz/ua-free-telegram-autopilot"
-_VERSION_RE = re.compile(r"^2\.0\.0-rc(?P<rc>[1-9]\d*)$")
+_VERSION_RE = re.compile(r"^2\.0\.0(?:-rc(?P<rc>[1-9]\d*))?$")
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 UPDATE_RUNTIME_ABI = "py312-v1"
 
@@ -29,9 +29,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
-def _rc_number(version: str) -> int:
+def _version_rank(version: str) -> tuple[int, int]:
     match = _VERSION_RE.fullmatch(str(version or "").strip())
-    return int(match.group("rc")) if match else -1
+    if not match:
+        return (-1, -1)
+    rc = match.group("rc")
+    return (0, int(rc)) if rc else (1, 0)
+
+
+def _rc_number(version: str) -> int:
+    rank = _version_rank(version)
+    if rank[0] < 0:
+        return -1
+    return rank[1] if rank[0] == 0 else 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
