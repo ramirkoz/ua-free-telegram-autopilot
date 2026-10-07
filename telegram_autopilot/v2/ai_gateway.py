@@ -877,6 +877,11 @@ class AIGateway:
                 continue
         return self._refresh_provider_summary(provider, cfg)
 
+    def probe_provider(self, provider: str) -> ProviderHealth:
+        name = str(provider or "").strip().casefold()
+        if name not in self.PROVIDER_ORDER:
+            raise ValueError(f"Unknown AI provider: {provider}")
+        return self._probe_provider(name, load_secrets())
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
         by_provider: dict[str, ProviderHealth] = {}
