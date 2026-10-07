@@ -66,9 +66,9 @@ def test_rc112_jsonld_article_image_list_is_kept() -> None:
     <body><article><p>Wing expanded drone delivery for Walmart shoppers.</p></article></body></html>
     """
     out=extract_article_content(html,"https://example.com/wing")
-    assert "image|https://cdn.example.com/wing-1.jpg" in out.media_urls
-    assert "image|https://cdn.example.com/wing-2.jpg" in out.media_urls
-    assert "image|https://cdn.example.com/wing-3.jpg" in out.media_urls
+    assert "https://cdn.example.com/wing-1.jpg" in out.media_urls
+    assert "https://cdn.example.com/wing-2.jpg" in out.media_urls
+    assert "https://cdn.example.com/wing-3.jpg" in out.media_urls
 
 
 def test_rc112_publication_bundle_keeps_all_validated_gallery_media(monkeypatch) -> None:
