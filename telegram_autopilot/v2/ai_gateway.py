@@ -528,6 +528,19 @@ class AIGateway:
             self.store.set_provider_health(health)
         return state, scope
 
+    def _set_last_actual_cost(self, value: float) -> None:
+        ctx = getattr(self, "_openrouter_cost_context", None)
+        if ctx is None:
+            ctx = threading.local()
+            self._openrouter_cost_context = ctx
+        ctx.value = max(0.0, float(value or 0.0))
+
+    def _consume_last_actual_cost(self) -> float:
+        ctx = getattr(self, "_openrouter_cost_context", None)
+        value = max(0.0, float(getattr(ctx, "value", 0.0) or 0.0)) if ctx is not None else 0.0
+        if ctx is not None:
+            ctx.value = 0.0
+        return value
     def _call_slot(
         self,
         slot: legacy_ai.Slot,
@@ -537,11 +550,12 @@ class AIGateway:
         max_output_tokens: int,
         timeout_seconds: int,
         json_mode: bool = False,
-    ) -> tuple[str, str, str, int, int, int, float]:
+    ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
+        self._set_last_actual_cost(0.0)
         if provider == "codex":
             try:
-                return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0, 0.0
+                return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0
             except CodexEngineError as exc:
                 low = str(exc).casefold()
                 if any(x in low for x in ("usage limit", "quota", "rate limit", "429", "credits")):
@@ -560,7 +574,7 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
-            return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens, 0.0
+            return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens
 
         if provider in {"nvidia", "groq", "cloudflare", "openrouter"}:
             key = {
@@ -579,6 +593,7 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
+            self._set_last_actual_cost(float(getattr(reply, "actual_cost_usd", 0.0) or 0.0))
             return (
                 reply.text,
                 reply.model,
@@ -586,7 +601,6 @@ class AIGateway:
                 int(getattr(reply, "input_tokens", 0) or 0),
                 int(getattr(reply, "output_tokens", 0) or 0),
                 int(getattr(reply, "total_tokens", 0) or 0),
-                float(getattr(reply, "actual_cost_usd", 0.0) or 0.0),
             )
 
         if provider == "local":
@@ -614,7 +628,7 @@ class AIGateway:
                 low = str(exc).casefold()
                 kind = "timeout" if any(x in low for x in ("timeout", "не завершила", "секунд")) else "temporary"
                 raise ProviderAPIError(str(exc), kind=kind) from exc
-            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label), 0, 0, 0, 0.0
+            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label), 0, 0, 0
 
         raise ProviderAPIError(f"Unknown provider {provider}", kind="configuration")
 
@@ -703,7 +717,7 @@ class AIGateway:
                 continue
             try:
                 try:
-                    output, runtime_model, label, input_tokens, output_tokens, total_tokens, actual_cost = self._call_slot(
+                    output, runtime_model, label, input_tokens, output_tokens, total_tokens = self._call_slot(
                         slot,
                         cfg,
                         text_prompt,
@@ -711,6 +725,7 @@ class AIGateway:
                         timeout_seconds=timeout_seconds,
                         json_mode=json_mode,
                     )
+                    actual_cost = self._consume_last_actual_cost()
                     transport_attempts += 1
                     estimated_cost = _openrouter_reference_cost(runtime_model, input_tokens, output_tokens)
                     self.store.record_ai_usage(
@@ -842,7 +857,7 @@ class AIGateway:
                 continue
             try:
                 try:
-                    text, runtime_model, _label, input_tokens, output_tokens, total_tokens, actual_cost = self._call_slot(
+                    text, runtime_model, _label, input_tokens, output_tokens, total_tokens = self._call_slot(
                         slot,
                         cfg,
                         "Reply with OK only.",
@@ -850,6 +865,7 @@ class AIGateway:
                         timeout_seconds=90 if provider == "local" else 20,
                         json_mode=False,
                     )
+                    actual_cost = self._consume_last_actual_cost()
                     self.store.record_ai_usage(
                         provider=provider, model=runtime_model, purpose="health_probe",
                         input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
