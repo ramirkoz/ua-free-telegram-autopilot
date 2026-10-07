@@ -79,7 +79,7 @@ class UpdateProtocol:
         request_id = str(data.get("request_id") or "").strip() or uuid.uuid4().hex
         created_at = str(data.get("created_at") or "").strip() or _now_iso()
         source = str(data.get("source") or "agent").strip()[:80] or "agent"
-        if _rc_number(target) < 0:
+        if _version_rank(target)[0] < 0:
             raise ValueError("UPDATE_VERSION_INVALID")
         if not _SHA256_RE.fullmatch(sha256):
             raise ValueError("UPDATE_SHA256_INVALID")
@@ -136,7 +136,7 @@ class UpdateProtocol:
             # RC54: stale Drive requests must stay invisible after a newer runtime is
             # installed. The single result.json only remembers the latest request, so
             # request_already_terminal() alone cannot suppress older duplicates forever.
-            if _rc_number(request.target_version) <= _rc_number(V2_VERSION):
+            if _version_rank(request.target_version) <= _version_rank(V2_VERSION):
                 continue
             try:
                 mtime = float(source.stat().st_mtime)
@@ -160,7 +160,7 @@ class UpdateProtocol:
         request, source, _mtime = max(
             candidates,
             key=lambda item: (
-                _rc_number(item[0].target_version),
+                _version_rank(item[0].target_version),
                 str(item[0].created_at or ""),
                 float(item[2]),
                 1 if item[1].name.casefold() == "update_request.json" else 0,
@@ -199,7 +199,7 @@ class UpdateProtocol:
             event("update", "update mirror failed", level=30, path=raw, detail=str(exc)[:800])
 
     def request_is_newer(self, request: UpdateRequest) -> bool:
-        return _rc_number(request.target_version) > _rc_number(V2_VERSION)
+        return _version_rank(request.target_version) > _version_rank(V2_VERSION)
 
     def write_ready(self, request: UpdateRequest, *, pid: int, detail: str = "") -> None:
         self._atomic_json(
