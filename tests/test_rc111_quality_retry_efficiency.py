@@ -63,14 +63,14 @@ def test_rc111_qa_signatures_and_retry_limits() -> None:
     assert _rc111_quality_retry_limit("Readability QA: issue")==2
 
 
-def test_rc111_no_add_source_cools_after_three_cycles(tmp_path: Path) -> None:
+def test_rc111_no_add_source_cools_after_six_cycles(tmp_path: Path) -> None:
     store=V2Store(tmp_path/"db.sqlite3")
     source_id=_seed_channel_source(store)
-    for _ in range(3):
+    for _ in range(6):
         store.record_source_success(source_id,1000,items=20,added=0)
     row=store.source_health(source_id)
     assert row is not None
-    assert int(row["zero_result_streak"])==3
+    assert int(row["zero_result_streak"])==6
     assert row["last_outcome"]=="EMPTY"
     assert row["cooldown_until"]
 
