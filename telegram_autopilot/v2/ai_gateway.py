@@ -308,6 +308,28 @@ class AIGateway:
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
         return [slot for slot in self._runtime_slots(cfg) if slot.provider == provider]
 
+    def _openrouter_budget_status(self, cfg) -> tuple[bool, str]:
+        daily=max(0.0,float(getattr(cfg,"openrouter_daily_budget_usd",0.0) or 0.0))
+        monthly=max(0.0,float(getattr(cfg,"openrouter_monthly_budget_usd",0.0) or 0.0))
+        spent_24h=self.store.openrouter_spend_usd(hours=24)
+        spent_month=self.store.openrouter_spend_usd(month=True)
+        if daily > 0 and spent_24h >= daily:
+            return False, f"24h budget exhausted: ${spent_24h:.4f}/${daily:.4f}"
+        if monthly > 0 and spent_month >= monthly:
+            return False, f"monthly budget exhausted: ${spent_month:.4f}/${monthly:.4f}"
+        return True, f"24h ${spent_24h:.4f}/${daily:.4f} · month ${spent_month:.4f}/${monthly:.4f}"
+
+    def _mark_openrouter_budget_block(self, cfg) -> None:
+        ok, detail=self._openrouter_budget_status(cfg)
+        if ok:
+            return
+        health=self._health_map().get("openrouter", ProviderHealth(provider="openrouter"))
+        health.state=ProviderState.QUOTA
+        health.detail=detail
+        health.cooldown_until=_until(300)
+        health.updated_at=now_iso()
+        self.store.set_provider_health(health)
+        event("ai","OpenRouter budget blocked",provider="openrouter",detail=detail)
     def _provider_blocked(self, provider: str) -> bool:
         current = self._health_map().get(provider)
         return bool(
