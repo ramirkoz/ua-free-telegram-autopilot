@@ -431,7 +431,10 @@ def openai_compatible_chat(
             try:
                 _status, _headers, response = _request_json(
                     url,
-                    headers={"Authorization": f"Bearer {str(api_key).strip()}"},
+                    headers={
+                        "Authorization": f"Bearer {str(api_key).strip()}",
+                        **({"HTTP-Referer": "https://github.com/ramirkoz/ua-free-telegram-autopilot", "X-Title": "UA FREE Telegram Autopilot"} if name == "openrouter" else {}),
+                    },
                     payload=payload,
                     timeout_seconds=timeout_seconds,
                 )
