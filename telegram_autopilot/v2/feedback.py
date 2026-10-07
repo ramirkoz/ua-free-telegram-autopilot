@@ -14,7 +14,7 @@ from .loghub import event
 from .storage import V2Store, now_iso
 
 FEEDBACK_WINDOW_DAYS = 7
-AUTO_REFRESH_SECONDS = 15 * 60
+AUTO_REFRESH_SECONDS = 3 * 60 * 60
 TOTAL_TIMEOUT_SECONDS = 40
 REQUEST_TIMEOUT_SECONDS = 6
 MESSAGE_CHUNK_SIZE = 40
@@ -858,14 +858,81 @@ class FeedbackService:
 class FeedbackRuntime:
     """Independent periodic analytics worker. It never blocks RuntimeEngine."""
 
-    def __init__(self, service: FeedbackService, store: V2Store, *, interval_seconds: int = AUTO_REFRESH_SECONDS):
+    INTERVAL_META_KEY = "feedback_auto_refresh_seconds"
+    LAST_SUCCESS_META_KEY = "feedback_auto_refresh_last_success"
+    LAST_ERROR_META_KEY = "feedback_auto_refresh_last_error"
+
+    def __init__(
+        self,
+        service: FeedbackService,
+        store: V2Store,
+        *,
+        interval_seconds: int | None = None,
+        on_refresh: Callable[[dict[str, Any]], None] | None = None,
+    ):
         import threading
         self.service = service
         self.store = store
-        self.interval_seconds = max(300, int(interval_seconds))
+        stored = self._meta_get_int(self.INTERVAL_META_KEY, AUTO_REFRESH_SECONDS)
+        self.interval_seconds = self._normalize_interval(interval_seconds if interval_seconds is not None else stored)
+        self.on_refresh = on_refresh
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last: dict[int, float] = {}
+        self._last_success = self._meta_get(self.LAST_SUCCESS_META_KEY)
+        self._last_error = self._meta_get(self.LAST_ERROR_META_KEY)
+
+    @staticmethod
+    def _normalize_interval(value: int | float) -> int:
+        # Keep analytics bounded and operator-configurable: 15 minutes .. 24 hours.
+        return max(15 * 60, min(24 * 60 * 60, int(value or AUTO_REFRESH_SECONDS)))
+
+    def _meta_get(self, key: str) -> str:
+        try:
+            with self.store.connect() as con:
+                row = con.execute("SELECT value FROM meta WHERE key=?", (str(key),)).fetchone()
+            return str(row[0] or "") if row else ""
+        except Exception:
+            return ""
+
+    def _meta_get_int(self, key: str, default: int) -> int:
+        try:
+            return int(self._meta_get(key) or default)
+        except Exception:
+            return int(default)
+
+    def _meta_set(self, key: str, value: str) -> None:
+        with self.store.connect() as con:
+            con.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(key), str(value)),
+            )
+
+    def configure_interval(self, seconds: int) -> int:
+        self.interval_seconds = self._normalize_interval(seconds)
+        self._meta_set(self.INTERVAL_META_KEY, str(self.interval_seconds))
+        event("feedback", "auto refresh interval updated", interval_seconds=self.interval_seconds)
+        return self.interval_seconds
+
+    def status_snapshot(self) -> dict[str, Any]:
+        now = time.monotonic()
+        last_due = max(self._last.values(), default=0.0)
+        remaining = max(0, self.interval_seconds - int(now - last_due)) if last_due else 0
+        return {
+            "interval_seconds": self.interval_seconds,
+            "last_success": self._last_success,
+            "last_error": self._last_error,
+            "next_in_seconds": remaining,
+            "running": bool(self._thread and self._thread.is_alive()),
+        }
+
+    def _notify(self, payload: dict[str, Any]) -> None:
+        if not self.on_refresh:
+            return
+        try:
+            self.on_refresh(dict(payload))
+        except Exception:
+            pass
 
     def start(self) -> None:
         import threading
@@ -886,11 +953,15 @@ class FeedbackRuntime:
         if self._stop.wait(60.0):
             return
         while not self._stop.is_set():
-            configured, _ = analytics_configured()
+            configured, detail = analytics_configured()
             if not configured:
+                self._last_error = str(detail or "Telegram Analytics не налаштовано")
+                self._meta_set(self.LAST_ERROR_META_KEY, self._last_error)
+                self._notify({"event": "not_configured", "error": self._last_error})
                 self._stop.wait(60.0)
                 continue
             now = time.monotonic()
+            refreshed_any = False
             for row in self.store.list_channels(enabled_only=True):
                 if self._stop.is_set():
                     return
@@ -898,7 +969,25 @@ class FeedbackRuntime:
                 if now - float(self._last.get(cid, 0.0)) < self.interval_seconds:
                     continue
                 self._last[cid] = time.monotonic()
+                refreshed_any = True
                 summary = self.service.refresh_channel(cid, force=False)
+                payload = {"event": "auto_refresh", "channel_id": cid, **summary}
                 if summary.get("error"):
-                    event("feedback", "auto refresh degraded", level=30, channel_id=cid, detail=str(summary.get("error"))[:600])
+                    self._last_error = str(summary.get("error") or "")[:1000]
+                    self._meta_set(self.LAST_ERROR_META_KEY, self._last_error)
+                    event("feedback", "auto refresh degraded", level=30, channel_id=cid, detail=self._last_error[:600])
+                else:
+                    self._last_success = now_iso()
+                    self._last_error = ""
+                    self._meta_set(self.LAST_SUCCESS_META_KEY, self._last_success)
+                    self._meta_set(self.LAST_ERROR_META_KEY, "")
+                    event(
+                        "feedback", "auto refresh complete", channel_id=cid,
+                        checked=int(summary.get("checked") or 0), elapsed_seconds=round(float(summary.get("elapsed") or 0), 2),
+                        interval_seconds=self.interval_seconds,
+                    )
+                self._notify(payload)
+            if refreshed_any:
+                self._notify({"event": "cycle_complete", **self.status_snapshot()})
             self._stop.wait(30.0)
+
