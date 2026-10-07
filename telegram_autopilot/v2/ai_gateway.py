@@ -844,6 +844,7 @@ class AIGateway:
                         provider=provider, model=runtime_model, purpose="health_probe",
                         input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
                         estimated_openrouter_usd=_openrouter_reference_cost(runtime_model, input_tokens, output_tokens),
+                        actual_openrouter_usd=actual_cost,
                     )
                 finally:
                     lock.release()
