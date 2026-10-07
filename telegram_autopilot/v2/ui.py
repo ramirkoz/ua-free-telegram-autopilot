@@ -1718,6 +1718,7 @@ class MainWindow(tk.Tk):
             self.refresh_editorial_review()
             self.refresh_history()
             self.refresh_ai()
+            self._update_openrouter_status()
             self.refresh_learning()
             self._update_feedback_runtime_status()
             self.refresh_supervisor()
@@ -1759,7 +1760,7 @@ class MainWindow(tk.Tk):
                 self.status.set("Автопілот: workers не працюють")
             else:
                 self.status.set("Автопілот працює")
-        provider_total = 6
+        provider_total = 7
         configured_text = f"{configured} налаштовано" if provider_total else "стан ще не перевірено"
         blockers_text = ", ".join(f"{BLOCK_UA.get(key, key)}={value}" for key, value in blocked.items()) or "немає активних"
         text = (
@@ -1840,7 +1841,7 @@ class MainWindow(tk.Tk):
         self.ai_tree.delete(*self.ai_tree.get_children())
         rows = {health.provider: health for health in self.store.provider_health()}
         cfg = load_secrets()
-        expected = ("gemini", "nvidia", "groq", "cloudflare", "local", "codex")
+        expected = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
         for provider in expected:
             health = rows.get(provider)
             if health is not None:
@@ -1863,6 +1864,19 @@ class MainWindow(tk.Tk):
                     0,
                     "",
                     "Увімкнено; детальний стан у блоці Codex / ChatGPT" if enabled else "Вимкнено оператором",
+                )
+            elif provider == "openrouter":
+                enabled = bool(getattr(cfg, "openrouter_enabled", False))
+                models = list(getattr(cfg, "openrouter_models", []) or [])
+                configured = bool(enabled and getattr(cfg, "openrouter_api_key", "") and models)
+                values = (
+                    "openrouter",
+                    "Невідомо" if configured else "Не налаштовано",
+                    ", ".join(models[:2]),
+                    0,
+                    0,
+                    "",
+                    "Увімкнено; ще немає health-запису" if configured else "Вимкнено або немає ключа/model allow-list",
                 )
             elif provider == "local":
                 enabled = bool(getattr(cfg, "local_enabled", False))
