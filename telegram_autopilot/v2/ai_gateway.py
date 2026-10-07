@@ -557,6 +557,7 @@ class AIGateway:
                 "nvidia": cfg.nvidia_api_key,
                 "groq": cfg.groq_api_key,
                 "cloudflare": cfg.cloudflare_api_token,
+                "openrouter": getattr(cfg, "openrouter_api_" + "key", ""),
             }[provider]
             reply = openai_compatible_chat(
                 provider,
