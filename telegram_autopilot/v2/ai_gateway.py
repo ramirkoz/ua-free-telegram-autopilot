@@ -527,11 +527,11 @@ class AIGateway:
         max_output_tokens: int,
         timeout_seconds: int,
         json_mode: bool = False,
-    ) -> tuple[str, str, str, int, int, int]:
+    ) -> tuple[str, str, str, int, int, int, float]:
         provider = slot.provider
         if provider == "codex":
             try:
-                return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0
+                return str(run_codex(prompt)).strip(), slot.model, slot.label, 0, 0, 0, 0.0
             except CodexEngineError as exc:
                 low = str(exc).casefold()
                 if any(x in low for x in ("usage limit", "quota", "rate limit", "429", "credits")):
@@ -550,7 +550,7 @@ class AIGateway:
                 timeout_seconds=max(8, int(timeout_seconds)),
                 json_mode=json_mode,
             )
-            return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens
+            return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens, 0.0
 
         if provider in {"nvidia", "groq", "cloudflare"}:
             key = {
@@ -602,7 +602,7 @@ class AIGateway:
                 low = str(exc).casefold()
                 kind = "timeout" if any(x in low for x in ("timeout", "не завершила", "секунд")) else "temporary"
                 raise ProviderAPIError(str(exc), kind=kind) from exc
-            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label), 0, 0, 0
+            return str(text).strip(), str(getattr(target, "model", "") or slot.model), str(getattr(target, "label", "") or slot.label), 0, 0, 0, 0.0
 
         raise ProviderAPIError(f"Unknown provider {provider}", kind="configuration")
 
