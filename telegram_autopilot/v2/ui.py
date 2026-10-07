@@ -667,15 +667,42 @@ class MainWindow(tk.Tk):
 
     def _build_ai(self):
         panel = self.tabs["ai"]
+        try:
+            _ai_cfg = load_secrets()
+        except Exception:
+            _ai_cfg = None
+
+        openrouter_box = ttk.LabelFrame(panel, text="OpenRouter", padding=8)
+        openrouter_box.pack(fill="x", padx=8, pady=(8, 4))
+        self.openrouter_enabled_var = tk.BooleanVar(value=bool(getattr(_ai_cfg, "openrouter_enabled", False)))
+        self.openrouter_key_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_api_key", "") or ""))
+        self.openrouter_models_var = tk.StringVar(value=", ".join(list(getattr(_ai_cfg, "openrouter_models", []) or [])))
+        self.openrouter_daily_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_daily_budget_usd", 1.0) or 0.0))
+        self.openrouter_monthly_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_monthly_budget_usd", 10.0) or 0.0))
+        self.openrouter_status_var = tk.StringVar(value="OpenRouter: очікує перевірки")
+        ttk.Checkbutton(openrouter_box, text="Увімкнути OpenRouter у AI Router", variable=self.openrouter_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ttk.Label(openrouter_box, text="API key").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_key_var, show="•", width=78).grid(row=1, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Дозволені моделі").grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_models_var, width=95).grid(row=2, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Через кому. У production потрапляють тільки ці перевірені model ID; каталог сам нічого не вмикає.", foreground="#555").grid(row=3, column=1, columnspan=3, sticky="w", padx=6, pady=(0, 4))
+        ttk.Label(openrouter_box, text="Ліміт 24 год, $").grid(row=4, column=0, sticky="w", padx=4, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_daily_budget_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Ліміт місяць, $").grid(row=4, column=2, sticky="w", padx=12, pady=4)
+        ttk.Entry(openrouter_box, textvariable=self.openrouter_monthly_budget_var, width=12).grid(row=4, column=3, sticky="w", padx=6, pady=4)
+        or_bar = ttk.Frame(openrouter_box)
+        or_bar.grid(row=5, column=0, columnspan=4, sticky="w", padx=4, pady=(6, 4))
+        ttk.Button(or_bar, text="Зберегти OpenRouter", command=self.save_openrouter_settings).pack(side="left")
+        ttk.Button(or_bar, text="Перевірити OpenRouter", command=self.test_openrouter).pack(side="left", padx=6)
+        ttk.Label(openrouter_box, textvariable=self.openrouter_status_var, foreground="#555").grid(row=6, column=0, columnspan=4, sticky="w", padx=4, pady=(4, 0))
+        openrouter_box.columnconfigure(1, weight=1)
+        self._update_openrouter_status()
+
         codex_box = ttk.LabelFrame(panel, text="Codex / ChatGPT", padding=8)
         codex_box.pack(fill="x", padx=8, pady=(8, 4))
         self.codex_status = tk.StringVar(value="Стан Codex: не перевірявся")
         self.codex_route_status = tk.StringVar(value="У маршрутизації AI: ВИМКНЕНО")
-        try:
-            _ai_cfg = load_secrets()
-            _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False))
-        except Exception:
-            _codex_enabled = False
+        _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False)) if _ai_cfg is not None else False
         self.codex_enabled_var = tk.BooleanVar(value=_codex_enabled)
         ttk.Checkbutton(
             codex_box, text="Дозволити автоматичне використання Codex у AI Router",
