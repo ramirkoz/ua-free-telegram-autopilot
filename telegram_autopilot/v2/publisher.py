@@ -539,6 +539,11 @@ class Publisher:
             bundle_media_count=bundle.count, declared_media_count=bundle.declared_media_count,
             source_kind=bundle.source_kind, stitched=bundle.stitched,
             telegram_video_recovery=video_recovery, web_media_provenance=_web_media_provenance(article),
+            gallery_detected=bool(getattr(bundle,"gallery_detected",False)),
+            gallery_items_found=int(getattr(bundle,"gallery_items_found",0) or 0),
+            gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),
+            video_embed_count=int(getattr(bundle,"video_embed_count",0) or 0),
+            web_media_source=str(getattr(bundle,"web_media_source","") or ""),
         )
         if policy == "required" and not bundle.count:
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
@@ -613,6 +618,10 @@ class Publisher:
             media_policy=policy, source_media_count=source_media_count, bundle_media_count=bundle.count,
             prepared_media_count=len(prepared), failed_media_count=len(prepare_failures),
             binary_duplicates_removed=duplicate_binary_count, upload_mode="multipart_local",
+            gallery_detected=bool(getattr(bundle,"gallery_detected",False)),
+            gallery_items_found=int(getattr(bundle,"gallery_items_found",0) or 0),
+            gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),
+            video_embed_count=int(getattr(bundle,"video_embed_count",0) or 0),
         )
 
         if prepare_failures and policy == "required":
