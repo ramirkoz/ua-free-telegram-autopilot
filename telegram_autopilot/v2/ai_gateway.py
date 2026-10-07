@@ -552,7 +552,7 @@ class AIGateway:
             )
             return reply.text, reply.model, slot.label, reply.input_tokens, reply.output_tokens, reply.total_tokens, 0.0
 
-        if provider in {"nvidia", "groq", "cloudflare"}:
+        if provider in {"nvidia", "groq", "cloudflare", "openrouter"}:
             key = {
                 "nvidia": cfg.nvidia_api_key,
                 "groq": cfg.groq_api_key,
