@@ -23,10 +23,11 @@ def _seed_channel(store: V2Store, channel_id: int = 2, profile: str = "commercia
         )
 
 
-def test_rc108_runtime_media_policy_is_always_optional() -> None:
-    assert ChannelPolicy(media_policy="required").normalized_media_policy() == "optional"
-    assert ChannelPolicy(media_policy="preferred").normalized_media_policy() == "optional"
+def test_rc112_runtime_media_policy_honors_operator_configuration() -> None:
+    assert ChannelPolicy(media_policy="required").normalized_media_policy() == "required"
+    assert ChannelPolicy(media_policy="preferred").normalized_media_policy() == "preferred"
     assert ChannelPolicy(media_policy="optional").normalized_media_policy() == "optional"
+    assert ChannelPolicy(media_policy="nonsense").normalized_media_policy() == "optional"
 
 
 def test_rc108_migration_releases_ready_media_blockers_and_tunes_commercial(tmp_path: Path) -> None:

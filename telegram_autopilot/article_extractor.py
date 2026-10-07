@@ -187,6 +187,9 @@ class _ArticleHTMLParser(HTMLParser):
         self.featured_video = ""
         self.featured_video_poster = ""
         self.gallery_depths: list[int] = []
+        self.page_image_candidates: list[dict[str, object]] = []
+        self.explicit_gallery_candidates: list[dict[str, object]] = []
+        self.explicit_gallery_signal = False
 
     @property
     def in_article(self) -> bool:
@@ -226,7 +229,7 @@ class _ArticleHTMLParser(HTMLParser):
         except ValueError:
             return 0
 
-    def _image_candidate(self, values: dict[str, str], *, featured: bool = False) -> dict[str, object] | None:
+    def _image_candidate(self, values: dict[str, str], *, featured: bool = False, gallery_hint: bool = False) -> dict[str, object] | None:
         candidate = (
             values.get("data-src") or values.get("data-lazy-src") or values.get("data-original")
             or values.get("data-original-src") or values.get("data-image-src") or values.get("data-image")
@@ -237,7 +240,8 @@ class _ArticleHTMLParser(HTMLParser):
         context = self._context(self._attrs_text(values))
         width, height = self._int_attr(values.get("width", "")), self._int_attr(values.get("height", ""))
         url = editorial_media_candidate(
-            self.base_url, candidate, alt=alt, context=context, width=width, height=height, featured=featured,
+            self.base_url, candidate, alt=alt, context=context,
+            width=0 if gallery_hint else width, height=0 if gallery_hint else height, featured=featured,
         )
         if not url:
             return None
@@ -277,6 +281,15 @@ class _ArticleHTMLParser(HTMLParser):
         values = {str(k).casefold(): str(v or "") for k, v in attrs}
         own_context = self._attrs_text(values)
         self.context_by_depth[self.depth] = own_context
+
+        # Some publishers (notably TrendHunter-like layouts) expose the gallery only
+        # through a VIEW GALLERY control while the surrounding wrapper has no useful
+        # gallery class. Keep a bounded trail of page image candidates so the explicit
+        # control can retroactively claim the immediately preceding hero/thumbnails.
+        if self._gallery_context(own_context):
+            self.explicit_gallery_signal = True
+            if self.page_image_candidates:
+                self.explicit_gallery_candidates = list(self.page_image_candidates[-12:])
 
         should_skip = tag in _ALWAYS_SKIP_TAGS or _looks_noisy_context(self._context())
         if should_skip and not self.skipping:
@@ -327,6 +340,13 @@ class _ArticleHTMLParser(HTMLParser):
                 url = editorial_media_candidate(self.base_url, candidate, context="featured video")
                 if url:
                     self.featured_video = encode_media(kind, url)
+
+        if tag == "img" and not self.skipping:
+            page_candidate = self._image_candidate(values, gallery_hint=True)
+            if page_candidate:
+                self.page_image_candidates.append(page_candidate)
+                if len(self.page_image_candidates) > 32:
+                    self.page_image_candidates = self.page_image_candidates[-32:]
 
         if (self.in_article or self.in_gallery) and not self.skipping:
             if tag == "figure" and self.figure is None:
@@ -459,6 +479,10 @@ class _ArticleHTMLParser(HTMLParser):
             return
         if self.in_title:
             self.title_chunks.append(stripped)
+        if self._gallery_context(stripped):
+            self.explicit_gallery_signal = True
+            if self.page_image_candidates:
+                self.explicit_gallery_candidates = list(self.page_image_candidates[-12:])
         self.all_chunks.append(stripped + " ")
         if self.figure is not None and self.figcaption_depth:
             self.figure["caption_chunks"].append(stripped + " ")  # type: ignore[index]
@@ -781,6 +805,18 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     # independently from page-level OG metadata.  RC70 could publish a stale/unrelated
     # OG image when a publisher page exposed no body image, which is worse than no media.
     article_parser = _parse_scope(html, base_url, include_main=False)
+    # Recover galleries whose only structural signal is a visible VIEW GALLERY
+    # control. These candidates are still subjected to normal hard-noise and binary
+    # validation later; this step merely prevents the source gallery from vanishing.
+    if article_parser.explicit_gallery_signal and article_parser.explicit_gallery_candidates:
+        existing_urls = {str(block.get("url") or "") for block in article_parser.blocks if block.get("type") == "media"}
+        for candidate in article_parser.explicit_gallery_candidates:
+            url = str(candidate.get("url") or "")
+            if not url or url in existing_urls:
+                continue
+            article_parser.blocks.append({"type": "media", **candidate, "caption": "", "gallery": True})
+            existing_urls.add(url)
+
     article_blocks, article_media = _normalize_layout(article_parser.blocks, "", article_parser.featured_video)
     article_text = _clean_text("\n".join(
         str(block.get("text") or "") for block in article_blocks if block.get("type") == "text"
@@ -792,6 +828,14 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     text = article_text
     if not article_parser.article_seen or len(article_text) < 50:
         main_parser = _parse_scope(html, base_url, include_main=True)
+        if main_parser.explicit_gallery_signal and main_parser.explicit_gallery_candidates:
+            existing_urls = {str(block.get("url") or "") for block in main_parser.blocks if block.get("type") == "media"}
+            for candidate in main_parser.explicit_gallery_candidates:
+                url = str(candidate.get("url") or "")
+                if not url or url in existing_urls:
+                    continue
+                main_parser.blocks.append({"type": "media", **candidate, "caption": "", "gallery": True})
+                existing_urls.add(url)
         main_blocks, main_media = _normalize_layout(main_parser.blocks, "", main_parser.featured_video)
         main_text = _clean_text("\n".join(
             str(block.get("text") or "") for block in main_blocks if block.get("type") == "text"
