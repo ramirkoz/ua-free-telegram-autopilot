@@ -150,3 +150,57 @@ def test_rc112_startup_repair_clears_carried_empty_cooldowns(tmp_path: Path) -> 
     assert row["cooldown_until"] == ""
     assert row["last_outcome"] == "OK"
     assert int(row["zero_result_streak"]) == 0
+
+
+def test_rc112_view_gallery_control_recovers_preceding_hero_and_thumbnails() -> None:
+    html = """
+    <html><head><title>Wearable Stone Jackets</title></head><body>
+      <article><h1>Wearable Stone Jackets</h1><p>Vollebak constructs a bomber from slate tiles.</p></article>
+      <div class="visual-shell">
+        <img src="https://cdn.example.com/rock-hero.jpg" width="1200" height="800" alt="Rock jacket"/>
+        <img data-src="https://cdn.example.com/rock-1.jpg" width="90" height="90" alt=""/>
+        <img data-src="https://cdn.example.com/rock-2.jpg" width="90" height="90" alt=""/>
+        <img data-src="https://cdn.example.com/rock-3.jpg" width="90" height="90" alt=""/>
+        <button>VIEW GALLERY</button>
+      </div>
+    </body></html>
+    """
+    out = extract_article_content(html, "https://www.trendhunter.com/trends/wearable-stone-jackets")
+    layout = json.loads(out.layout_json)
+    gallery = [b for b in layout["blocks"] if b.get("type") == "media" and b.get("gallery")]
+    urls = [str(b.get("url") or "") for b in gallery]
+    assert "https://cdn.example.com/rock-hero.jpg" in urls
+    assert "https://cdn.example.com/rock-1.jpg" in urls
+    assert "https://cdn.example.com/rock-2.jpg" in urls
+    assert "https://cdn.example.com/rock-3.jpg" in urls
+
+
+def test_rc112_commercial_gallery_weak_alt_survives_and_keeps_full_set(monkeypatch) -> None:
+    import telegram_autopilot.media_pipeline as media_pipeline
+
+    def fake_probe(item, *, marketing_context=False):
+        item.mime_type = "image/jpeg"
+        item.width = 1200
+        item.height = 800
+        item.digest = f"digest-{item.index}"
+        item.data = b"image"
+        return item
+
+    monkeypatch.setattr(media_pipeline, "_probe_image", fake_probe)
+    layout = json.dumps({
+        "blocks": [
+            {
+                "type": "media", "index": idx, "kind": "image",
+                "url": f"https://cdn.example.com/gallery-{idx}.jpg",
+                "alt": "", "context": "visual-shell", "position": 0.8,
+                "gallery": True,
+            }
+            for idx in range(1, 8)
+        ]
+    })
+    prepared = media_pipeline.prepare_article_media(
+        layout, [], title="Wearable Stone Jackets",
+        article_text="Vollebak made a jacket from slate tiles.", marketing_context=True,
+    )
+    assert len(prepared.body) == 7
+    assert all(item.gallery for item in prepared.body)
