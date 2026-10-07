@@ -11,6 +11,7 @@ from telegram_autopilot.v2.ai_gateway import (
     _failure_meta,
 )
 from telegram_autopilot.v2.domain import ProviderState
+import telegram_autopilot.v2.update_protocol as update_protocol
 from telegram_autopilot.v2.update_protocol import UpdateProtocol
 
 
@@ -46,13 +47,13 @@ def test_local_cpu_prompt_is_bounded_but_keeps_front_and_tail() -> None:
     assert "локальний CPU-контекст скорочено" in compact
 
 
-def test_drive_duplicate_request_cannot_hide_newer_release(tmp_path) -> None:
+def test_drive_duplicate_request_cannot_hide_newer_release(tmp_path, monkeypatch) -> None:
     root = tmp_path / "local"
     mirror = tmp_path / "mirror"
     mirror.mkdir()
-    current_rc = int(V2_VERSION.rsplit("rc", 1)[1])
-    old_version = f"2.0.0-rc{current_rc + 1}"
-    new_version = f"2.0.0-rc{current_rc + 2}"
+    monkeypatch.setattr(update_protocol, "V2_VERSION", "2.0.0-rc115")
+    old_version = "2.0.0-rc116"
+    new_version = "2.0.0-rc117"
     old = {
         "request_id": "release-next-old",
         "target_version": old_version,
@@ -78,3 +79,16 @@ def test_drive_duplicate_request_cannot_hide_newer_release(tmp_path) -> None:
     assert request.request_id == "release-next-new"
     saved = protocol.load_request()
     assert saved is not None and saved.target_version == new_version
+
+
+def test_stable_runtime_rejects_rc_downgrade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(update_protocol, "V2_VERSION", "2.0.0")
+    protocol = UpdateProtocol(tmp_path / "stable")
+    request = update_protocol.UpdateRequest(
+        request_id="stable-no-downgrade",
+        target_version="2.0.0-rc999",
+        sha256="a" * 64,
+        created_at="2026-10-07T17:00:00+03:00",
+        source="test",
+    )
+    assert protocol.request_is_newer(request) is False
