@@ -266,7 +266,7 @@ class _ArticleHTMLParser(HTMLParser):
             # and lazy placeholders are therefore collapsed before publication.
             candidates.sort(key=lambda row: (int(row.get("width") or 0) * int(row.get("height") or 0), int(row.get("width") or 0)), reverse=True)
             media = dict(candidates[0])
-            media.update({"type": "media", "caption": caption})
+            media.update({"type": "media", "caption": caption, "gallery": bool(self.figure.get("gallery"))})
             self.blocks.append(media)
         self.figure = None
         self.figcaption_depth = 0
@@ -331,7 +331,7 @@ class _ArticleHTMLParser(HTMLParser):
         if (self.in_article or self.in_gallery) and not self.skipping:
             if tag == "figure" and self.figure is None:
                 self._finish_text_capture()
-                self.figure = {"depth": self.depth, "candidates": [], "caption_chunks": []}
+                self.figure = {"depth": self.depth, "candidates": [], "caption_chunks": [], "gallery": bool(self.in_gallery)}
             elif tag == "figcaption" and self.figure is not None:
                 self.figcaption_depth = self.depth
             elif tag in _BLOCK_TAGS and self.figure is None and self.text_capture is None:
@@ -363,6 +363,7 @@ class _ArticleHTMLParser(HTMLParser):
                         "type": "media", "kind": "video", "url": url, "caption": "",
                         "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
                         "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                        "gallery": bool(self.in_gallery),
                     })
             elif tag == "source":
                 candidate = values.get("src", "")
