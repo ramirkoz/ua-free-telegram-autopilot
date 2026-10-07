@@ -693,7 +693,7 @@ class AIGateway:
                 continue
             try:
                 try:
-                    output, runtime_model, label, input_tokens, output_tokens, total_tokens = self._call_slot(
+                    output, runtime_model, label, input_tokens, output_tokens, total_tokens, actual_cost = self._call_slot(
                         slot,
                         cfg,
                         text_prompt,
@@ -707,6 +707,7 @@ class AIGateway:
                         provider=provider, model=runtime_model, purpose=str(purpose or "content"),
                         input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
                         estimated_openrouter_usd=estimated_cost,
+                        actual_openrouter_usd=actual_cost,
                     )
                 finally:
                     lock.release()
