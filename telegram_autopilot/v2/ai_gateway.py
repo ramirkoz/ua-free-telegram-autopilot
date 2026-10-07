@@ -815,6 +815,11 @@ class AIGateway:
     def _probe_provider(self, provider: str, cfg) -> ProviderHealth:
         if not self._configured(provider, cfg):
             return self._refresh_provider_summary(provider, cfg)
+        if provider == "openrouter":
+            budget_ok, _detail = self._openrouter_budget_status(cfg)
+            if not budget_ok:
+                self._mark_openrouter_budget_block(cfg)
+                return self._refresh_provider_summary(provider, cfg)
 
         # Probes intentionally ignore stale model cooldowns. An upgrade/restart is a
         # legitimate opportunity to prove a token/network/model recovered and clear
