@@ -152,7 +152,7 @@ def test_update_protocol_accepts_only_version_and_hash(tmp_path: Path) -> None:
         "https://github.com/ramirkoz/ua-free-telegram-autopilot/releases/download/"
         "v2.0.0-rc9999/UA_FREE_Telegram_Autopilot_v2.0.0-rc9999_Update.zip"
     )
-    assert protocol.request_is_newer(request)
+    assert protocol.request_is_newer(request) is (V2_VERSION != "2.0.0")
     assert UPDATE_RUNTIME_ABI == "py312-v1"
     with pytest.raises(ValueError, match="UPDATE_VERSION_INVALID"):
         protocol.validate_request({"target_version": "https://evil.example", "sha256": "a" * 64})
