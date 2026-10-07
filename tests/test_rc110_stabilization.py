@@ -124,5 +124,5 @@ def test_rc110_slow_success_is_cooled_and_zero_streak_is_tracked(tmp_path: Path)
         store.record_source_success(source_id, 1000, items=0, added=0)
     row = store.source_health(source_id)
     assert row["last_outcome"] == "EMPTY"
-    assert int(row["zero_result_streak"]) == 4
+    assert int(row["zero_result_streak"]) == 6
     assert row["cooldown_until"]
