@@ -374,6 +374,7 @@ class _ArticleHTMLParser(HTMLParser):
                         "type": "media", "kind": "video", "url": url, "caption": "",
                         "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
                         "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                        "gallery": bool(self.in_gallery),
                     })
             elif tag == "iframe":
                 candidate = values.get("src") or values.get("data-src") or values.get("data-lazy-src") or ""
@@ -386,6 +387,7 @@ class _ArticleHTMLParser(HTMLParser):
                             "type": "media", "kind": "iframe", "url": url, "caption": "",
                             "alt": " ".join((values.get("title") or values.get("aria-label") or "").split())[:500],
                             "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                            "gallery": bool(self.in_gallery),
                         })
             elif "youtube" in tag or "youtube" in (values.get("class") or "").casefold():
                 video_id = values.get("videoid") or values.get("video-id") or values.get("data-videoid") or values.get("data-video-id") or ""
@@ -399,6 +401,7 @@ class _ArticleHTMLParser(HTMLParser):
                             "type": "media", "kind": "iframe", "url": url, "caption": "",
                             "alt": " ".join((values.get("title") or values.get("aria-label") or "YouTube video").split())[:500],
                             "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                            "gallery": bool(self.in_gallery),
                         })
             elif tag == "a":
                 candidate = values.get("href", "")
@@ -411,6 +414,7 @@ class _ArticleHTMLParser(HTMLParser):
                             "type": "media", "kind": "iframe", "url": url, "caption": "",
                             "alt": " ".join((values.get("title") or values.get("aria-label") or "Video").split())[:500],
                             "context": " ".join(self._context(self._attrs_text(values)).split())[:800],
+                            "gallery": bool(self.in_gallery),
                         })
 
         if tag in _VOID_TAGS:
