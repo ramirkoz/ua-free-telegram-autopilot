@@ -109,8 +109,6 @@ def _rc109_route_slots(slots: Iterable[legacy_ai.Slot], purpose: str) -> list[le
     def key(slot: legacy_ai.Slot) -> tuple[int, int]:
         model = str(slot.model or "")
         rank = int(_RC109_CHEAP_MODEL_RANK.get(model, 60))
-        if str(slot.provider or "").casefold() == "openrouter":
-            rank = 55
         if complex_task:
             if model == "nvidia/nemotron-3-super-120b-a12b":
                 rank = 10
@@ -132,6 +130,8 @@ def _rc109_route_slots(slots: Iterable[legacy_ai.Slot], purpose: str) -> list[le
                 rank = 20
             elif model == "openai/gpt-oss-120b":
                 rank = 25
+        if str(slot.provider or "").casefold() == "openrouter":
+            rank = 55
         return rank, int(getattr(slot, "priority", 999) or 999)
 
     return sorted(list(slots), key=key)
@@ -424,6 +424,16 @@ class AIGateway:
             current.updated_at = now_iso()
             self.store.set_provider_health(current)
             return current
+        if provider == "openrouter":
+            budget_ok, budget_detail = self._openrouter_budget_status(cfg)
+            if not budget_ok:
+                current.state = ProviderState.QUOTA
+                current.model = ""
+                current.detail = budget_detail
+                current.cooldown_until = _until(300)
+                current.updated_at = now_iso()
+                self.store.set_provider_health(current)
+                return current
 
         models = {slot.model for slot in self._provider_slots(provider, cfg)}
         rows = [item for item in self.store.ai_model_health(provider) if item.model in models]
