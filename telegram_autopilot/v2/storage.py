@@ -322,7 +322,8 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
  input_tokens INTEGER NOT NULL DEFAULT 0,
  output_tokens INTEGER NOT NULL DEFAULT 0,
  total_tokens INTEGER NOT NULL DEFAULT 0,
- estimated_openrouter_usd REAL NOT NULL DEFAULT 0
+ estimated_openrouter_usd REAL NOT NULL DEFAULT 0,
+ actual_openrouter_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_recent ON ai_usage_events(created_at DESC,provider,model);
 CREATE TABLE IF NOT EXISTS editorial_actions(
@@ -376,6 +377,7 @@ class V2Store:
                 self._ensure_rc109_clear_all_media_blockers(con)
                 self._ensure_rc110_source_health_columns(con)
                 self._ensure_rc112_cooldown_repair(con)
+                self._ensure_rc115_ai_usage_columns(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
@@ -413,6 +415,13 @@ class V2Store:
         for name,ddl in additions.items():
             if name not in columns:
                 con.execute(f"ALTER TABLE source_health ADD COLUMN {name} {ddl}")
+
+    @staticmethod
+    def _ensure_rc115_ai_usage_columns(con: sqlite3.Connection) -> None:
+        """Backfill actual OpenRouter cost on carried databases."""
+        columns={str(row[1]) for row in con.execute("PRAGMA table_info(ai_usage_events)").fetchall()}
+        if "actual_openrouter_usd" not in columns:
+            con.execute("ALTER TABLE ai_usage_events ADD COLUMN actual_openrouter_usd REAL NOT NULL DEFAULT 0")
 
     @staticmethod
     def _ensure_rc112_cooldown_repair(con: sqlite3.Connection) -> None:
@@ -1739,26 +1748,48 @@ class V2Store:
             'duplicate_risk_blocked': int(counts.get('UNKNOWN',0)),
         }
 
-    def record_ai_usage(self, *, provider: str, model: str, purpose: str, input_tokens: int = 0, output_tokens: int = 0, total_tokens: int = 0, estimated_openrouter_usd: float = 0.0) -> None:
+    def record_ai_usage(self, *, provider: str, model: str, purpose: str, input_tokens: int = 0, output_tokens: int = 0, total_tokens: int = 0, estimated_openrouter_usd: float = 0.0, actual_openrouter_usd: float = 0.0) -> None:
         inp=max(0,int(input_tokens or 0)); out=max(0,int(output_tokens or 0)); total=max(inp+out,int(total_tokens or 0))
         with self.connect() as con:
             con.execute(
-                "INSERT INTO ai_usage_events(created_at,provider,model,purpose,input_tokens,output_tokens,total_tokens,estimated_openrouter_usd) VALUES(?,?,?,?,?,?,?,?)",
-                (now_iso(),str(provider),str(model),str(purpose),inp,out,total,max(0.0,float(estimated_openrouter_usd or 0.0))),
+                "INSERT INTO ai_usage_events(created_at,provider,model,purpose,input_tokens,output_tokens,total_tokens,estimated_openrouter_usd,actual_openrouter_usd) VALUES(?,?,?,?,?,?,?,?,?)",
+                (now_iso(),str(provider),str(model),str(purpose),inp,out,total,max(0.0,float(estimated_openrouter_usd or 0.0)),max(0.0,float(actual_openrouter_usd or 0.0))),
             )
+
+    def openrouter_spend_usd(self, *, hours: int | None = None, month: bool = False) -> float:
+        with self.connect() as con:
+            if month:
+                row=con.execute(
+                    """SELECT COALESCE(SUM(actual_openrouter_usd),0) value
+                         FROM ai_usage_events
+                        WHERE provider='openrouter'
+                          AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now','localtime')"""
+                ).fetchone()
+            else:
+                window=max(1,int(hours or 24))
+                row=con.execute(
+                    """SELECT COALESCE(SUM(actual_openrouter_usd),0) value
+                         FROM ai_usage_events
+                        WHERE provider='openrouter'
+                          AND datetime(created_at)>=datetime('now',?)""",
+                    (f'-{window} hours',),
+                ).fetchone()
+        return max(0.0,float(row['value'] or 0.0) if row else 0.0)
 
     def ai_usage_summary(self, hours: int = 24) -> dict[str, Any]:
         hours=max(1,min(24*31,int(hours or 24)))
         with self.connect() as con:
             rows=con.execute(
                 """SELECT provider,model,COUNT(*) calls,SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,
-                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd
+                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd,
+                          SUM(actual_openrouter_usd) actual_openrouter_usd
                      FROM ai_usage_events WHERE datetime(created_at)>=datetime('now',?)
                      GROUP BY provider,model ORDER BY total_tokens DESC""", (f'-{hours} hours',),
             ).fetchall()
             purpose_rows=con.execute(
                 """SELECT purpose,COUNT(*) calls,SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,
-                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd
+                          SUM(total_tokens) total_tokens,SUM(estimated_openrouter_usd) estimated_openrouter_usd,
+                          SUM(actual_openrouter_usd) actual_openrouter_usd
                      FROM ai_usage_events WHERE datetime(created_at)>=datetime('now',?)
                      GROUP BY purpose ORDER BY total_tokens DESC""", (f'-{hours} hours',),
             ).fetchall()
@@ -1766,6 +1797,7 @@ class V2Store:
             'provider':str(r['provider']),'model':str(r['model']),'calls':int(r['calls'] or 0),
             'input_tokens':int(r['input_tokens'] or 0),'output_tokens':int(r['output_tokens'] or 0),'total_tokens':int(r['total_tokens'] or 0),
             'estimated_openrouter_usd':round(float(r['estimated_openrouter_usd'] or 0.0),6),
+            'actual_openrouter_usd':round(float(r['actual_openrouter_usd'] or 0.0),6),
         } for r in rows]
         purposes=[{
             'purpose':str(r['purpose'] or 'content'),
@@ -1774,8 +1806,10 @@ class V2Store:
             'output_tokens':int(r['output_tokens'] or 0),
             'total_tokens':int(r['total_tokens'] or 0),
             'estimated_openrouter_usd':round(float(r['estimated_openrouter_usd'] or 0.0),6),
+            'actual_openrouter_usd':round(float(r['actual_openrouter_usd'] or 0.0),6),
         } for r in purpose_rows]
         total_cost=round(sum(x['estimated_openrouter_usd'] for x in items),6)
+        actual_cost=round(sum(x['actual_openrouter_usd'] for x in items),6)
         ultra_cost=round(sum(x['estimated_openrouter_usd'] for x in items if 'ultra' in x['model'].casefold()),6)
         return {
             'window_hours':hours,
@@ -1784,6 +1818,7 @@ class V2Store:
             'output_tokens':sum(x['output_tokens'] for x in items),
             'total_tokens':sum(x['total_tokens'] for x in items),
             'estimated_openrouter_usd':total_cost,
+            'actual_openrouter_usd':actual_cost,
             'ultra_reference_usd':ultra_cost,
             'ultra_reference_share':round((ultra_cost/total_cost),4) if total_cost>0 else 0.0,
             'by_model':items,
