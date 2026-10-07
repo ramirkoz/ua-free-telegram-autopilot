@@ -35,6 +35,11 @@ class MediaBundle:
     declared_media_count: int = 0
     source_media_count: int = 0
     video_link: str = ""
+    gallery_detected: bool = False
+    gallery_items_found: int = 0
+    gallery_items_kept: int = 0
+    video_embed_count: int = 0
+    web_media_source: str = ""
 
     @property
     def count(self) -> int:
@@ -61,6 +66,10 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
     source_message_ids: tuple[str, ...] = ()
     stitched = False
     declared = 0
+    gallery_detected = False
+    gallery_items_found = 0
+    video_embed_count = 0
+    web_media_source = ""
     try:
         layout = json.loads(str(_v(article, "article_layout_json", "{}") or "{}"))
     except Exception:
@@ -74,6 +83,11 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
                     continue
                 kind = str(block.get("kind") or "image").casefold()
                 url = str(block.get("url") or "").strip()
+                if bool(block.get("gallery")):
+                    gallery_detected = True
+                    gallery_items_found += 1
+                if kind == "iframe":
+                    video_embed_count += 1
                 if kind in {"image", "video"} and url:
                     raw_values.append(encode_media(kind, url))
         tg = layout.get("telegram")
@@ -117,37 +131,35 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
         source_count = valid_source_items
     else:
         source_count = max(int(declared or 0), valid_source_items)
-    return MediaBundle(tuple(items), source_kind, source_message_ids, stitched, declared, source_count)
+        meta = layout.get("featured_meta")
+        if isinstance(meta, dict):
+            web_media_source = str(meta.get("provenance") or "")
+    return MediaBundle(
+        tuple(items), source_kind, source_message_ids, stitched, declared, source_count,
+        gallery_detected=gallery_detected, gallery_items_found=gallery_items_found,
+        gallery_items_kept=min(gallery_items_found, len(items)), video_embed_count=video_embed_count,
+        web_media_source=web_media_source,
+    )
 
 
 def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> MediaBundle:
-    """Apply the actual publication contract.
+    """Build the validated publication media set.
 
-    EDITORIAL is a hard product invariant: zero or exactly one *relevant* media.
-    MONITORING preserves the source-owned bundle, including genuine albums.
-
-    RC19 tried to enforce editorial single-media by truncating ``media_json`` and
-    layout blocks independently. When their first items differed, the publisher
-    merged them back into a two-image post. RC20 selects one candidate once, at the
-    publication boundary, and all downstream code receives that one-item bundle.
-
-    RC36 fails closed for editorial media. If the semantic/rubbish validator cannot
-    positively select a candidate, publication receives no media instead of falling
-    back to an unvalidated first URL. This prevents promo/follow/CTA banners whose
-    URL itself looks innocent from bypassing the mature media filter.
+    RC112 removes the historical EDITORIAL single-media truncation. A validated
+    source gallery remains a gallery, while embedded YouTube/Vimeo players remain
+    reachable through canonical video links and a safe preview when available.
     """
     raw = build_media_bundle(article)
     if channel.mode != ChannelMode.EDITORIAL:
         return raw
 
-    # Reuse the mature semantic/rubbish filter from the pre-V2 extractor. It rejects
-    # follow/subscribe/banner/logo/avatar/recommendation chrome, validates the
-    # actual image, and scores candidate metadata against the article itself.
-    chosen: MediaItem | None = None
+    chosen: list[MediaItem] = []
     video_link = ""
+    gallery_detected = bool(raw.gallery_detected)
+    gallery_items_found = int(raw.gallery_items_found or 0)
+    video_embed_count = int(raw.video_embed_count or 0)
     try:
         from ..media_pipeline import prepare_article_media
-
         try:
             marketing_context = EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
         except Exception:
@@ -159,29 +171,45 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
             article_text=(str(_v(article, "raw_text", "") or "") + "\n" + str(_v(article, "final_text", "") or ""))[:12000],
             marketing_context=marketing_context,
         )
-        hero = prepared.telegram_hero
-        if hero is not None and hero.kind in {"image", "video"} and hero.url:
-            chosen = MediaItem(hero.kind, hero.url)
         video_link = str(getattr(prepared, "video_link", "") or "")
-    except Exception:
-        # Fail closed for editorial media. A text post is preferable to a confident
-        # but unrelated visual; required-media channels will be held by the gate.
-        chosen = None
 
-    # Deliberately no raw first-item fallback here. The previous fallback bypassed
-    # semantic validation whenever layout metadata was missing or probing failed,
-    # which is exactly how generic follow/subscribe banners could leak into strict editorial channels.
-    items = (chosen,) if chosen is not None else ()
+        # Preserve source order for body/gallery media. Iframe embeds are links, not
+        # uploadable Telegram media; their preview is appended separately.
+        candidates = []
+        if prepared.featured is not None:
+            candidates.append(prepared.featured)
+        candidates.extend(list(prepared.body or []))
+        if prepared.video_preview is not None:
+            candidates.append(prepared.video_preview)
+
+        seen: set[str] = set()
+        for item in candidates:
+            if item is None or item.kind not in {"image", "video"} or not item.url:
+                continue
+            key = media_identity(item.kind, item.url)
+            if key in seen:
+                continue
+            seen.add(key)
+            chosen.append(MediaItem(item.kind, item.url))
+            if len(chosen) >= 24:
+                break
+    except Exception:
+        chosen = []
+
     return MediaBundle(
-        items=items,
+        items=tuple(chosen),
         source_kind=raw.source_kind,
         source_message_ids=raw.source_message_ids,
         stitched=False,
-        declared_media_count=len(items),
-        source_media_count=len(items),
+        declared_media_count=len(chosen),
+        source_media_count=len(chosen),
         video_link=video_link,
+        gallery_detected=gallery_detected,
+        gallery_items_found=gallery_items_found,
+        gallery_items_kept=len(chosen) if gallery_detected else 0,
+        video_embed_count=video_embed_count,
+        web_media_source=raw.web_media_source,
     )
-
 
 def media_required(channel: ChannelConfig) -> bool:
     return channel.policy.normalized_media_policy() == "required"
