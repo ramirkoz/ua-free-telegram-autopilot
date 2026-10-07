@@ -375,6 +375,7 @@ class V2Store:
                 self._ensure_rc108_global_media_and_commercial_tuning(con)
                 self._ensure_rc109_clear_all_media_blockers(con)
                 self._ensure_rc110_source_health_columns(con)
+                self._ensure_rc112_cooldown_repair(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
@@ -412,6 +413,25 @@ class V2Store:
         for name,ddl in additions.items():
             if name not in columns:
                 con.execute(f"ALTER TABLE source_health ADD COLUMN {name} {ddl}")
+
+    @staticmethod
+    def _ensure_rc112_cooldown_repair(con: sqlite3.Connection) -> None:
+        """Undo RC111's over-aggressive no-add cooling while preserving real failures."""
+        key="rc112_cooldown_repair_v1"
+        row=con.execute("SELECT value FROM meta WHERE key=?",(key,)).fetchone()
+        if row:
+            return
+        # EMPTY means a successful fetch with no new material, not source failure.
+        # Clear carried EMPTY cooldowns so healthy sources resume immediately.
+        con.execute(
+            """UPDATE source_health
+                  SET cooldown_until='',last_outcome='OK',zero_result_streak=0
+                WHERE last_outcome='EMPTY'"""
+        )
+        con.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key,"1"),
+        )
 
     @staticmethod
     def _ensure_rc85_polling_baseline(con: sqlite3.Connection) -> None:
@@ -1344,7 +1364,7 @@ class V2Store:
                           WHEN COALESCE(sh.last_outcome,'') IN ('TIMEOUT','NETWORK','ERROR') THEN 100
                           WHEN COALESCE(sh.last_outcome,'')='SLOW' THEN 60
                           WHEN COALESCE(sh.last_outcome,'')='SLOW_EMPTY' THEN 50
-                          WHEN COALESCE(sh.last_outcome,'')='EMPTY' THEN 30
+                          WHEN COALESCE(sh.last_outcome,'')='EMPTY' THEN 15
                           ELSE 0 END) ASC,
                        s.id ASC""",
                 (int(channel_id),),
@@ -2061,10 +2081,11 @@ class V2Store:
         items=max(0,int(items))
         added=max(0,int(added))
         current=self.source_health(source_id)
-        # RC111 treats "no new material added" as low-yield even when the source
-        # returned already-known items. This is the expensive pattern seen in live
-        # collector telemetry: 20-40 fetched items, zero additions, every 15 minutes.
-        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if added==0 else 0
+        with self.connect() as con:
+            source_row=con.execute("SELECT kind FROM sources WHERE id=?",(int(source_id),)).fetchone()
+        source_kind=str(source_row["kind"] or "") if source_row is not None else ""
+        no_add=added==0
+        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if no_add else 0
         slow_streak=(int(_row_get(current,"slow_streak",0) or 0)+1) if duration>=30000 else 0
         cooldown=""
         outcome="OK"
@@ -2072,13 +2093,15 @@ class V2Store:
             outcome="SLOW"
             seconds=min(14400,1800*(2**min(3,max(0,slow_streak-1))))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        elif duration>=30000 and added==0:
+        elif duration>=30000 and no_add:
             outcome="SLOW_EMPTY"
             seconds=min(7200,1800*(2**min(2,max(0,slow_streak-1))))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        elif zero_streak>=3:
+        elif source_kind!="telegram" and zero_streak>=6:
+            # Fast no-add is normal. Only repeated web/page low-yield gets a short,
+            # bounded cooldown; Telegram/monitoring silence is never penalized.
             outcome="EMPTY"
-            seconds=min(10800,2700*(2**min(2,zero_streak-3)))
+            seconds=min(3600,1800*(2**min(1,zero_streak-6)))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
         with self.connect() as con:
             con.execute(
