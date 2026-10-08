@@ -15,6 +15,7 @@ def test_201_openrouter_requires_enable_and_key_but_not_manual_models(tmp_path: 
     assert gateway._configured("openrouter", disabled) is False
 
     enabled = SecretConfig(
+        ai_mode="openrouter",
         openrouter_enabled=True,
         openrouter_api_key="sk-or-test",
         openrouter_models=[],
@@ -26,33 +27,45 @@ def test_201_openrouter_requires_enable_and_key_but_not_manual_models(tmp_path: 
         "recommended_model_ids",
         lambda **kwargs: ("openai/gpt-oss-120b", "google/gemini-2.5-flash"),
     )
-    slots = [slot for slot in gateway._runtime_slots(enabled) if slot.provider == "openrouter"]
+    slots = gateway._openrouter_task_slots(
+        enabled, purpose="writer", prompt_chars=5000, max_output_tokens=2000
+    )
     assert [slot.model for slot in slots] == ["openai/gpt-oss-120b", "google/gemini-2.5-flash"]
 
 
 def test_201_openrouter_manual_models_remain_advanced_override(tmp_path: Path, monkeypatch) -> None:
     gateway = AIGateway(V2Store(tmp_path / "manual.sqlite3"))
     cfg = SecretConfig(
+        ai_mode="openrouter",
         openrouter_enabled=True,
         openrouter_api_key="sk-or-test",
         openrouter_models=["manual/model-x"],
     )
     monkeypatch.setattr(ai_gateway, "recommended_model_ids", lambda **kwargs: ("auto/model-y",))
-    slots = [slot for slot in gateway._runtime_slots(cfg) if slot.provider == "openrouter"]
+    slots = gateway._openrouter_task_slots(
+        cfg, purpose="writer", prompt_chars=5000, max_output_tokens=2000
+    )
     assert [slot.model for slot in slots] == ["manual/model-x"]
 
 
-def test_rc115_openrouter_stays_reserve_even_for_known_direct_model(tmp_path: Path) -> None:
+def test_202_openrouter_mode_orders_openrouter_before_free_fallback(tmp_path: Path, monkeypatch) -> None:
     gateway = AIGateway(V2Store(tmp_path / "routing.sqlite3"))
     cfg = SecretConfig(
-        openrouter_enabled=True,
+        ai_mode="openrouter",
         openrouter_api_key="sk-or-test",
-        openrouter_models=["nvidia/nemotron-3-super-120b-a12b"],
+        openrouter_models=["manual/strong-model"],
+        nvidia_api_key="nv-test",
     )
-    routed = _rc109_route_slots(gateway._runtime_slots(cfg), "writer")
-    direct_idx = next(i for i, slot in enumerate(routed) if slot.provider == "nvidia" and slot.model == "nvidia/nemotron-3-super-120b-a12b")
-    openrouter_idx = next(i for i, slot in enumerate(routed) if slot.provider == "openrouter")
-    assert direct_idx < openrouter_idx
+    openrouter_slots = gateway._openrouter_task_slots(
+        cfg, purpose="writer", prompt_chars=8000, max_output_tokens=2500
+    )
+    free_slots = [
+        slot for slot in _rc109_route_slots(gateway._runtime_slots(cfg), "writer")
+        if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local"}
+    ]
+    routed = openrouter_slots + free_slots
+    assert routed[0].provider == "openrouter"
+    assert any(slot.provider == "nvidia" for slot in routed[1:])
 
 
 def test_rc115_actual_openrouter_spend_and_budget_guard(tmp_path: Path) -> None:
