@@ -14,7 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
-from .openrouter_catalog import candidate_model_ids_for_task, recommended_model_ids
+from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .storage import V2Store, now_iso
 
@@ -363,7 +363,7 @@ class AIGateway:
         manual = [
             str(item or "").strip()
             for item in (getattr(cfg, "openrouter_models", []) or [])
-            if str(item or "").strip()
+            if _chat_compatible_id(str(item or "").strip())
         ][:8]
         if manual:
             models = tuple(manual)
