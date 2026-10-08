@@ -83,7 +83,7 @@ def test_202_writer_does_not_select_quality_two_model(monkeypatch) -> None:
     )
 
     assert "mistralai/mistral-nemo" not in selected
-    assert selected[0] == "vendor/strong-pro"
+    assert selected[0] == "vendor/premium-ultra"
 
 
 def test_204_openrouter_excludes_batch_only_models_from_live_and_cached_catalog(monkeypatch) -> None:
