@@ -31,6 +31,12 @@ _CATALOG: tuple[OpenRouterModel, ...] = ()
 _CATALOG_AT = 0.0
 _TTL = 6 * 60 * 60
 _SKIP = ("image", "embedding", "rerank", "audio", "speech", "tts", "transcription", "video")
+_UNSUPPORTED_ROUTE_SUFFIXES = (":batch",)  # Batch-only adapters cannot serve chat/completions.
+
+
+def _chat_compatible_id(model_id: str) -> bool:
+    return bool(model_id) and not model_id.casefold().endswith(_UNSUPPORTED_ROUTE_SUFFIXES)
+
 
 
 def _cache_path() -> Path:
@@ -76,7 +82,7 @@ def _parse(payload: object) -> tuple[OpenRouterModel, ...]:
             continue
         model_id = str(raw.get("id") or "").strip()
         name = str(raw.get("name") or model_id).strip()
-        if not model_id or any(part in model_id.casefold() for part in _SKIP):
+        if not _chat_compatible_id(model_id) or any(part in model_id.casefold() for part in _SKIP):
             continue
         architecture = raw.get("architecture") if isinstance(raw.get("architecture"), dict) else {}
         outputs = architecture.get("output_modalities") if isinstance(architecture, dict) else None
@@ -118,7 +124,7 @@ def _load_cache() -> tuple[OpenRouterModel, ...]:
             context_length=int(row.get("context_length") or 0),
             quality=_quality_hint(str(row["id"]), str(row.get("name") or row["id"])),
             free=bool(row.get("free", False)),
-        ) for row in rows if isinstance(row, dict) and row.get("id"))
+        ) for row in rows if isinstance(row, dict) and _chat_compatible_id(str(row.get("id") or "")))
     except Exception:
         return ()
 
@@ -177,7 +183,7 @@ def model_catalog(*, force: bool = False, timeout: float = 20.0) -> tuple[OpenRo
 
 
 def recommended_models(*, strategy: str = "balanced", limit: int = 6, force: bool = False) -> tuple[OpenRouterModel, ...]:
-    rows = list(model_catalog(force=force))
+    rows = [row for row in model_catalog(force=force) if _chat_compatible_id(row.id)]
     strategy = str(strategy or "balanced").strip().casefold()
     if strategy not in {"economy", "balanced", "quality"}:
         strategy = "balanced"
@@ -250,7 +256,7 @@ def candidate_models_for_task(
     limit: int = 5,
     force: bool = False,
 ) -> tuple[OpenRouterModel, ...]:
-    catalog = model_catalog(force=force)
+    catalog = tuple(row for row in model_catalog(force=force) if _chat_compatible_id(row.id))
     start, ceiling = route_tiers(purpose, strategy)
     start_rank = _TIER_RANK[start]
     ceiling_rank = _TIER_RANK[ceiling]
