@@ -364,6 +364,13 @@ class AIGateway:
         ]
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
+        if provider == "openrouter":
+            return self._openrouter_task_slots(
+                cfg,
+                purpose="health_probe",
+                prompt_chars=20,
+                max_output_tokens=96,
+            )
         return [slot for slot in self._runtime_slots(cfg) if slot.provider == provider]
 
     def _openrouter_budget_status(self, cfg) -> tuple[bool, str]:
@@ -916,8 +923,17 @@ class AIGateway:
             failures=failures,
         )
 
-    def _probe_provider(self, provider: str, cfg) -> ProviderHealth:
-        if not self._configured(provider, cfg):
+    def _probe_provider(self, provider: str, cfg, *, force_configured: bool = False) -> ProviderHealth:
+        if force_configured and provider == "openrouter":
+            configured = bool(str(getattr(cfg, "openrouter_api_key", "") or "").strip())
+        elif force_configured and provider == "codex":
+            try:
+                configured = bool(inspect_codex().installed)
+            except Exception:
+                configured = True
+        else:
+            configured = self._configured(provider, cfg)
+        if not configured:
             return self._refresh_provider_summary(provider, cfg)
         if provider == "openrouter":
             budget_ok, _detail = self._openrouter_budget_status(cfg)
@@ -972,11 +988,11 @@ class AIGateway:
                 continue
         return self._refresh_provider_summary(provider, cfg)
 
-    def probe_provider(self, provider: str) -> ProviderHealth:
+    def probe_provider(self, provider: str, *, force_configured: bool = False) -> ProviderHealth:
         name = str(provider or "").strip().casefold()
         if name not in self.PROVIDER_ORDER:
             raise ValueError(f"Unknown AI provider: {provider}")
-        return self._probe_provider(name, load_secrets())
+        return self._probe_provider(name, load_secrets(), force_configured=force_configured)
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
         by_provider: dict[str, ProviderHealth] = {}
