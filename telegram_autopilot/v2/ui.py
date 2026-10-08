@@ -1554,7 +1554,7 @@ class MainWindow(tk.Tk):
             monthly = float(getattr(cfg, "openrouter_monthly_budget_usd", 0.0) or 0.0)
             state = "УВІМКНЕНО" if enabled else "ВИМКНЕНО"
             self.openrouter_status_var.set(
-                f"OpenRouter: {state} · моделей {len(models)} · 24h ${spend_24h:.4f}/${daily:.4f} · "
+                f"OpenRouter: {state} · моделі: автоматично · 24h ${spend_24h:.4f}/${daily:.4f} · "
                 f"місяць ${spend_month:.4f}/${monthly:.4f}"
             )
         except Exception as exc:
