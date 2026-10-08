@@ -2142,22 +2142,23 @@ class V2Store:
         with self.connect() as con:
             source_row=con.execute("SELECT kind FROM sources WHERE id=?",(int(source_id),)).fetchone()
         source_kind=str(source_row["kind"] or "") if source_row is not None else ""
-        no_add=added==0
-        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if no_add else 0
+        true_empty=items==0
+        known_only=items>0 and added==0
+        zero_streak=(int(_row_get(current,"zero_result_streak",0) or 0)+1) if true_empty else 0
         slow_streak=(int(_row_get(current,"slow_streak",0) or 0)+1) if duration>=30000 else 0
         cooldown=""
-        outcome="OK"
+        outcome="KNOWN_ONLY" if known_only else "OK"
         if duration>=120000:
-            outcome="SLOW"
+            outcome="SLOW_EMPTY" if true_empty else ("SLOW_KNOWN" if known_only else "SLOW")
             seconds=min(14400,1800*(2**min(3,max(0,slow_streak-1))))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        elif duration>=30000 and no_add:
+        elif duration>=30000 and true_empty:
             outcome="SLOW_EMPTY"
             seconds=min(7200,1800*(2**min(2,max(0,slow_streak-1))))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
-        elif source_kind!="telegram" and zero_streak>=6:
-            # Fast no-add is normal. Only repeated web/page low-yield gets a short,
-            # bounded cooldown; Telegram/monitoring silence is never penalized.
+        elif source_kind!="telegram" and true_empty and zero_streak>=6:
+            # A source that returned real items is healthy even when all items were
+            # already known. Only genuine zero-item web/page runs enter cooldown.
             outcome="EMPTY"
             seconds=min(3600,1800*(2**min(1,zero_streak-6)))
             cooldown=(datetime.now(timezone.utc)+timedelta(seconds=seconds)).astimezone().isoformat(timespec="seconds")
