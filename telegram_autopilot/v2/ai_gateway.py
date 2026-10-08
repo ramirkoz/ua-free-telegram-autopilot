@@ -299,10 +299,21 @@ class AIGateway:
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
         slots = list(PRODUCTION_SLOTS)
         if bool(getattr(cfg, "openrouter_enabled", False)) and str(getattr(cfg, "openrouter_api_key", "") or "").strip():
-            for index, model in enumerate(list(getattr(cfg, "openrouter_models", []) or [])[:12], start=1):
-                model_id = str(model or "").strip()
-                if not model_id:
-                    continue
+            manual = [
+                str(item or "").strip()
+                for item in (getattr(cfg, "openrouter_models", []) or [])
+                if str(item or "").strip()
+            ][:12]
+            if manual:
+                models = tuple(manual)
+            else:
+                strategy = str(getattr(cfg, "openrouter_strategy", "balanced") or "balanced").strip().casefold()
+                try:
+                    models = recommended_model_ids(strategy=strategy, limit=6)
+                except Exception as exc:
+                    event("ai", "OpenRouter auto catalog unavailable", level=30, detail=str(exc)[:700])
+                    models = ()
+            for index, model_id in enumerate(models, start=1):
                 slots.append(legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter"))
         return slots
 
