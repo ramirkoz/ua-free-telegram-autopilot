@@ -995,7 +995,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
         base_url=base_url,
         meta_title=parser.featured_title,
         meta_url=parser.featured_url,
-        poster=parser.featured_video_poster or parser.featured_media,
+        poster=parser.featured_video_poster,
         poster_alt=parser.featured_alt,
     )
     if jsonld_video:
