@@ -685,15 +685,15 @@ class MainWindow(tk.Tk):
         mode_box.pack(fill="x", padx=8, pady=(8, 4))
         ttk.Label(
             mode_box,
-            text="Активний тільки один режим. Інші провайдери не використовуються навіть як fallback.",
+            text="Оберіть найвищий рівень: Codex → OpenRouter → безкоштовні. Перехід тільки вниз, ніколи вгору.",
             foreground="#555",
         ).pack(anchor="w", pady=(0, 6))
         mode_row = ttk.Frame(mode_box)
         mode_row.pack(anchor="w")
         for value, label in (
-            ("free", "Безкоштовні провайдери"),
-            ("openrouter", "OpenRouter"),
             ("codex", "Codex / ChatGPT"),
+            ("openrouter", "OpenRouter"),
+            ("free", "Безкоштовні провайдери"),
         ):
             ttk.Radiobutton(
                 mode_row,
@@ -710,7 +710,7 @@ class MainWindow(tk.Tk):
         self.openrouter_daily_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_daily_budget_usd", 1.0) or 0.0))
         self.openrouter_monthly_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_monthly_budget_usd", 10.0) or 0.0))
         self.openrouter_status_var = tk.StringVar(value="OpenRouter: очікує перевірки")
-        ttk.Label(openrouter_box, text="Активується вибором режиму OpenRouter вище.", foreground="#555").grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=4)
+        ttk.Label(openrouter_box, text="У режимі Codex це 2-й рівень fallback; у режимі OpenRouter — 1-й. У режимі безкоштовних не використовується.", foreground="#555").grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=4)
         ttk.Label(openrouter_box, text="API key").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         ttk.Entry(openrouter_box, textvariable=self.openrouter_key_var, show="•", width=78).grid(row=1, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
         ttk.Label(openrouter_box, text="Стратегія").grid(row=2, column=0, sticky="w", padx=4, pady=4)
@@ -733,7 +733,7 @@ class MainWindow(tk.Tk):
         self.codex_status = tk.StringVar(value="Стан Codex: не перевірявся")
         self.codex_route_status = tk.StringVar(value="У маршрутизації AI: ВИМКНЕНО")
         ttk.Label(
-            codex_box, text="Активується вибором режиму Codex / ChatGPT вище.", foreground="#555"
+            codex_box, text="Codex використовується тільки коли обрано верхній режим Codex / ChatGPT.", foreground="#555"
         ).grid(row=0, column=0, sticky="w", padx=(0, 12))
         ttk.Label(codex_box, textvariable=self.codex_route_status, font=("TkDefaultFont", 10, "bold")).grid(
             row=0, column=1, sticky="w"
@@ -1562,10 +1562,12 @@ class MainWindow(tk.Tk):
         threading.Thread(target=work, daemon=True, name="V2-AI-Probe").start()
 
     def _update_codex_route_label(self) -> None:
-        enabled = bool(getattr(self, "codex_enabled_var", tk.BooleanVar(value=False)).get())
+        mode = str(getattr(self, "ai_mode_var", tk.StringVar(value="free")).get() or "free").strip().casefold()
         if hasattr(self, "codex_route_status"):
             self.codex_route_status.set(
-                "У маршрутизації AI: УВІМКНЕНО" if enabled else "У маршрутизації AI: ВИМКНЕНО"
+                "У маршрутизації AI: 1-й рівень"
+                if mode == "codex"
+                else "У маршрутизації AI: не використовується"
             )
 
     def _update_openrouter_status(self) -> None:
@@ -1591,15 +1593,13 @@ class MainWindow(tk.Tk):
         try:
             daily = max(0.0, float(str(self.openrouter_daily_budget_var.get() or "0").replace(",", ".")))
             monthly = max(0.0, float(str(self.openrouter_monthly_budget_var.get() or "0").replace(",", ".")))
-            enabled = bool(self.openrouter_enabled_var.get())
             key = str(self.openrouter_key_var.get() or "").strip()
             strategy = str(self.openrouter_strategy_var.get() or "balanced").strip().casefold()
             if strategy not in {"economy", "balanced", "quality"}:
                 strategy = "balanced"
-            if enabled and not key:
-                raise ValueError("Для увімкненого OpenRouter потрібен API key")
             cfg = load_secrets()
-            cfg.openrouter_enabled = enabled
+            mode = str(getattr(self, "ai_mode_var", tk.StringVar(value=getattr(cfg, "ai_mode", "free"))).get() or "free").strip().casefold()
+            cfg.openrouter_enabled = mode in {"codex", "openrouter"}
             cfg.openrouter_api_key = key
             cfg.openrouter_models = []
             cfg.openrouter_strategy = strategy
@@ -1626,7 +1626,7 @@ class MainWindow(tk.Tk):
 
         def work() -> None:
             try:
-                health = self.runtime.gateway.probe_provider("openrouter")
+                health = self.runtime.gateway.probe_provider("openrouter", force_configured=True)
                 msg = (
                     f"OpenRouter: {PROVIDER_UA.get(str(health.state), str(health.state))} · "
                     f"{health.model or 'без активної моделі'} · {health.detail}"
@@ -1636,18 +1636,33 @@ class MainWindow(tk.Tk):
             self.after(0, lambda: (self.openrouter_status_var.set(msg), self.refresh_ai(), self.refresh_home()))
 
         threading.Thread(target=work, daemon=True, name="V2-OpenRouter-Test").start()
-    def save_codex_preference(self):
+    def save_ai_mode(self) -> None:
         try:
+            mode = str(self.ai_mode_var.get() or "free").strip().casefold()
+            if mode not in {"free", "openrouter", "codex"}:
+                mode = "free"
             cfg = load_secrets()
-            cfg.codex_enabled = bool(self.codex_enabled_var.get())
+            cfg.ai_mode = mode
+            # Legacy flags remain synchronized for older diagnostics/readers.
+            cfg.codex_enabled = mode == "codex"
+            cfg.openrouter_enabled = mode in {"codex", "openrouter"}
             save_secrets(cfg)
             self._update_codex_route_label()
-            state = "увімкнено" if cfg.codex_enabled else "вимкнено"
-            self.status.set(f"Автоматичне використання Codex {state}.")
+            self._update_openrouter_status()
+            labels = {
+                "codex": "Codex → OpenRouter → безкоштовні",
+                "openrouter": "OpenRouter → безкоштовні",
+                "free": "тільки безкоштовні",
+            }
+            self.status.set(f"Режим AI: {labels[mode]}.")
             self.refresh_ai()
             self.refresh_home()
         except Exception as exc:
-            messagebox.showerror("Codex", f"Не вдалося зберегти налаштування: {exc}", parent=self)
+            messagebox.showerror("Режим AI", f"Не вдалося зберегти режим: {exc}", parent=self)
+
+    def save_codex_preference(self):
+        # Compatibility shim: routing is controlled only by ai_mode.
+        self.save_ai_mode()
 
     def refresh_codex_status(self):
         self._update_codex_route_label()
