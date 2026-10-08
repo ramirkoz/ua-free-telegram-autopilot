@@ -118,19 +118,19 @@ def test_rc112_fast_telegram_no_add_never_enters_empty_cooldown(tmp_path: Path) 
     row=store.source_health(source_id)
     assert row is not None
     assert row["cooldown_until"] == ""
-    assert row["last_outcome"] == "OK"
+    assert row["last_outcome"] == "KNOWN_ONLY"
+    assert int(row["zero_result_streak"]) == 0
 
 
-def test_rc112_fast_web_no_add_waits_until_six_cycles(tmp_path: Path) -> None:
+def test_fast_web_known_only_never_enters_empty_cooldown(tmp_path: Path) -> None:
     store=V2Store(tmp_path/"db.sqlite3")
     source_id=_seed_channel_source(store,kind="page")
-    for _ in range(5):
+    for _ in range(9):
         store.record_source_success(source_id,2000,items=20,added=0)
         assert store.source_health(source_id)["cooldown_until"] == ""
-    store.record_source_success(source_id,2000,items=20,added=0)
     row=store.source_health(source_id)
-    assert row["last_outcome"] == "EMPTY"
-    assert row["cooldown_until"]
+    assert row["last_outcome"] == "KNOWN_ONLY"
+    assert int(row["zero_result_streak"]) == 0
 
 
 def test_rc112_startup_repair_clears_carried_empty_cooldowns(tmp_path: Path) -> None:

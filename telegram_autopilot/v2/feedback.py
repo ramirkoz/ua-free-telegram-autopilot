@@ -941,6 +941,7 @@ class FeedbackRuntime:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="V2-Feedback-Runtime")
         self._thread.start()
+        event("feedback", "auto refresh worker started", interval_seconds=self.interval_seconds)
 
     def stop(self) -> None:
         self._stop.set()
@@ -957,6 +958,7 @@ class FeedbackRuntime:
             if not configured:
                 self._last_error = str(detail or "Telegram Analytics не налаштовано")
                 self._meta_set(self.LAST_ERROR_META_KEY, self._last_error)
+                event("feedback", "auto refresh unavailable", level=30, detail=self._last_error[:600], interval_seconds=self.interval_seconds)
                 self._notify({"event": "not_configured", "error": self._last_error})
                 self._stop.wait(60.0)
                 continue

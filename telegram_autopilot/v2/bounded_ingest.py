@@ -112,7 +112,7 @@ class BoundedStrictIngestService(StrictIngestService):
                 beat()
             if source_added:
                 sources_with_new += 1
-            self.store.record_source_success(source.id, duration_ms)
+            self.store.record_source_success(source.id, duration_ms, items=len(items), added=source_added)
             with self.store.connect() as con:
                 con.execute(
                     "UPDATE sources SET initialized=1,last_checked_at=?,last_error='' WHERE id=?",

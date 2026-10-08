@@ -207,28 +207,28 @@ class SupervisorService:
         cut60 = datetime.fromtimestamp(time.time() - 3600, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
         with self.store.connect() as con:
             rows = con.execute(
-                """SELECT id,channel_id,title,published_at,telegram_media_count,media_json,article_layout_json
-                   FROM articles WHERE stage='PUBLISHED' AND datetime(published_at)>=datetime(?)
-                   ORDER BY datetime(published_at) DESC,id DESC LIMIT 200""", (cut60,)
+                """SELECT a.id,a.channel_id,a.title,a.published_at,a.telegram_media_count,
+                          j.expected_media_count AS journal_expected_media_count,
+                          j.media_count AS journal_media_count,
+                          j.complete AS journal_complete,
+                          j.state AS journal_state
+                     FROM articles a
+                     LEFT JOIN publication_delivery_journal j ON j.article_id=a.id
+                    WHERE a.stage='PUBLISHED' AND datetime(a.published_at)>=datetime(?)
+                    ORDER BY datetime(a.published_at) DESC,a.id DESC LIMIT 200""", (cut60,)
             ).fetchall()
         lost: list[dict[str, Any]] = []
         for row in rows:
-            expected = 0
-            try:
-                layout = json.loads(str(row["article_layout_json"] or "{}"))
-                if isinstance(layout, dict):
-                    delivery = layout.get("telegram_delivery")
-                    if isinstance(delivery, dict):
-                        expected = int(delivery.get("expected_media_count") or delivery.get("media_count") or 0)
-            except Exception:
-                expected = 0
-            if expected <= 0:
-                try:
-                    expected = int(build_media_bundle(row).count)
-                except Exception:
-                    expected = 0
-            sent = int(row["telegram_media_count"] or 0)
-            if expected > sent:
+            # Publication truth is the durable delivery journal. Rebuilding a bundle
+            # from raw source metadata after publication can resurrect media that was
+            # intentionally filtered out and create a false MEDIA_LOST_ON_PUBLISH.
+            expected = max(0, int(row["journal_expected_media_count"] or 0))
+            journal_sent = max(0, int(row["journal_media_count"] or 0))
+            article_sent = max(0, int(row["telegram_media_count"] or 0))
+            sent = max(journal_sent, article_sent)
+            complete = bool(int(row["journal_complete"] or 0))
+            state = str(row["journal_state"] or "")
+            if state == "COMMITTED" and complete and expected > sent:
                 lost.append({
                     "article_id": int(row["id"]), "channel_id": int(row["channel_id"]),
                     "title": str(row["title"] or "")[:220], "source_media_count": expected,
@@ -699,6 +699,27 @@ class SupervisorService:
                 "output_starvation_min_published": int(cfg_row.output_starvation_min_published),
             }
 
+        try:
+            with self.store.connect() as con:
+                feedback_meta = {
+                    str(row["key"]): str(row["value"] or "")
+                    for row in con.execute(
+                        "SELECT key,value FROM meta WHERE key IN (?,?,?)",
+                        ("feedback_auto_refresh_seconds","feedback_auto_refresh_last_success","feedback_auto_refresh_last_error"),
+                    ).fetchall()
+                }
+        except Exception as exc:
+            feedback_meta = {"feedback_auto_refresh_last_error": f"telemetry read failed: {exc}"}
+        try:
+            feedback_interval = int(feedback_meta.get("feedback_auto_refresh_seconds") or 3 * 60 * 60)
+        except Exception:
+            feedback_interval = 3 * 60 * 60
+        feedback_snapshot = {
+            "interval_seconds": feedback_interval,
+            "last_success": feedback_meta.get("feedback_auto_refresh_last_success", ""),
+            "last_error": feedback_meta.get("feedback_auto_refresh_last_error", ""),
+        }
+
         snapshot = {
             "schema": "ua-free-autopilot-supervisor-v2",
             "version": V2_VERSION,
@@ -716,6 +737,7 @@ class SupervisorService:
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "ai_usage": self.store.ai_usage_summary(24),
             "provider_discovery": provider_discovery_snapshot(),
+            "feedback_auto_refresh": feedback_snapshot,
             "openrouter": {
                 "enabled": bool(getattr(secret_cfg, "openrouter_enabled", False)) if secret_cfg else False,
                 "models": list(getattr(secret_cfg, "openrouter_models", []) or []) if secret_cfg else [],
@@ -1022,7 +1044,7 @@ class SupervisorService:
         return combined[:cap]
 
     def _recent_log_events(self, limit: int) -> list[dict[str, Any]]:
-        streams = ("publish", "media", "worker", "ingest", "ai", "editorial", "supervisor", "error")
+        streams = ("publish", "media", "worker", "ingest", "ai", "editorial", "feedback", "supervisor", "error")
         each = max(10, min(80, max(1, int(limit)) // max(1, len(streams)) + 8))
         out: list[dict[str, Any]] = []
         line_re = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+(?P<level>[A-Z]+)\s+(?P<logger>\S+)\s+(?P<rest>.*)$")
