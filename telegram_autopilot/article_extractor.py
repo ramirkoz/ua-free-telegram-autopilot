@@ -687,6 +687,62 @@ def _safe_og_featured(
     return ""
 
 
+def _safe_page_video(
+    featured_video: str,
+    *,
+    title: str,
+    base_url: str,
+    meta_title: str = "",
+    meta_url: str = "",
+    poster: str = "",
+    poster_alt: str = "",
+) -> str:
+    """Fail closed for page-level OG/Twitter video.
+
+    Publisher pages often expose sticky/recommended players through og:video or
+    twitter:player. A page-level video is accepted only when the video/poster asset
+    has article-specific evidence. Structural video inside <article>/<main> and
+    article-bound schema.org VideoObject are handled separately and remain trusted.
+    """
+    raw = str(featured_video or "").strip()
+    if not raw:
+        return ""
+    title_tokens = _meaningful_tokens(title)
+    if not title_tokens:
+        return ""
+
+    # Asset URL itself names the current story.
+    if _media_url_tokens(raw) & title_tokens:
+        return raw
+
+    try:
+        source_path = urlsplit(base_url or "").path
+        video_path = urlsplit(raw.split("|", 1)[-1]).path
+    except ValueError:
+        source_path = video_path = ""
+    source_ids = set(re.findall(r"\d{6,}", source_path))
+    video_ids = set(re.findall(r"\d{6,}", video_path))
+    if source_ids and (source_ids & video_ids):
+        return raw
+
+    # A verified article-level page identity plus a poster that independently binds
+    # to the story is enough for player URLs whose own path is opaque (YouTube/Vimeo).
+    if _metadata_matches_article(meta_title, meta_url, base_url, title):
+        poster_raw = str(poster or "").strip()
+        poster_tokens = _media_url_tokens(poster_raw)
+        alt_tokens = _meaningful_tokens(poster_alt)
+        if (poster_tokens | alt_tokens) & title_tokens:
+            return raw
+        try:
+            poster_path = urlsplit(poster_raw.split("|", 1)[-1]).path
+        except ValueError:
+            poster_path = ""
+        poster_ids = set(re.findall(r"\d{6,}", poster_path))
+        if source_ids and (source_ids & poster_ids):
+            return raw
+    return ""
+
+
 def _image_values(value):
     if isinstance(value, str):
         yield value
@@ -873,7 +929,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
             article_parser.blocks.append({"type": "media", **candidate, "caption": "", "gallery": True})
             existing_urls.add(url)
 
-    article_blocks, article_media = _normalize_layout(article_parser.blocks, "", article_parser.featured_video)
+    article_blocks, article_media = _normalize_layout(article_parser.blocks, "", "")
     article_text = _clean_text("\n".join(
         str(block.get("text") or "") for block in article_blocks if block.get("type") == "text"
     ))
@@ -892,7 +948,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
                     continue
                 main_parser.blocks.append({"type": "media", **candidate, "caption": "", "gallery": True})
                 existing_urls.add(url)
-        main_blocks, main_media = _normalize_layout(main_parser.blocks, "", main_parser.featured_video)
+        main_blocks, main_media = _normalize_layout(main_parser.blocks, "", "")
         main_text = _clean_text("\n".join(
             str(block.get("text") or "") for block in main_blocks if block.get("type") == "text"
         ))
@@ -929,11 +985,32 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
             existing.add(encoded)
 
     # Recover JS-rendered publisher video + thumbnail from schema.org VideoObject.
+    # Schema VideoObject is already bound to the current article. Raw page-level
+    # og:video/twitter:player is *not* trusted until it passes article identity binding.
     jsonld_video, jsonld_video_poster = _jsonld_video_media_candidates(html, base_url, title)
-    if not parser.featured_video and jsonld_video:
+    raw_page_video = parser.featured_video
+    safe_page_video = _safe_page_video(
+        raw_page_video,
+        title=title,
+        base_url=base_url,
+        meta_title=parser.featured_title,
+        meta_url=parser.featured_url,
+        poster=parser.featured_video_poster or parser.featured_media,
+        poster_alt=parser.featured_alt,
+    )
+    if jsonld_video:
         parser.featured_video = jsonld_video
         if parser.featured_video not in media:
             media.insert(0, parser.featured_video)
+        video_provenance = "jsonld_video"
+    elif safe_page_video:
+        parser.featured_video = safe_page_video
+        if parser.featured_video not in media:
+            media.insert(0, parser.featured_video)
+        video_provenance = "bound_page_video"
+    else:
+        parser.featured_video = ""
+        video_provenance = "rejected_unbound_page_video" if raw_page_video else "none"
     if not parser.featured_video_poster and jsonld_video_poster:
         parser.featured_video_poster = jsonld_video_poster
 
@@ -1000,6 +1077,9 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
             "jsonld_images": len(jsonld_images),
             "body_media": len([item for item in article_media if not str(item).startswith("iframe|")]),
             "selected_provenance": provenance,
+            "video_provenance": video_provenance,
+            "raw_page_video_present": bool(raw_page_video),
+            "featured_video_accepted": bool(parser.featured_video),
         },
         "blocks": blocks,
     }, ensure_ascii=False, separators=(",", ":"))
