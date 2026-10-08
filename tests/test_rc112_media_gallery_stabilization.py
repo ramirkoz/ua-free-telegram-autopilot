@@ -118,7 +118,8 @@ def test_rc112_fast_telegram_no_add_never_enters_empty_cooldown(tmp_path: Path) 
     row=store.source_health(source_id)
     assert row is not None
     assert row["cooldown_until"] == ""
-    assert row["last_outcome"] == "OK"
+    assert row["last_outcome"] == "KNOWN_ONLY"
+    assert int(row["zero_result_streak"]) == 0
 
 
 def test_fast_web_known_only_never_enters_empty_cooldown(tmp_path: Path) -> None:
