@@ -14,6 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
+from .openrouter_catalog import recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .storage import V2Store, now_iso
 
@@ -290,7 +291,7 @@ class AIGateway:
         if provider == "cloudflare":
             return bool(cfg.cloudflare_account_id and cfg.cloudflare_api_token)
         if provider == "openrouter":
-            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", "") and list(getattr(cfg, "openrouter_models", []) or []))
+            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", ""))
         if provider == "local":
             return bool(cfg.local_enabled)
         return False
