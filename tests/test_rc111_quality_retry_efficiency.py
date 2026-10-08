@@ -75,14 +75,14 @@ def test_rc111_no_add_source_cools_after_six_cycles(tmp_path: Path) -> None:
     assert row["cooldown_until"]
 
 
-def test_rc111_slow_low_yield_source_gets_immediate_cooldown(tmp_path: Path) -> None:
+def test_slow_known_only_source_does_not_fake_empty_cooldown(tmp_path: Path) -> None:
     store=V2Store(tmp_path/"db.sqlite3")
     source_id=_seed_channel_source(store)
     store.record_source_success(source_id,47000,items=20,added=0)
     row=store.source_health(source_id)
     assert row is not None
-    assert row["last_outcome"]=="SLOW_EMPTY"
-    assert row["cooldown_until"]
+    assert row["last_outcome"]=="KNOWN_ONLY"
+    assert row["cooldown_until"]==""
 
 
 def test_rc111_quality_exhaustion_rejects_only_when_no_final_text(tmp_path: Path) -> None:
