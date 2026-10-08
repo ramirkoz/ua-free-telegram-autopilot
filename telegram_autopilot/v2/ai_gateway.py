@@ -160,9 +160,9 @@ def _codex_retry_after_seconds(message: str) -> int:
     """Parse a provider-supplied reset time without guessing a calendar date."""
     text = str(message or "")
     duration = re.search(
-        r"(?:try\\s+again\\s+in|retry\\s+after|resets?\\s+in)\\s+"
-        r"(?:(\\d+)\\s*h(?:ours?)?\\s*)?(?:(\\d+)\\s*m(?:in(?:utes?)?)?\\s*)?"
-        r"(?:(\\d+(?:\\.\\d+)?)\\s*s(?:ec(?:onds?)?)?)?",
+        r"(?:try\s+again\s+in|retry\s+after|resets?\s+in)\s+"
+        r"(?:(\d+)\s*h(?:ours?)?\s*)?(?:(\d+)\s*m(?:in(?:utes?)?)?\s*)?"
+        r"(?:(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?)?",
         text, flags=re.IGNORECASE,
     )
     if duration and any(value is not None for value in duration.groups()):
@@ -172,8 +172,8 @@ def _codex_retry_after_seconds(message: str) -> int:
         )))
 
     iso = re.search(
-        r"(?:try\\s+again\\s+at|reset(?:s)?\\s+at)\\s+"
-        r"(\\d{4}-\\d{2}-\\d{2}[T\\s]\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:?\\d{2})?)",
+        r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
+        r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)",
         text, flags=re.IGNORECASE,
     )
     if iso:
@@ -188,9 +188,9 @@ def _codex_retry_after_seconds(message: str) -> int:
             pass
 
     match = re.search(
-        r"(?:try\\s+again\\s+at|reset(?:s)?\\s+at)\\s+"
-        r"([A-Za-z]{3,9})\\s+(\\d{1,2})(?:st|nd|rd|th)?,\\s*(\\d{4})\\s+"
-        r"(\\d{1,2}):(\\d{2})\\s*(AM|PM)",
+        r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
+        r"([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
+        r"(\d{1,2}):(\d{2})\s*(AM|PM)",
         text, flags=re.IGNORECASE,
     )
     if not match:
