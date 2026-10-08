@@ -25,6 +25,7 @@ class SecretConfig:
     openrouter_enabled: bool = False
     openrouter_api_key: str = ""
     openrouter_models: list[str] = field(default_factory=list)
+    openrouter_strategy: str = "balanced"
     openrouter_daily_budget_usd: float = 1.0
     openrouter_monthly_budget_usd: float = 10.0
     codex_enabled: bool = False
@@ -66,6 +67,11 @@ class SecretConfig:
                 for item in (self.openrouter_models or [])
                 if str(item).strip()
             ][:12],
+            openrouter_strategy=(
+                str(self.openrouter_strategy or "balanced").strip().casefold()
+                if str(self.openrouter_strategy or "balanced").strip().casefold() in {"economy", "balanced", "quality"}
+                else "balanced"
+            ),
             openrouter_daily_budget_usd=max(0.0, float(self.openrouter_daily_budget_usd or 0.0)),
             openrouter_monthly_budget_usd=max(0.0, float(self.openrouter_monthly_budget_usd or 0.0)),
             codex_enabled=bool(self.codex_enabled),

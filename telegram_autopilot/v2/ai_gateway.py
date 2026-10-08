@@ -14,6 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
+from .openrouter_catalog import recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .storage import V2Store, now_iso
 
@@ -290,7 +291,7 @@ class AIGateway:
         if provider == "cloudflare":
             return bool(cfg.cloudflare_account_id and cfg.cloudflare_api_token)
         if provider == "openrouter":
-            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", "") and list(getattr(cfg, "openrouter_models", []) or []))
+            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", ""))
         if provider == "local":
             return bool(cfg.local_enabled)
         return False
@@ -298,10 +299,21 @@ class AIGateway:
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
         slots = list(PRODUCTION_SLOTS)
         if bool(getattr(cfg, "openrouter_enabled", False)) and str(getattr(cfg, "openrouter_api_key", "") or "").strip():
-            for index, model in enumerate(list(getattr(cfg, "openrouter_models", []) or [])[:12], start=1):
-                model_id = str(model or "").strip()
-                if not model_id:
-                    continue
+            manual = [
+                str(item or "").strip()
+                for item in (getattr(cfg, "openrouter_models", []) or [])
+                if str(item or "").strip()
+            ][:12]
+            if manual:
+                models = tuple(manual)
+            else:
+                strategy = str(getattr(cfg, "openrouter_strategy", "balanced") or "balanced").strip().casefold()
+                try:
+                    models = recommended_model_ids(strategy=strategy, limit=6)
+                except Exception as exc:
+                    event("ai", "OpenRouter auto catalog unavailable", level=30, detail=str(exc)[:700])
+                    models = ()
+            for index, model_id in enumerate(models, start=1):
                 slots.append(legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter"))
         return slots
 

@@ -3,24 +3,43 @@ from __future__ import annotations
 from pathlib import Path
 
 import telegram_autopilot.v2.provider_api as provider_api
+import telegram_autopilot.v2.ai_gateway as ai_gateway
 from telegram_autopilot.secrets_store import SecretConfig
 from telegram_autopilot.v2.ai_gateway import AIGateway, _rc109_route_slots
 from telegram_autopilot.v2.storage import V2Store
 
 
-def test_rc115_openrouter_requires_explicit_enable_key_and_models(tmp_path: Path) -> None:
+def test_201_openrouter_requires_enable_and_key_but_not_manual_models(tmp_path: Path, monkeypatch) -> None:
     gateway = AIGateway(V2Store(tmp_path / "openrouter.sqlite3"))
-    disabled = SecretConfig(openrouter_api_key="sk-or-test", openrouter_models=["openai/gpt-oss-120b"])
+    disabled = SecretConfig(openrouter_api_key="sk-or-test")
     assert gateway._configured("openrouter", disabled) is False
 
     enabled = SecretConfig(
         openrouter_enabled=True,
         openrouter_api_key="sk-or-test",
-        openrouter_models=["openai/gpt-oss-120b", "google/gemini-2.5-flash"],
+        openrouter_models=[],
+        openrouter_strategy="balanced",
     )
     assert gateway._configured("openrouter", enabled) is True
+    monkeypatch.setattr(
+        ai_gateway,
+        "recommended_model_ids",
+        lambda **kwargs: ("openai/gpt-oss-120b", "google/gemini-2.5-flash"),
+    )
     slots = [slot for slot in gateway._runtime_slots(enabled) if slot.provider == "openrouter"]
     assert [slot.model for slot in slots] == ["openai/gpt-oss-120b", "google/gemini-2.5-flash"]
+
+
+def test_201_openrouter_manual_models_remain_advanced_override(tmp_path: Path, monkeypatch) -> None:
+    gateway = AIGateway(V2Store(tmp_path / "manual.sqlite3"))
+    cfg = SecretConfig(
+        openrouter_enabled=True,
+        openrouter_api_key="sk-or-test",
+        openrouter_models=["manual/model-x"],
+    )
+    monkeypatch.setattr(ai_gateway, "recommended_model_ids", lambda **kwargs: ("auto/model-y",))
+    slots = [slot for slot in gateway._runtime_slots(cfg) if slot.provider == "openrouter"]
+    assert [slot.model for slot in slots] == ["manual/model-x"]
 
 
 def test_rc115_openrouter_stays_reserve_even_for_known_direct_model(tmp_path: Path) -> None:

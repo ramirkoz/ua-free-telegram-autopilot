@@ -676,16 +676,16 @@ class MainWindow(tk.Tk):
         openrouter_box.pack(fill="x", padx=8, pady=(8, 4))
         self.openrouter_enabled_var = tk.BooleanVar(value=bool(getattr(_ai_cfg, "openrouter_enabled", False)))
         self.openrouter_key_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_api_key", "") or ""))
-        self.openrouter_models_var = tk.StringVar(value=", ".join(list(getattr(_ai_cfg, "openrouter_models", []) or [])))
+        self.openrouter_strategy_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_strategy", "balanced") or "balanced"))
         self.openrouter_daily_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_daily_budget_usd", 1.0) or 0.0))
         self.openrouter_monthly_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_monthly_budget_usd", 10.0) or 0.0))
         self.openrouter_status_var = tk.StringVar(value="OpenRouter: очікує перевірки")
         ttk.Checkbutton(openrouter_box, text="Увімкнути OpenRouter у AI Router", variable=self.openrouter_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         ttk.Label(openrouter_box, text="API key").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         ttk.Entry(openrouter_box, textvariable=self.openrouter_key_var, show="•", width=78).grid(row=1, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
-        ttk.Label(openrouter_box, text="Дозволені моделі").grid(row=2, column=0, sticky="w", padx=4, pady=4)
-        ttk.Entry(openrouter_box, textvariable=self.openrouter_models_var, width=95).grid(row=2, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
-        ttk.Label(openrouter_box, text="Через кому. У production потрапляють тільки ці перевірені model ID; каталог сам нічого не вмикає.", foreground="#555").grid(row=3, column=1, columnspan=3, sticky="w", padx=6, pady=(0, 4))
+        ttk.Label(openrouter_box, text="Стратегія").grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        ttk.Combobox(openrouter_box, textvariable=self.openrouter_strategy_var, values=("economy", "balanced", "quality"), state="readonly", width=16).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(openrouter_box, text="Моделі підбираються автоматично з каталогу OpenRouter за якістю, ціною та контекстом.", foreground="#555").grid(row=3, column=0, columnspan=4, sticky="w", padx=4, pady=(0, 4))
         ttk.Label(openrouter_box, text="Ліміт 24 год, $").grid(row=4, column=0, sticky="w", padx=4, pady=4)
         ttk.Entry(openrouter_box, textvariable=self.openrouter_daily_budget_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=4)
         ttk.Label(openrouter_box, text="Ліміт місяць, $").grid(row=4, column=2, sticky="w", padx=12, pady=4)
@@ -1554,7 +1554,7 @@ class MainWindow(tk.Tk):
             monthly = float(getattr(cfg, "openrouter_monthly_budget_usd", 0.0) or 0.0)
             state = "УВІМКНЕНО" if enabled else "ВИМКНЕНО"
             self.openrouter_status_var.set(
-                f"OpenRouter: {state} · моделей {len(models)} · 24h ${spend_24h:.4f}/${daily:.4f} · "
+                f"OpenRouter: {state} · моделі: автоматично · 24h ${spend_24h:.4f}/${daily:.4f} · "
                 f"місяць ${spend_month:.4f}/${monthly:.4f}"
             )
         except Exception as exc:
@@ -1562,23 +1562,20 @@ class MainWindow(tk.Tk):
 
     def save_openrouter_settings(self, *, quiet: bool = False) -> None:
         try:
-            models = [
-                item.strip()
-                for item in str(self.openrouter_models_var.get() or "").replace("\n", ",").split(",")
-                if item.strip()
-            ]
             daily = max(0.0, float(str(self.openrouter_daily_budget_var.get() or "0").replace(",", ".")))
             monthly = max(0.0, float(str(self.openrouter_monthly_budget_var.get() or "0").replace(",", ".")))
             enabled = bool(self.openrouter_enabled_var.get())
             key = str(self.openrouter_key_var.get() or "").strip()
+            strategy = str(self.openrouter_strategy_var.get() or "balanced").strip().casefold()
+            if strategy not in {"economy", "balanced", "quality"}:
+                strategy = "balanced"
             if enabled and not key:
                 raise ValueError("Для увімкненого OpenRouter потрібен API key")
-            if enabled and not models:
-                raise ValueError("Для увімкненого OpenRouter вкажіть хоча б один model ID")
             cfg = load_secrets()
             cfg.openrouter_enabled = enabled
             cfg.openrouter_api_key = key
-            cfg.openrouter_models = models[:12]
+            cfg.openrouter_models = []
+            cfg.openrouter_strategy = strategy
             cfg.openrouter_daily_budget_usd = daily
             cfg.openrouter_monthly_budget_usd = monthly
             save_secrets(cfg)
@@ -1586,7 +1583,7 @@ class MainWindow(tk.Tk):
             self.refresh_ai()
             self.refresh_home()
             if not quiet:
-                self.status.set("OpenRouter налаштування збережено.")
+                self.status.set("OpenRouter налаштування збережено. Моделі підбираються автоматично.")
         except Exception as exc:
             if quiet:
                 raise
