@@ -24,7 +24,7 @@ def test_201_openrouter_requires_enable_and_key_but_not_manual_models(tmp_path: 
     assert gateway._configured("openrouter", enabled) is True
     monkeypatch.setattr(
         ai_gateway,
-        "recommended_model_ids",
+        "candidate_model_ids_for_task",
         lambda **kwargs: ("openai/gpt-oss-120b", "google/gemini-2.5-flash"),
     )
     slots = gateway._openrouter_task_slots(
