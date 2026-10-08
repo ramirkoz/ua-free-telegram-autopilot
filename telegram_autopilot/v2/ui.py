@@ -1562,23 +1562,20 @@ class MainWindow(tk.Tk):
 
     def save_openrouter_settings(self, *, quiet: bool = False) -> None:
         try:
-            models = [
-                item.strip()
-                for item in str(self.openrouter_models_var.get() or "").replace("\n", ",").split(",")
-                if item.strip()
-            ]
             daily = max(0.0, float(str(self.openrouter_daily_budget_var.get() or "0").replace(",", ".")))
             monthly = max(0.0, float(str(self.openrouter_monthly_budget_var.get() or "0").replace(",", ".")))
             enabled = bool(self.openrouter_enabled_var.get())
             key = str(self.openrouter_key_var.get() or "").strip()
+            strategy = str(self.openrouter_strategy_var.get() or "balanced").strip().casefold()
+            if strategy not in {"economy", "balanced", "quality"}:
+                strategy = "balanced"
             if enabled and not key:
                 raise ValueError("Для увімкненого OpenRouter потрібен API key")
-            if enabled and not models:
-                raise ValueError("Для увімкненого OpenRouter вкажіть хоча б один model ID")
             cfg = load_secrets()
             cfg.openrouter_enabled = enabled
             cfg.openrouter_api_key = key
-            cfg.openrouter_models = models[:12]
+            cfg.openrouter_models = []
+            cfg.openrouter_strategy = strategy
             cfg.openrouter_daily_budget_usd = daily
             cfg.openrouter_monthly_budget_usd = monthly
             save_secrets(cfg)
@@ -1586,7 +1583,7 @@ class MainWindow(tk.Tk):
             self.refresh_ai()
             self.refresh_home()
             if not quiet:
-                self.status.set("OpenRouter налаштування збережено.")
+                self.status.set("OpenRouter налаштування збережено. Моделі підбираються автоматично.")
         except Exception as exc:
             if quiet:
                 raise
