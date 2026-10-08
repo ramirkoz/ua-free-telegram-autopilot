@@ -157,31 +157,56 @@ def _until(seconds: int) -> str:
 
 
 def _codex_retry_after_seconds(message: str) -> int:
+    """Parse a provider-supplied reset time without guessing a calendar date."""
     text = str(message or "")
+    duration = re.search(
+        r"(?:try\\s+again\\s+in|retry\\s+after|resets?\\s+in)\\s+"
+        r"(?:(\\d+)\\s*h(?:ours?)?\\s*)?(?:(\\d+)\\s*m(?:in(?:utes?)?)?\\s*)?"
+        r"(?:(\\d+(?:\\.\\d+)?)\\s*s(?:ec(?:onds?)?)?)?",
+        text, flags=re.IGNORECASE,
+    )
+    if duration and any(value is not None for value in duration.groups()):
+        hours, minutes, seconds = duration.groups()
+        return min(14 * 86400, max(60, int(
+            float(hours or 0) * 3600 + float(minutes or 0) * 60 + float(seconds or 0) + 90
+        )))
+
+    iso = re.search(
+        r"(?:try\\s+again\\s+at|reset(?:s)?\\s+at)\\s+"
+        r"(\\d{4}-\\d{2}-\\d{2}[T\\s]\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:?\\d{2})?)",
+        text, flags=re.IGNORECASE,
+    )
+    if iso:
+        try:
+            when = datetime.fromisoformat(iso.group(1).replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            return min(14 * 86400, max(60, int(
+                (when.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds() + 90
+            )))
+        except ValueError:
+            pass
+
     match = re.search(
-        r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
-        r"([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
-        r"(\d{1,2}):(\d{2})\s*(AM|PM)",
-        text,
-        flags=re.IGNORECASE,
+        r"(?:try\\s+again\\s+at|reset(?:s)?\\s+at)\\s+"
+        r"([A-Za-z]{3,9})\\s+(\\d{1,2})(?:st|nd|rd|th)?,\\s*(\\d{4})\\s+"
+        r"(\\d{1,2}):(\\d{2})\\s*(AM|PM)",
+        text, flags=re.IGNORECASE,
     )
     if not match:
         return 0
     month, day, year, hour, minute, ampm = match.groups()
     raw = f"{month} {day} {year} {hour}:{minute} {ampm.upper()}"
-    parsed = None
     for fmt in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p"):
         try:
             parsed = datetime.strptime(raw, fmt)
-            break
+            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+            parsed = parsed.replace(tzinfo=local_tz)
+            delta = int((parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) + 90
+            return min(14 * 86400, max(60, delta))
         except ValueError:
             continue
-    if parsed is None:
-        return 0
-    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-    parsed = parsed.replace(tzinfo=local_tz)
-    delta = int((parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) + 90
-    return min(14 * 24 * 3600, max(0, delta))
+    return 0
 
 
 def _compact_local_prompt(prompt: str, *, limit: int) -> str:
