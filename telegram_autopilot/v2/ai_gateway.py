@@ -14,7 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
-from .openrouter_catalog import candidate_model_ids_for_task, recommended_model_ids
+from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .storage import V2Store, now_iso
 
@@ -157,31 +157,56 @@ def _until(seconds: int) -> str:
 
 
 def _codex_retry_after_seconds(message: str) -> int:
+    """Parse a provider-supplied reset time without guessing a calendar date."""
     text = str(message or "")
+    duration = re.search(
+        r"(?:try\s+again\s+in|retry\s+after|resets?\s+in)\s+"
+        r"(?:(\d+)\s*h(?:ours?)?\s*)?(?:(\d+)\s*m(?:in(?:utes?)?)?\s*)?"
+        r"(?:(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?)?",
+        text, flags=re.IGNORECASE,
+    )
+    if duration and any(value is not None for value in duration.groups()):
+        hours, minutes, seconds = duration.groups()
+        return min(14 * 86400, max(60, int(
+            float(hours or 0) * 3600 + float(minutes or 0) * 60 + float(seconds or 0) + 90
+        )))
+
+    iso = re.search(
+        r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
+        r"(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)",
+        text, flags=re.IGNORECASE,
+    )
+    if iso:
+        try:
+            when = datetime.fromisoformat(iso.group(1).replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            return min(14 * 86400, max(60, int(
+                (when.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds() + 90
+            )))
+        except ValueError:
+            pass
+
     match = re.search(
         r"(?:try\s+again\s+at|reset(?:s)?\s+at)\s+"
         r"([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
         r"(\d{1,2}):(\d{2})\s*(AM|PM)",
-        text,
-        flags=re.IGNORECASE,
+        text, flags=re.IGNORECASE,
     )
     if not match:
         return 0
     month, day, year, hour, minute, ampm = match.groups()
     raw = f"{month} {day} {year} {hour}:{minute} {ampm.upper()}"
-    parsed = None
     for fmt in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p"):
         try:
             parsed = datetime.strptime(raw, fmt)
-            break
+            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+            parsed = parsed.replace(tzinfo=local_tz)
+            delta = int((parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) + 90
+            return min(14 * 86400, max(60, delta))
         except ValueError:
             continue
-    if parsed is None:
-        return 0
-    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-    parsed = parsed.replace(tzinfo=local_tz)
-    delta = int((parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) + 90
-    return min(14 * 24 * 3600, max(0, delta))
+    return 0
 
 
 def _compact_local_prompt(prompt: str, *, limit: int) -> str:
@@ -213,7 +238,7 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
         return ProviderState.CONFIG_ERROR, 900, "provider"
     if kind == "quota" or any(x in text for x in ("usage limit", "quota/rate limit", "credits exhausted")):
         if "usage limit" in text or "credits exhausted" in text:
-            return ProviderState.QUOTA, min(14 * 24 * 3600, max(6 * 3600, retry_after or 24 * 3600)), "model"
+            return ProviderState.QUOTA, min(14 * 24 * 3600, max(60, retry_after)) if retry_after > 0 else 3600, "model"
         return ProviderState.QUOTA, min(6 * 3600, max(300, retry_after or 900)), "model"
     if kind in {"gone", "model"} or any(x in text for x in ("model_not_found", "model unavailable", "unknown model", "end of life")):
         return ProviderState.MODEL_UNSUPPORTED, 6 * 3600, "model"
@@ -338,7 +363,7 @@ class AIGateway:
         manual = [
             str(item or "").strip()
             for item in (getattr(cfg, "openrouter_models", []) or [])
-            if str(item or "").strip()
+            if _chat_compatible_id(str(item or "").strip())
         ][:8]
         if manual:
             models = tuple(manual)
