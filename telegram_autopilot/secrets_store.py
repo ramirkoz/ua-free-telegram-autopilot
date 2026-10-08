@@ -22,6 +22,7 @@ class SecretConfig:
     groq_api_key: str = ""
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
+    ai_mode: str = ""
     openrouter_enabled: bool = False
     openrouter_api_key: str = ""
     openrouter_models: list[str] = field(default_factory=list)
@@ -60,6 +61,11 @@ class SecretConfig:
             groq_api_key=self.groq_api_key.strip(),
             cloudflare_account_id=self.cloudflare_account_id.strip(),
             cloudflare_api_token=self.cloudflare_api_token.strip(),
+            ai_mode=(
+                str(self.ai_mode or "").strip().casefold()
+                if str(self.ai_mode or "").strip().casefold() in {"free", "openrouter", "codex"}
+                else ("openrouter" if bool(self.openrouter_enabled) else ("codex" if bool(self.codex_enabled) else "free"))
+            ),
             openrouter_enabled=bool(self.openrouter_enabled),
             openrouter_api_key=str(self.openrouter_api_key or "").strip(),
             openrouter_models=[
