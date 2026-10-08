@@ -729,6 +729,8 @@ def _safe_page_video(
     # to the story is enough for player URLs whose own path is opaque (YouTube/Vimeo).
     if _metadata_matches_article(meta_title, meta_url, base_url, title):
         poster_raw = str(poster or "").strip()
+        if not poster_raw:
+            return ""
         poster_tokens = _media_url_tokens(poster_raw)
         alt_tokens = _meaningful_tokens(poster_alt)
         if (poster_tokens | alt_tokens) & title_tokens:
