@@ -288,7 +288,12 @@ def candidate_models_for_task(
                 and (not row.context_length or row.context_length >= required_context)
                 and row.blended_price_million <= cap
             ]
-        eligible.sort(key=lambda row: (row.blended_price_million, -row.quality, -row.context_length, row.id))
+        # Editorial generation must prefer proven quality, not the cheapest viable model.
+        # Preserve budget caps and task-tier eligibility.
+        if str(purpose or "").strip().casefold() in {"writer", "final_editor", "complex_rewrite", "rewrite"}:
+            eligible.sort(key=lambda row: (-row.quality, -row.context_length, row.blended_price_million, row.id))
+        else:
+            eligible.sort(key=lambda row: (row.blended_price_million, -row.quality, -row.context_length, row.id))
         for row in eligible[:8]:
             if row.id in seen:
                 continue

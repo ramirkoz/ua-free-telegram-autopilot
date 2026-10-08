@@ -83,7 +83,7 @@ def test_202_writer_does_not_select_quality_two_model(monkeypatch) -> None:
     )
 
     assert "mistralai/mistral-nemo" not in selected
-    assert selected[0] == "vendor/strong-pro"
+    assert selected[0] == "vendor/premium-ultra"
 
 
 def test_204_openrouter_excludes_batch_only_models_from_live_and_cached_catalog(monkeypatch) -> None:
@@ -115,3 +115,28 @@ def test_204_codex_quota_retry_iso_reset() -> None:
     reset_at = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(timespec="seconds")
     seconds = _codex_retry_after_seconds(f"usage limit resets at {reset_at}")
     assert 1190 <= seconds <= 1350
+
+
+def test_205_editorial_prefers_quality_over_cheapest_model(monkeypatch) -> None:
+    rows = (
+        catalog.OpenRouterModel("vendor/cheap-strong", "Cheap Strong", 0.0000001, 0.0000001, 128000, 3, False),
+        catalog.OpenRouterModel("vendor/premium-editor", "Premium Editor", 0.000004, 0.000008, 128000, 4, False),
+    )
+    monkeypatch.setattr(catalog, "model_catalog", lambda **kwargs: rows)
+    for purpose in ("writer", "final_editor"):
+        selected = catalog.candidate_model_ids_for_task(
+            purpose=purpose, prompt_chars=5000, max_output_tokens=1600, strategy="balanced", limit=2,
+        )
+        assert selected[0] == "vendor/premium-editor", selected
+
+
+def test_205_editorial_does_not_change_selector_economics(monkeypatch) -> None:
+    rows = (
+        catalog.OpenRouterModel("vendor/cheap", "Cheap", 0.0000001, 0.0000001, 128000, 3, False),
+        catalog.OpenRouterModel("vendor/premium", "Premium", 0.000004, 0.000008, 128000, 4, False),
+    )
+    monkeypatch.setattr(catalog, "model_catalog", lambda **kwargs: rows)
+    selected = catalog.candidate_model_ids_for_task(
+        purpose="editorial_selector", prompt_chars=2000, max_output_tokens=120, strategy="balanced", limit=2,
+    )
+    assert selected[0] == "vendor/cheap"
