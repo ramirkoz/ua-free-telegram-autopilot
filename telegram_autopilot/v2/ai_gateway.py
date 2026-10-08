@@ -14,7 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
-from .openrouter_catalog import recommended_model_ids
+from .openrouter_catalog import candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .storage import V2Store, now_iso
 
@@ -271,17 +271,44 @@ class AIGateway:
     def _model_health_map(self) -> dict[tuple[str, str], AIModelHealth]:
         return {(item.provider, item.model): item for item in self.store.ai_model_health()}
 
+    @staticmethod
+    def _ai_mode(cfg) -> str:
+        value = str(getattr(cfg, "ai_mode", "") or "").strip().casefold()
+        if value in {"free", "openrouter", "codex"}:
+            return value
+        if bool(getattr(cfg, "codex_enabled", False)):
+            return "codex"
+        if bool(getattr(cfg, "openrouter_enabled", False)):
+            return "openrouter"
+        return "free"
+
+    @staticmethod
+    def _mode_allows(mode: str, provider: str) -> bool:
+        """Downward-only AI cascade.
+
+        codex      -> codex, openrouter, free providers
+        openrouter -> openrouter, free providers
+        free       -> free providers only
+        """
+        free = {"gemini", "nvidia", "groq", "cloudflare", "local"}
+        if mode == "codex":
+            return provider == "codex" or provider == "openrouter" or provider in free
+        if mode == "openrouter":
+            return provider == "openrouter" or provider in free
+        return provider in free
+
     def _configured(self, provider: str, cfg) -> bool:
+        mode = self._ai_mode(cfg)
+        if not self._mode_allows(mode, provider):
+            return False
         if provider == "codex":
-            if not bool(getattr(cfg, "codex_enabled", False)):
-                return False
-            # A transient account inspection failure is not the same thing as an
-            # absent configuration. The actual probe/call decides auth/quota/network.
             try:
                 status = inspect_codex()
                 return bool(status.installed)
             except Exception:
                 return True
+        if provider == "openrouter":
+            return bool(getattr(cfg, "openrouter_api_key", ""))
         if provider == "gemini":
             return bool(cfg.gemini_api_key)
         if provider == "nvidia":
@@ -290,34 +317,60 @@ class AIGateway:
             return bool(cfg.groq_api_key)
         if provider == "cloudflare":
             return bool(cfg.cloudflare_account_id and cfg.cloudflare_api_token)
-        if provider == "openrouter":
-            return bool(getattr(cfg, "openrouter_enabled", False) and getattr(cfg, "openrouter_api_key", ""))
         if provider == "local":
             return bool(cfg.local_enabled)
         return False
 
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
-        slots = list(PRODUCTION_SLOTS)
-        if bool(getattr(cfg, "openrouter_enabled", False)) and str(getattr(cfg, "openrouter_api_key", "") or "").strip():
-            manual = [
-                str(item or "").strip()
-                for item in (getattr(cfg, "openrouter_models", []) or [])
-                if str(item or "").strip()
-            ][:12]
-            if manual:
-                models = tuple(manual)
-            else:
-                strategy = str(getattr(cfg, "openrouter_strategy", "balanced") or "balanced").strip().casefold()
-                try:
-                    models = recommended_model_ids(strategy=strategy, limit=6)
-                except Exception as exc:
-                    event("ai", "OpenRouter auto catalog unavailable", level=30, detail=str(exc)[:700])
-                    models = ()
-            for index, model_id in enumerate(models, start=1):
-                slots.append(legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter"))
-        return slots
+        return [
+            slot for slot in PRODUCTION_SLOTS
+            if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local", "codex"}
+        ]
+
+    def _openrouter_task_slots(
+        self,
+        cfg,
+        *,
+        purpose: str,
+        prompt_chars: int,
+        max_output_tokens: int,
+    ) -> list[legacy_ai.Slot]:
+        manual = [
+            str(item or "").strip()
+            for item in (getattr(cfg, "openrouter_models", []) or [])
+            if str(item or "").strip()
+        ][:8]
+        if manual:
+            models = tuple(manual)
+        else:
+            strategy = str(getattr(cfg, "openrouter_strategy", "balanced") or "balanced").strip().casefold()
+            try:
+                models = candidate_model_ids_for_task(
+                    purpose=str(purpose or "content"),
+                    prompt_chars=max(0, int(prompt_chars)),
+                    max_output_tokens=max(1, int(max_output_tokens)),
+                    strategy=strategy,
+                    limit=5,
+                )
+            except Exception as exc:
+                event(
+                    "ai", "OpenRouter task catalog unavailable", level=30,
+                    purpose=str(purpose or "content"), detail=str(exc)[:700],
+                )
+                models = ()
+        return [
+            legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter")
+            for index, model_id in enumerate(models, start=1)
+        ]
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
+        if provider == "openrouter":
+            return self._openrouter_task_slots(
+                cfg,
+                purpose="health_probe",
+                prompt_chars=20,
+                max_output_tokens=96,
+            )
         return [slot for slot in self._runtime_slots(cfg) if slot.provider == provider]
 
     def _openrouter_budget_status(self, cfg) -> tuple[bool, str]:
@@ -699,7 +752,28 @@ class AIGateway:
         # plain text so no provider-specific JSON mode can corrupt the article body.
         json_mode = validator is not None and int(max_output_tokens) <= 260
 
-        route_slots = _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
+        mode = self._ai_mode(cfg)
+        free_slots = [
+            slot for slot in _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
+            if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local"}
+        ]
+        openrouter_slots = self._openrouter_task_slots(
+            cfg,
+            purpose=str(purpose or "content"),
+            prompt_chars=len(text_prompt),
+            max_output_tokens=max_output_tokens,
+        ) if mode in {"codex", "openrouter"} else []
+        codex_slots = [
+            slot for slot in self._runtime_slots(cfg)
+            if slot.provider == "codex"
+        ] if mode == "codex" else []
+
+        if mode == "codex":
+            route_slots = codex_slots + openrouter_slots + free_slots
+        elif mode == "openrouter":
+            route_slots = openrouter_slots + free_slots
+        else:
+            route_slots = free_slots
         for slot in route_slots:
             provider = slot.provider
             if allowed is not None and provider not in allowed:
@@ -849,8 +923,17 @@ class AIGateway:
             failures=failures,
         )
 
-    def _probe_provider(self, provider: str, cfg) -> ProviderHealth:
-        if not self._configured(provider, cfg):
+    def _probe_provider(self, provider: str, cfg, *, force_configured: bool = False) -> ProviderHealth:
+        if force_configured and provider == "openrouter":
+            configured = bool(str(getattr(cfg, "openrouter_api_key", "") or "").strip())
+        elif force_configured and provider == "codex":
+            try:
+                configured = bool(inspect_codex().installed)
+            except Exception:
+                configured = True
+        else:
+            configured = self._configured(provider, cfg)
+        if not configured:
             return self._refresh_provider_summary(provider, cfg)
         if provider == "openrouter":
             budget_ok, _detail = self._openrouter_budget_status(cfg)
@@ -905,11 +988,11 @@ class AIGateway:
                 continue
         return self._refresh_provider_summary(provider, cfg)
 
-    def probe_provider(self, provider: str) -> ProviderHealth:
+    def probe_provider(self, provider: str, *, force_configured: bool = False) -> ProviderHealth:
         name = str(provider or "").strip().casefold()
         if name not in self.PROVIDER_ORDER:
             raise ValueError(f"Unknown AI provider: {provider}")
-        return self._probe_provider(name, load_secrets())
+        return self._probe_provider(name, load_secrets(), force_configured=force_configured)
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
         by_provider: dict[str, ProviderHealth] = {}

@@ -207,3 +207,110 @@ def recommended_models(*, strategy: str = "balanced", limit: int = 6, force: boo
 
 def recommended_model_ids(*, strategy: str = "balanced", limit: int = 6, force: bool = False) -> tuple[str, ...]:
     return tuple(row.id for row in recommended_models(strategy=strategy, limit=limit, force=force))
+
+_TIER_RANK = {
+    "fast_cheap": 1,
+    "balanced": 2,
+    "strong": 3,
+    "premium": 4,
+}
+
+
+def route_tiers(purpose: str, strategy: str) -> tuple[str, str]:
+    value = str(purpose or "content").strip().casefold()
+    strategy = str(strategy or "balanced").strip().casefold()
+    if value in {"editorial_selector", "monitoring_selector", "value_gate", "health_probe"}:
+        start, ceiling = "fast_cheap", "strong"
+    elif value in {"fact", "quality", "research", "deep_review"}:
+        start, ceiling = "strong", "premium"
+    elif value in {"writer", "final_editor", "complex_rewrite", "rewrite"}:
+        start, ceiling = "strong", "premium"
+    else:
+        start, ceiling = "balanced", "strong"
+
+    if strategy == "economy":
+        if start == "strong" and value not in {"fact", "quality", "research", "deep_review"}:
+            start = "balanced"
+        ceiling = "strong"
+    elif strategy == "quality":
+        if start == "fast_cheap":
+            start = "balanced"
+        elif start == "balanced":
+            start = "strong"
+        ceiling = "premium"
+    return start, ceiling
+
+
+def candidate_models_for_task(
+    *,
+    purpose: str,
+    prompt_chars: int,
+    max_output_tokens: int,
+    strategy: str = "balanced",
+    limit: int = 5,
+    force: bool = False,
+) -> tuple[OpenRouterModel, ...]:
+    catalog = model_catalog(force=force)
+    start, ceiling = route_tiers(purpose, strategy)
+    start_rank = _TIER_RANK[start]
+    ceiling_rank = _TIER_RANK[ceiling]
+    estimated_prompt_tokens = max(64, int(max(0, prompt_chars) / 3.5))
+    required_context = max(12_000, estimated_prompt_tokens + max(1, int(max_output_tokens)) * 2 + 2_000)
+    cap_by_tier = {1: 1.5, 2: 5.0, 3: 18.0, 4: 80.0}
+    strategy = str(strategy or "balanced").strip().casefold()
+    selected: list[OpenRouterModel] = []
+    seen: set[str] = set()
+
+    for tier_rank in range(start_rank, ceiling_rank + 1):
+        cap = cap_by_tier[tier_rank]
+        if strategy == "economy":
+            cap *= 0.65
+        elif strategy == "quality":
+            cap *= 1.7
+
+        eligible = [
+            row for row in catalog
+            if row.quality >= tier_rank
+            and (not row.context_length or row.context_length >= required_context)
+            and row.blended_price_million <= cap
+            and (strategy == "economy" or not row.free)
+        ]
+        if not eligible and strategy != "economy":
+            eligible = [
+                row for row in catalog
+                if row.quality >= tier_rank
+                and (not row.context_length or row.context_length >= required_context)
+                and row.blended_price_million <= cap
+            ]
+        eligible.sort(key=lambda row: (row.blended_price_million, -row.quality, -row.context_length, row.id))
+        for row in eligible[:8]:
+            if row.id in seen:
+                continue
+            selected.append(row)
+            seen.add(row.id)
+            if len(selected) >= max(1, min(8, int(limit))):
+                return tuple(selected)
+    return tuple(selected)
+
+
+def candidate_model_ids_for_task(
+    *,
+    purpose: str,
+    prompt_chars: int,
+    max_output_tokens: int,
+    strategy: str = "balanced",
+    limit: int = 5,
+    force: bool = False,
+) -> tuple[str, ...]:
+    return tuple(
+        row.id
+        for row in candidate_models_for_task(
+            purpose=purpose,
+            prompt_chars=prompt_chars,
+            max_output_tokens=max_output_tokens,
+            strategy=strategy,
+            limit=limit,
+            force=force,
+        )
+    )
+
