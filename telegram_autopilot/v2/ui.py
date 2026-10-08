@@ -672,15 +672,45 @@ class MainWindow(tk.Tk):
         except Exception:
             _ai_cfg = None
 
+        _mode = str(getattr(_ai_cfg, "ai_mode", "") or "").strip().casefold() if _ai_cfg is not None else ""
+        if _mode not in {"free", "openrouter", "codex"}:
+            if bool(getattr(_ai_cfg, "openrouter_enabled", False)):
+                _mode = "openrouter"
+            elif bool(getattr(_ai_cfg, "codex_enabled", False)):
+                _mode = "codex"
+            else:
+                _mode = "free"
+        self.ai_mode_var = tk.StringVar(value=_mode)
+        mode_box = ttk.LabelFrame(panel, text="Режим AI", padding=8)
+        mode_box.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(
+            mode_box,
+            text="Активний тільки один режим. Інші провайдери не використовуються навіть як fallback.",
+            foreground="#555",
+        ).pack(anchor="w", pady=(0, 6))
+        mode_row = ttk.Frame(mode_box)
+        mode_row.pack(anchor="w")
+        for value, label in (
+            ("free", "Безкоштовні провайдери"),
+            ("openrouter", "OpenRouter"),
+            ("codex", "Codex / ChatGPT"),
+        ):
+            ttk.Radiobutton(
+                mode_row,
+                text=label,
+                value=value,
+                variable=self.ai_mode_var,
+                command=self.save_ai_mode,
+            ).pack(side="left", padx=(0, 18))
+
         openrouter_box = ttk.LabelFrame(panel, text="OpenRouter", padding=8)
         openrouter_box.pack(fill="x", padx=8, pady=(8, 4))
-        self.openrouter_enabled_var = tk.BooleanVar(value=bool(getattr(_ai_cfg, "openrouter_enabled", False)))
         self.openrouter_key_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_api_key", "") or ""))
         self.openrouter_strategy_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_strategy", "balanced") or "balanced"))
         self.openrouter_daily_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_daily_budget_usd", 1.0) or 0.0))
         self.openrouter_monthly_budget_var = tk.StringVar(value=str(getattr(_ai_cfg, "openrouter_monthly_budget_usd", 10.0) or 0.0))
         self.openrouter_status_var = tk.StringVar(value="OpenRouter: очікує перевірки")
-        ttk.Checkbutton(openrouter_box, text="Увімкнути OpenRouter у AI Router", variable=self.openrouter_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ttk.Label(openrouter_box, text="Активується вибором режиму OpenRouter вище.", foreground="#555").grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=4)
         ttk.Label(openrouter_box, text="API key").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         ttk.Entry(openrouter_box, textvariable=self.openrouter_key_var, show="•", width=78).grid(row=1, column=1, columnspan=3, sticky="ew", padx=6, pady=4)
         ttk.Label(openrouter_box, text="Стратегія").grid(row=2, column=0, sticky="w", padx=4, pady=4)
@@ -702,11 +732,8 @@ class MainWindow(tk.Tk):
         codex_box.pack(fill="x", padx=8, pady=(8, 4))
         self.codex_status = tk.StringVar(value="Стан Codex: не перевірявся")
         self.codex_route_status = tk.StringVar(value="У маршрутизації AI: ВИМКНЕНО")
-        _codex_enabled = bool(getattr(_ai_cfg, "codex_enabled", False)) if _ai_cfg is not None else False
-        self.codex_enabled_var = tk.BooleanVar(value=_codex_enabled)
-        ttk.Checkbutton(
-            codex_box, text="Дозволити автоматичне використання Codex у AI Router",
-            variable=self.codex_enabled_var, command=self.save_codex_preference,
+        ttk.Label(
+            codex_box, text="Активується вибором режиму Codex / ChatGPT вище.", foreground="#555"
         ).grid(row=0, column=0, sticky="w", padx=(0, 12))
         ttk.Label(codex_box, textvariable=self.codex_route_status, font=("TkDefaultFont", 10, "bold")).grid(
             row=0, column=1, sticky="w"
