@@ -276,26 +276,39 @@ class AIGateway:
         value = str(getattr(cfg, "ai_mode", "") or "").strip().casefold()
         if value in {"free", "openrouter", "codex"}:
             return value
-        if bool(getattr(cfg, "openrouter_enabled", False)):
-            return "openrouter"
         if bool(getattr(cfg, "codex_enabled", False)):
             return "codex"
+        if bool(getattr(cfg, "openrouter_enabled", False)):
+            return "openrouter"
         return "free"
+
+    @staticmethod
+    def _mode_allows(mode: str, provider: str) -> bool:
+        """Downward-only AI cascade.
+
+        codex      -> codex, openrouter, free providers
+        openrouter -> openrouter, free providers
+        free       -> free providers only
+        """
+        free = {"gemini", "nvidia", "groq", "cloudflare", "local"}
+        if mode == "codex":
+            return provider == "codex" or provider == "openrouter" or provider in free
+        if mode == "openrouter":
+            return provider == "openrouter" or provider in free
+        return provider in free
 
     def _configured(self, provider: str, cfg) -> bool:
         mode = self._ai_mode(cfg)
+        if not self._mode_allows(mode, provider):
+            return False
         if provider == "codex":
-            if mode != "codex":
-                return False
             try:
                 status = inspect_codex()
                 return bool(status.installed)
             except Exception:
                 return True
         if provider == "openrouter":
-            return bool(mode == "openrouter" and getattr(cfg, "openrouter_api_key", ""))
-        if mode != "free":
-            return False
+            return bool(getattr(cfg, "openrouter_api_key", ""))
         if provider == "gemini":
             return bool(cfg.gemini_api_key)
         if provider == "nvidia":
@@ -309,32 +322,9 @@ class AIGateway:
         return False
 
     def _runtime_slots(self, cfg) -> list[legacy_ai.Slot]:
-        mode = self._ai_mode(cfg)
-        if mode == "codex":
-            return [slot for slot in PRODUCTION_SLOTS if slot.provider == "codex"]
-        if mode == "free":
-            return [
-                slot for slot in PRODUCTION_SLOTS
-                if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local"}
-            ]
-
-        manual = [
-            str(item or "").strip()
-            for item in (getattr(cfg, "openrouter_models", []) or [])
-            if str(item or "").strip()
-        ][:12]
-        if manual:
-            models = tuple(manual)
-        else:
-            strategy = str(getattr(cfg, "openrouter_strategy", "balanced") or "balanced").strip().casefold()
-            try:
-                models = recommended_model_ids(strategy=strategy, limit=6)
-            except Exception as exc:
-                event("ai", "OpenRouter auto catalog unavailable", level=30, detail=str(exc)[:700])
-                models = ()
         return [
-            legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter")
-            for index, model_id in enumerate(models, start=1)
+            slot for slot in PRODUCTION_SLOTS
+            if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local", "codex"}
         ]
 
     def _openrouter_task_slots(
@@ -755,15 +745,28 @@ class AIGateway:
         # plain text so no provider-specific JSON mode can corrupt the article body.
         json_mode = validator is not None and int(max_output_tokens) <= 260
 
-        if self._ai_mode(cfg) == "openrouter":
-            route_slots = self._openrouter_task_slots(
-                cfg,
-                purpose=str(purpose or "content"),
-                prompt_chars=len(text_prompt),
-                max_output_tokens=max_output_tokens,
-            )
+        mode = self._ai_mode(cfg)
+        free_slots = [
+            slot for slot in _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
+            if slot.provider in {"gemini", "nvidia", "groq", "cloudflare", "local"}
+        ]
+        openrouter_slots = self._openrouter_task_slots(
+            cfg,
+            purpose=str(purpose or "content"),
+            prompt_chars=len(text_prompt),
+            max_output_tokens=max_output_tokens,
+        ) if mode in {"codex", "openrouter"} else []
+        codex_slots = [
+            slot for slot in self._runtime_slots(cfg)
+            if slot.provider == "codex"
+        ] if mode == "codex" else []
+
+        if mode == "codex":
+            route_slots = codex_slots + openrouter_slots + free_slots
+        elif mode == "openrouter":
+            route_slots = openrouter_slots + free_slots
         else:
-            route_slots = _rc109_route_slots(self._runtime_slots(cfg), str(purpose or "content"))
+            route_slots = free_slots
         for slot in route_slots:
             provider = slot.provider
             if allowed is not None and provider not in allowed:
