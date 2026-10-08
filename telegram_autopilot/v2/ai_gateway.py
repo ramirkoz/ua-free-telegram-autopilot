@@ -238,7 +238,7 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
         return ProviderState.CONFIG_ERROR, 900, "provider"
     if kind == "quota" or any(x in text for x in ("usage limit", "quota/rate limit", "credits exhausted")):
         if "usage limit" in text or "credits exhausted" in text:
-            return ProviderState.QUOTA, min(14 * 24 * 3600, max(6 * 3600, retry_after or 24 * 3600)), "model"
+            return ProviderState.QUOTA, min(14 * 24 * 3600, max(60, retry_after)) if retry_after > 0 else 3600, "model"
         return ProviderState.QUOTA, min(6 * 3600, max(300, retry_after or 900)), "model"
     if kind in {"gone", "model"} or any(x in text for x in ("model_not_found", "model unavailable", "unknown model", "end of life")):
         return ProviderState.MODEL_UNSUPPORTED, 6 * 3600, "model"
