@@ -1905,17 +1905,16 @@ class MainWindow(tk.Tk):
                     "Увімкнено; детальний стан у блоці Codex / ChatGPT" if enabled else "Вимкнено оператором",
                 )
             elif provider == "openrouter":
-                enabled = bool(getattr(cfg, "openrouter_enabled", False))
-                models = list(getattr(cfg, "openrouter_models", []) or [])
-                configured = bool(enabled and getattr(cfg, "openrouter_api_key", "") and models)
+                mode = str(getattr(cfg, "ai_mode", "free") or "free").strip().casefold()
+                configured = bool(mode in {"codex", "openrouter"} and getattr(cfg, "openrouter_api_key", ""))
                 values = (
                     "openrouter",
                     "Невідомо" if configured else "Не налаштовано",
-                    ", ".join(models[:2]),
+                    "автопідбір",
                     0,
                     0,
                     "",
-                    "Увімкнено; ще немає health-запису" if configured else "Вимкнено або немає ключа/model allow-list",
+                    "Доступний у каскаді; ще немає health-запису" if configured else "Не використовується в обраному режимі або немає ключа",
                 )
             elif provider == "local":
                 enabled = bool(getattr(cfg, "local_enabled", False))
