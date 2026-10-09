@@ -30,8 +30,46 @@ class ReadyBacklogStore(MediaRecoveryStore):
     media pipeline still sees a complete publication bundle.
     """
 
+    def _reset_2010_queue_once(self) -> dict[str, int]:
+        """One-time queue cutover. Preserve published rows, settings and delivery evidence."""
+        key = "autopilot_2010_queue_reset_done"
+        stamp = now_iso()
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
+                con.commit()
+                return {"skipped": 1, "retired": 0, "jobs_closed": 0}
+            # UNKNOWN deliveries remain quarantined with their original journal intact.
+            # No retry is allowed until an operator resolves the Telegram outcome.
+            changed = con.execute(
+                """UPDATE articles SET stage='ARCHIVED',decision='REJECT',
+                          blocked_by='NONE',draft_text='',final_text='',ready_at='',
+                          next_retry_at='',status_detail='Queue reset 2.0.10',
+                          last_error_code='QUEUE_RESET_2010',
+                          last_error_detail='Retired by one-time 2.0.10 cutover'
+                   WHERE stage<>'PUBLISHED'
+                     AND id NOT IN (
+                         SELECT article_id FROM publication_delivery_journal
+                          WHERE state IN ('SENDING','UNKNOWN','ACKNOWLEDGED','COMMITTED')
+                     )"""
+            ).rowcount
+            closed = con.execute(
+                """UPDATE jobs SET state='DONE',lease_owner='',lease_until='',
+                          error_code='QUEUE_RESET_2010',error_detail='One-time 2.0.10 queue cutover',
+                          updated_at=?
+                   WHERE state<>'DONE' AND article_id IN (
+                     SELECT id FROM articles WHERE last_error_code='QUEUE_RESET_2010'
+                   )""", (stamp,)
+            ).rowcount
+            con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, stamp))
+            con.commit()
+        event("queue", "2.0.10 one-time cutover completed", retired=int(changed), jobs_closed=int(closed))
+        return {"skipped": 0, "retired": int(changed), "jobs_closed": int(closed)}
+
     def run_startup_maintenance(self) -> dict[str, int]:
+        reset = self._reset_2010_queue_once()
         stats = dict(super().run_startup_maintenance())
+        stats["queue_reset_2010"] = reset
         expired = 0
         for channel in self.list_channels(enabled_only=True):
             expired += self.expire_stale_ready(

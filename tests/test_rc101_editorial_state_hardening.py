@@ -164,4 +164,8 @@ def test_rc101_recovery_code_does_not_clear_final_text():
     root = Path(__file__).resolve().parents[1] / "telegram_autopilot" / "v2"
     for name in ("ready_backlog.py", "media_recovery.py", "hardened_storage.py", "first_run_import.py"):
         text = (root / name).read_text(encoding="utf-8")
+        # The 2.0.10 one-time operator-requested cutover deliberately clears
+        # obsolete drafts; no automatic *recovery* path may clear a rewrite.
+        if name == "ready_backlog.py":
+            text = text.split("    def _recover_nonrequired_media_backlog", 1)[1]
         assert "final_text=''" not in text

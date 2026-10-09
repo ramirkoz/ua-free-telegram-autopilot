@@ -287,6 +287,13 @@ class Publisher:
                 self.store.record_telegram_media_delivery(article_id, clean_ids, caption_attached=False, caption_message_id="")
                 event("publish", "recovered partial media delivery journal", channel_id=int(channel.id), article_id=article_id, published_media_count=len(clean_ids))
         if state in {"SENDING", "UNKNOWN"}:
+            # Do not mutate/log an already quarantined UNKNOWN delivery on every
+            # publish sweep.  It may already exist in Telegram; retries are unsafe.
+            row = self.store.get_article(article_id)
+            if state == "UNKNOWN" and row is not None and str(row["last_error_code"] or "") in {
+                "DELIVERY_OUTCOME_UNKNOWN", "TELEGRAM_OUTCOME_UNKNOWN",
+            }:
+                return "DELIVERY_OUTCOME_UNKNOWN"
             detail = str(journal.get("last_error") or "Delivery was in-flight when the previous process stopped; Telegram outcome is unknown.")
             self.store.fail_delivery(article_id, detail, outcome_unknown=True)
             self.store.publication_backoff(

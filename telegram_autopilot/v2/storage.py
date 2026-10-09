@@ -1533,12 +1533,14 @@ class V2Store:
                        WHERE ea.article_id=a.id
                          AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                          AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                      ) THEN 0 ELSE 1 END ASC,
                      CASE WHEN EXISTS (
                        SELECT 1 FROM editorial_actions ea
                        WHERE ea.article_id=a.id
                          AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                          AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                      ) THEN datetime(a.ready_at) END ASC,
                      datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,
                      a.id DESC
@@ -1562,7 +1564,8 @@ class V2Store:
                      WHERE a.stage<>'PUBLISHED'
                        {channel_clause}
                        AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
-                       AND ea.action IN ('approve','edit','publish_attempt')""",
+                       AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'""",
                 tuple(params),
             ).fetchall()
             restored=0
@@ -1601,6 +1604,7 @@ class V2Store:
                     WHERE a.channel_id=? AND a.stage<>'PUBLISHED'
                       AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                       AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                     ORDER BY datetime(ea.created_at) ASC""",
                 (int(channel_id),),
             ).fetchall()
@@ -1931,6 +1935,23 @@ class V2Store:
                 cur=con.execute("INSERT INTO articles(channel_id,source_id,external_id,title,source_url,canonical_source_url,raw_text,content_hash,source_published_at,discovered_at,media_json,article_layout_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(int(channel_id),int(source_id),str(external_id),str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),stamp,str(media_json),str(article_layout_json)))
                 aid=int(cur.lastrowid); con.commit()
             except Exception: con.rollback(); raise
+        # 2.0.10 cutover: reject newly discovered items whose source date
+        # predates first launch. Unknown source dates retain normal channel rules.
+        with self.connect() as con:
+            cutover_row = con.execute(
+                "SELECT value FROM meta WHERE key='autopilot_2010_queue_reset_done'"
+            ).fetchone()
+        cutover = _parse_datetime_value(str(cutover_row[0])) if cutover_row else None
+        published_stamp = _parse_datetime_value(str(source_published_at)) if source_published_at else None
+        if cutover is not None and published_stamp is not None and published_stamp < cutover:
+            with self.connect() as con:
+                con.execute(
+                    """UPDATE articles SET stage='ARCHIVED', decision='REJECT',
+                       blocked_by='NONE', last_error_code='QUEUE_RESET_2010',
+                       status_detail='Source published before 2.0.10 cutover'
+                       WHERE id=? AND stage<>'PUBLISHED'""", (aid,)
+                )
+            return aid
         self.enqueue(aid,channel_id=channel_id,priority=10); return aid
 
     def enqueue(self, article_id:int, *, channel_id:int|None=None,priority:int=100,available_at:str|None=None,job_type:str="process") -> int:

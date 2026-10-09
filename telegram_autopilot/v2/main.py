@@ -185,6 +185,11 @@ def main() -> int:
                 return 0
 
             store = HardenedV2Store(v2_database_path())
+            # 2.0.10: the RC103 fast-start hook skips normal maintenance.
+            # Retire the old queue synchronously BEFORE workers/UI can publish.
+            # Failing here must stop launch rather than leak pre-cutover posts.
+            cutover = store._reset_2010_queue_once()
+            event("queue", "2.0.10 first-launch cutover checked", **cutover)
             try:
                 poll_repair = repair_polling_baseline(store)
                 event("app", "polling baseline repair checked", **poll_repair)
