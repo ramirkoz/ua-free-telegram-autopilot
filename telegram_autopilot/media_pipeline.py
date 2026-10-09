@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import struct
+from io import BytesIO
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
@@ -50,6 +51,7 @@ class PreparedMedia:
     classification: str = "unknown"
     relevance_score: float = 0.0
     gallery: bool = False
+    perceptual_hash: str = ""
 
     @property
     def filename(self) -> str:
@@ -210,6 +212,28 @@ def _image_dimensions(data: bytes, mime: str) -> tuple[int, int]:
     return 0, 0
 
 
+def _perceptual_hash(data: bytes) -> str:
+    """Conservative 64-bit dHash. Used only to suppress near-identical source images."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(BytesIO(data)) as raw:
+            frame = ImageOps.exif_transpose(raw).convert("L")
+            # Flat backgrounds have uninformative hashes and must not collapse
+            # two different photographs with similar color.
+            lo, hi = frame.getextrema()
+            if hi - lo < 24:
+                return ""
+            frame = frame.resize((9, 8))
+            pixels = list(frame.getdata())
+            bits = 0
+            for row in range(8):
+                for col in range(8):
+                    bits = (bits << 1) | int(pixels[row * 9 + col] > pixels[row * 9 + col + 1])
+            return f"{bits:016x}"
+    except Exception:
+        return ""
+
+
 def _media_identity(url: str) -> str:
     try:
         parts = urlsplit(url)
@@ -368,6 +392,7 @@ def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> Pre
     item.mime_type = mime
     item.width, item.height = width, height
     item.digest = hashlib.sha256(response.body).hexdigest()
+    item.perceptual_hash = _perceptual_hash(response.body)
     item.data = response.body
     return item
 
@@ -477,6 +502,7 @@ def prepare_article_media(
 
     prepared: list[PreparedMedia] = []
     seen_hashes: set[str] = set()
+    seen_visual: list[tuple[str, float]] = []
     seen_urls: set[str] = set()
     seen_identities: set[str] = set()
     # Preserve the selected hero's binary identity so alternate-sized body URLs
@@ -484,6 +510,8 @@ def prepare_article_media(
     if featured is not None:
         if featured.digest:
             seen_hashes.add(featured.digest)
+        if featured.perceptual_hash:
+            seen_visual.append((featured.perceptual_hash, featured.width / max(1, featured.height)))
         seen_urls.add(featured.url)
         seen_identities.add(_media_identity(featured.url))
     for item in body:
@@ -497,6 +525,12 @@ def prepare_article_media(
                 continue
             if resolved.digest and resolved.digest in seen_hashes:
                 continue
+            if resolved.perceptual_hash:
+                ratio = resolved.width / max(1, resolved.height)
+                if any(abs(ratio - prev_ratio) <= 0.1 and
+                       (int(resolved.perceptual_hash, 16) ^ int(prev_hash, 16)).bit_count() <= 3
+                       for prev_hash, prev_ratio in seen_visual):
+                    continue
             if resolved.url in seen_urls:
                 continue
             resolved.relevance_score = _score(
@@ -519,6 +553,8 @@ def prepare_article_media(
                 continue
             if resolved.digest:
                 seen_hashes.add(resolved.digest)
+            if resolved.perceptual_hash:
+                seen_visual.append((resolved.perceptual_hash, resolved.width / max(1, resolved.height)))
             seen_urls.add(resolved.url)
             prepared.append(resolved)
         else:
