@@ -983,6 +983,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
                 "type":"media","index":next_index,"kind":kind,"url":url,
                 "caption":"","alt":"","position":0.05,"width":0,"height":0,
                 "context":"schema article gallery","gallery":gallery_flag,
+                "schema_verified": True,
             })
             media.append(encoded)
             existing.add(encoded)
