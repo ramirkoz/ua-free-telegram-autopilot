@@ -684,7 +684,7 @@ def apply_local_languagetool_detailed(
         # The checker is not a factual editor: never change words or entities.
         # In particular, Ukrainian MORFOLOGIK suggestions used to corrupt FPV,
         # surnames and local place names after a correct AI draft.
-        if re.sub(r"[^\\wА-Яа-яІіЇїЄєҐґ]", "", old, flags=re.UNICODE) != re.sub(r"[^\\wА-Яа-яІіЇїЄєҐґ]", "", new, flags=re.UNICODE):
+        if re.sub(r"\W+", "", old, flags=re.UNICODE) != re.sub(r"\W+", "", new, flags=re.UNICODE):
             continue
         edits.append((offset, offset + length, new))
 
