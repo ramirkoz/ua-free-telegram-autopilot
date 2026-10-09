@@ -258,9 +258,13 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         item, title=title, article_text=article_text
     )
     if item.featured:
+        if item.context == "verified_article_hero":
+            return True
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
+    if item.gallery and item.context == "schema article gallery":
+        return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
     return title_overlap >= 1 or article_overlap >= 2
@@ -305,6 +309,10 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
             score += 30.0
     else:
         score = 10.0 if item.featured else 16.0
+    if item.context == "verified_article_hero" and item.featured:
+        score += 30.0
+    if item.gallery and item.context == "schema article gallery":
+        score += 20.0
     if item.caption:
         score += 10.0
     if item.alt:
@@ -379,7 +387,12 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
             parsed = valid_public_media(featured_raw)
             if parsed:
                 kind, url = parsed
-                featured = PreparedMedia(0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True)
+                featured = PreparedMedia(
+                    0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True,
+                    context="verified_article_hero" if str(featured_meta.get("provenance") or "") in {
+                        "jsonld_article_image", "page_hero", "verified_og", "verified_video_poster"
+                    } else "",
+                )
         if featured_video_raw:
             parsed_video = valid_public_media(featured_video_raw)
             if parsed_video:
@@ -409,13 +422,23 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     position=max(0.0, min(1.0, position)), width=width, height=height,
                     gallery=bool(block.get("gallery")),
                 ))
-    if not body:
-        for idx, raw in enumerate(fallback_urls[:12], start=1):
-            parsed = valid_public_media(raw)
-            if not parsed:
-                continue
-            kind, url = parsed
-            body.append(PreparedMedia(idx, kind, url, position=min(0.95, 0.75 + idx * 0.03)))
+    # Keep source-owned fallback images even when HTML already exposed a media
+    # block (including an iframe or unrelated thumbnail). Fallback candidates
+    # are late-ranked and still pass semantic, hard-noise and binary validation.
+    existing = {(item.kind, _media_identity(item.url)) for item in body}
+    if featured:
+        existing.add((featured.kind, _media_identity(featured.url)))
+    for idx, raw in enumerate(fallback_urls[:24], start=1):
+        parsed = valid_public_media(raw)
+        if not parsed:
+            continue
+        kind, url = parsed
+        identity = (kind, _media_identity(url))
+        if identity in existing:
+            continue
+        existing.add(identity)
+        body.append(PreparedMedia(len(body) + 1, kind, url,
+                                  position=min(0.95, 0.75 + idx * 0.01)))
     return featured, body
 
 
