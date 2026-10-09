@@ -40,6 +40,9 @@ class MediaBundle:
     gallery_items_kept: int = 0
     video_embed_count: int = 0
     web_media_source: str = ""
+    extracted_media_count: int = 0
+    filtered_media_count: int = 0
+    media_validation_error: str = ""
 
     @property
     def count(self) -> int:
@@ -158,6 +161,7 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
     gallery_detected = bool(raw.gallery_detected)
     gallery_items_found = int(raw.gallery_items_found or 0)
     video_embed_count = int(raw.video_embed_count or 0)
+    validation_error = ""
     try:
         from ..media_pipeline import prepare_article_media
         try:
@@ -201,8 +205,15 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
             chosen.append(MediaItem(item.kind, item.url))
             if len(chosen) >= 24:
                 break
-    except Exception:
+    except Exception as exc:
+        # A classifier crash must not silently look like an article with no
+        # source artwork. Fail closed on image selection but retain a reason.
         chosen = []
+        validation_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+        from .loghub import event
+        event("media", "web media validation failed", level=40,
+              article_id=int(_v(article, "id", 0) or 0),
+              raw_media_count=raw.count, error=validation_error)
 
     return MediaBundle(
         items=tuple(chosen),
@@ -217,6 +228,9 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
         gallery_items_kept=len(chosen) if gallery_detected else 0,
         video_embed_count=video_embed_count,
         web_media_source=raw.web_media_source,
+        extracted_media_count=raw.count,
+        filtered_media_count=max(0, raw.count - len(chosen)),
+        media_validation_error=validation_error,
     )
 
 def media_required(channel: ChannelConfig) -> bool:
