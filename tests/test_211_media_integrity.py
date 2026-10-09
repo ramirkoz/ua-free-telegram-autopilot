@@ -41,7 +41,8 @@ def test_211_verified_article_gallery_survives_opaque_filenames(monkeypatch):
     monkeypatch.setattr(media_pipeline, "_probe_image", lambda item, **kw: item)
     images = [
         {"type": "media", "kind": "image", "url": f"https://cdn.example.com/photo{i}.jpg",
-         "context": "schema article gallery", "gallery": True, "position": 0.05}
+         "context": "schema article gallery", "gallery": True,
+         "schema_verified": True, "position": 0.05}
         for i in (1, 2, 3)
     ]
     prepared = media_pipeline.prepare_article_media(
@@ -88,7 +89,8 @@ def test_211_near_identical_gallery_images_are_not_published_twice(monkeypatch):
     monkeypatch.setattr(media_pipeline, "_probe_image", probe)
     images = [
         {"type": "media", "kind": "image", "url": f"https://cdn.example.com/photo-{i}.jpg",
-         "context": "schema article gallery", "gallery": True, "position": 0.05}
+         "context": "schema article gallery", "gallery": True,
+         "schema_verified": True, "position": 0.05}
         for i in (1, 2)
     ]
     result = media_pipeline.prepare_article_media(_layout(images), [],
