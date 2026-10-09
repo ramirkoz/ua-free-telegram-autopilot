@@ -20,7 +20,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - RELEASE_NOTES_v2.0.11.md
+      - RELEASE_NOTES_v2.0.11.1.md
 
 permissions:
   contents: write

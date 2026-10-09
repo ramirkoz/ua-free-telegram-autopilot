@@ -8,7 +8,7 @@ import ssl
 import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from .security import redact_url
 
@@ -153,9 +153,11 @@ def fetch_url(
             raise NetworkError("Only ports 80 and 443 are allowed.")
         host = parts.hostname.lower().rstrip(".")
         addresses = _resolve_with_timeout(resolver, host, port, timeout)
-        path = parts.path or "/"
+        # Percent-encode Unicode before sending to http.client's ASCII HTTP layer.
+        # Preserve already escaped bytes and reserved URL delimiters.
+        path = quote(parts.path or "/", safe="/%:@!$&()*+,;=-._~")
         if parts.query:
-            path += "?" + parts.query
+            path += "?" + quote(parts.query, safe="/?%:@!$&()*+,;=-._~")
         host_header = host if port in {80, 443} else f"{host}:{port}"
         outgoing_headers = dict(request_headers)
         outgoing_headers["Host"] = host_header

@@ -21,7 +21,7 @@ from .loghub import event
 
 _REPO = "ramirkoz/ua-free-telegram-autopilot"
 _VERSION_RE = re.compile(
-    r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:-rc(?P<rc>[1-9][0-9]*))?$"
+    r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:\.(?P<hotfix>[0-9]+))?(?:-rc(?P<rc>[1-9][0-9]*))?$"
 )
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 UPDATE_RUNTIME_ABI = "py312-v1"
@@ -31,15 +31,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
-def _version_rank(version: str) -> tuple[int, int, int, int, int]:
+def _version_rank(version: str) -> tuple[int, int, int, int, int, int]:
     match = _VERSION_RE.fullmatch(str(version or "").strip())
     if not match:
-        return (-1, -1, -1, -1, -1)
+        return (-1, -1, -1, -1, -1, -1)
     major = int(match.group("major"))
     minor = int(match.group("minor"))
     patch = int(match.group("patch"))
+    hotfix = int(match.group("hotfix") or 0)
     rc = match.group("rc")
-    return (major, minor, patch, 0, int(rc)) if rc else (major, minor, patch, 1, 0)
+    # A stable 2.0.11.1 must outrank any 2.0.11 prerelease and
+    # all 2.0.0-rcNNNN, regardless of their RC counter.
+    return (major, minor, patch, hotfix, 0, int(rc)) if rc else (major, minor, patch, hotfix, 1, 0)
 
 
 def _rc_number(version: str) -> int:
