@@ -287,7 +287,7 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.gallery and item.context == "schema article gallery":
+    if item.context == "schema article gallery":
         return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
@@ -335,7 +335,7 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
         score = 10.0 if item.featured else 16.0
     if item.context == "verified_article_hero" and item.featured:
         score += 30.0
-    if item.gallery and item.context == "schema article gallery":
+    if item.context == "schema article gallery":
         score += 20.0
     if item.caption:
         score += 10.0
