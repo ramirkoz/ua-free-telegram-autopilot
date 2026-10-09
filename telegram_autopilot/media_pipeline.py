@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import struct
+from io import BytesIO
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
@@ -50,6 +51,8 @@ class PreparedMedia:
     classification: str = "unknown"
     relevance_score: float = 0.0
     gallery: bool = False
+    perceptual_hash: str = ""
+    schema_verified: bool = False
 
     @property
     def filename(self) -> str:
@@ -210,6 +213,28 @@ def _image_dimensions(data: bytes, mime: str) -> tuple[int, int]:
     return 0, 0
 
 
+def _perceptual_hash(data: bytes) -> str:
+    """Conservative 64-bit dHash. Used only to suppress near-identical source images."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(BytesIO(data)) as raw:
+            frame = ImageOps.exif_transpose(raw).convert("L")
+            # Flat backgrounds have uninformative hashes and must not collapse
+            # two different photographs with similar color.
+            lo, hi = frame.getextrema()
+            if hi - lo < 24:
+                return ""
+            frame = frame.resize((9, 8))
+            pixels = list(frame.getdata())
+            bits = 0
+            for row in range(8):
+                for col in range(8):
+                    bits = (bits << 1) | int(pixels[row * 9 + col] > pixels[row * 9 + col + 1])
+            return f"{bits:016x}"
+    except Exception:
+        return ""
+
+
 def _media_identity(url: str) -> str:
     try:
         parts = urlsplit(url)
@@ -258,9 +283,13 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         item, title=title, article_text=article_text
     )
     if item.featured:
+        if item.context == "verified_article_hero":
+            return True
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
+    if item.schema_verified:
+        return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
     return title_overlap >= 1 or article_overlap >= 2
@@ -305,6 +334,10 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
             score += 30.0
     else:
         score = 10.0 if item.featured else 16.0
+    if item.context == "verified_article_hero" and item.featured:
+        score += 30.0
+    if item.schema_verified:
+        score += 20.0
     if item.caption:
         score += 10.0
     if item.alt:
@@ -360,6 +393,7 @@ def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> Pre
     item.mime_type = mime
     item.width, item.height = width, height
     item.digest = hashlib.sha256(response.body).hexdigest()
+    item.perceptual_hash = _perceptual_hash(response.body)
     item.data = response.body
     return item
 
@@ -379,7 +413,12 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
             parsed = valid_public_media(featured_raw)
             if parsed:
                 kind, url = parsed
-                featured = PreparedMedia(0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True)
+                featured = PreparedMedia(
+                    0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True,
+                    context="verified_article_hero" if str(featured_meta.get("provenance") or "") in {
+                        "jsonld_article_image", "page_hero", "verified_og", "verified_video_poster"
+                    } else "",
+                )
         if featured_video_raw:
             parsed_video = valid_public_media(featured_video_raw)
             if parsed_video:
@@ -408,14 +447,25 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     alt=str(block.get("alt") or "")[:500], context=str(block.get("context") or "")[:800],
                     position=max(0.0, min(1.0, position)), width=width, height=height,
                     gallery=bool(block.get("gallery")),
+                    schema_verified=bool(block.get("schema_verified")),
                 ))
-    if not body:
-        for idx, raw in enumerate(fallback_urls[:12], start=1):
-            parsed = valid_public_media(raw)
-            if not parsed:
-                continue
-            kind, url = parsed
-            body.append(PreparedMedia(idx, kind, url, position=min(0.95, 0.75 + idx * 0.03)))
+    # Keep source-owned fallback images even when HTML already exposed a media
+    # block (including an iframe or unrelated thumbnail). Fallback candidates
+    # are late-ranked and still pass semantic, hard-noise and binary validation.
+    existing = {(item.kind, _media_identity(item.url)) for item in body}
+    if featured:
+        existing.add((featured.kind, _media_identity(featured.url)))
+    for idx, raw in enumerate(fallback_urls[:24], start=1):
+        parsed = valid_public_media(raw)
+        if not parsed:
+            continue
+        kind, url = parsed
+        identity = (kind, _media_identity(url))
+        if identity in existing:
+            continue
+        existing.add(identity)
+        body.append(PreparedMedia(len(body) + 1, kind, url,
+                                  position=min(0.95, 0.75 + idx * 0.01)))
     return featured, body
 
 
@@ -454,6 +504,7 @@ def prepare_article_media(
 
     prepared: list[PreparedMedia] = []
     seen_hashes: set[str] = set()
+    seen_visual: list[tuple[str, float]] = []
     seen_urls: set[str] = set()
     seen_identities: set[str] = set()
     # Preserve the selected hero's binary identity so alternate-sized body URLs
@@ -461,6 +512,8 @@ def prepare_article_media(
     if featured is not None:
         if featured.digest:
             seen_hashes.add(featured.digest)
+        if featured.perceptual_hash:
+            seen_visual.append((featured.perceptual_hash, featured.width / max(1, featured.height)))
         seen_urls.add(featured.url)
         seen_identities.add(_media_identity(featured.url))
     for item in body:
@@ -474,6 +527,12 @@ def prepare_article_media(
                 continue
             if resolved.digest and resolved.digest in seen_hashes:
                 continue
+            if resolved.perceptual_hash:
+                ratio = resolved.width / max(1, resolved.height)
+                if any(abs(ratio - prev_ratio) <= 0.1 and
+                       (int(resolved.perceptual_hash, 16) ^ int(prev_hash, 16)).bit_count() <= 3
+                       for prev_hash, prev_ratio in seen_visual):
+                    continue
             if resolved.url in seen_urls:
                 continue
             resolved.relevance_score = _score(
@@ -496,6 +555,8 @@ def prepare_article_media(
                 continue
             if resolved.digest:
                 seen_hashes.add(resolved.digest)
+            if resolved.perceptual_hash:
+                seen_visual.append((resolved.perceptual_hash, resolved.width / max(1, resolved.height)))
             seen_urls.add(resolved.url)
             prepared.append(resolved)
         else:

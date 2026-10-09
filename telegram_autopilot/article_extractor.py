@@ -813,8 +813,9 @@ def _jsonld_article_image_candidates(html: str, base_url: str, title: str = "", 
     """Return all schema.org Article images tied to the current article, in source order."""
     article_nodes = [node for node in _jsonld_nodes(html) if _node_types(node) & _ARTICLE_TYPES]
     ordered = [node for node in article_nodes if _jsonld_node_matches_article(node, title=title, base_url=base_url)]
-    if len(article_nodes) == 1 and article_nodes[0] not in ordered:
-        ordered.append(article_nodes[0])
+    # Do not trust a single unrelated Article schema block (recommended story,
+    # embedded advertorial, or site-level JSON-LD). Gallery metadata may bypass
+    # lexical matching later, so article identity must be proven here.
     out: list[str] = []
     seen: set[str] = set()
     for node in ordered:
@@ -982,6 +983,7 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
                 "type":"media","index":next_index,"kind":kind,"url":url,
                 "caption":"","alt":"","position":0.05,"width":0,"height":0,
                 "context":"schema article gallery","gallery":gallery_flag,
+                "schema_verified": True,
             })
             media.append(encoded)
             existing.add(encoded)

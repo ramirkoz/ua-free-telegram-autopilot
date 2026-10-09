@@ -572,6 +572,9 @@ class Publisher:
             gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),
             video_embed_count=int(getattr(bundle,"video_embed_count",0) or 0),
             web_media_source=str(getattr(bundle,"web_media_source","") or ""),
+            extracted_media_count=int(getattr(bundle,"extracted_media_count",0) or 0),
+            filtered_media_count=int(getattr(bundle,"filtered_media_count",0) or 0),
+            media_validation_error=str(getattr(bundle,"media_validation_error","") or ""),
         )
         if policy == "required" and not bundle.count:
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))

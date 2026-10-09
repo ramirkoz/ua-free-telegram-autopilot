@@ -15,6 +15,12 @@ on:
       - pyproject.toml
       - .github/workflows/release.yml
   workflow_dispatch:
+  # Build and test exact 2.0.11 Windows assets on the release PR, without
+  # publishing a GitHub tag before the operator approves the code.
+  pull_request:
+    branches: [main]
+    paths:
+      - RELEASE_NOTES_v2.0.11.md
 
 permissions:
   contents: write
@@ -399,6 +405,7 @@ jobs:
           retention-days: 90
 
       - name: Publish GitHub prerelease
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
