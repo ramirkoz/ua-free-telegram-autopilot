@@ -256,7 +256,14 @@ def candidate_models_for_task(
     limit: int = 5,
     force: bool = False,
 ) -> tuple[OpenRouterModel, ...]:
-    catalog = tuple(row for row in model_catalog(force=force) if _chat_compatible_id(row.id))
+    editorial_task = str(purpose or "").strip().casefold() in {"writer", "final_editor", "complex_rewrite", "rewrite"}
+    # Agentic research ensembles are expensive and are not default copywriters.
+    # Explicit operator-configured model IDs use a separate route.
+    catalog = tuple(
+        row for row in model_catalog(force=force)
+        if _chat_compatible_id(row.id)
+        and (not editorial_task or "multi-agent" not in row.id.casefold())
+    )
     start, ceiling = route_tiers(purpose, strategy)
     start_rank = _TIER_RANK[start]
     ceiling_rank = _TIER_RANK[ceiling]
