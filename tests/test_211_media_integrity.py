@@ -113,3 +113,14 @@ def test_211_perceptual_hash_survives_image_resize():
     resized = media_pipeline._perceptual_hash(dump(im.resize((180, 160))))
     assert first and resized
     assert (int(first, 16) ^ int(resized, 16)).bit_count() <= 3
+
+
+def test_211_unverified_html_context_cannot_impersonate_schema_gallery():
+    item = media_pipeline.PreparedMedia(
+        index=1, kind="image", url="https://cdn.example.com/photo123.jpg",
+        context="schema article gallery", gallery=True, schema_verified=False,
+    )
+    assert not media_pipeline._semantic_media_match(
+        item, title="Quantum computer achieves new milestone",
+        article_text="A new scientific quantum processing milestone has been announced",
+    )
