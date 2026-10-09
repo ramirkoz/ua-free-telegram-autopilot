@@ -1533,12 +1533,14 @@ class V2Store:
                        WHERE ea.article_id=a.id
                          AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                          AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                      ) THEN 0 ELSE 1 END ASC,
                      CASE WHEN EXISTS (
                        SELECT 1 FROM editorial_actions ea
                        WHERE ea.article_id=a.id
                          AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                          AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                      ) THEN datetime(a.ready_at) END ASC,
                      datetime(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) DESC,
                      a.id DESC
@@ -1562,7 +1564,8 @@ class V2Store:
                      WHERE a.stage<>'PUBLISHED'
                        {channel_clause}
                        AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
-                       AND ea.action IN ('approve','edit','publish_attempt')""",
+                       AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'""",
                 tuple(params),
             ).fetchall()
             restored=0
@@ -1601,6 +1604,7 @@ class V2Store:
                     WHERE a.channel_id=? AND a.stage<>'PUBLISHED'
                       AND ea.id=(SELECT MAX(ea2.id) FROM editorial_actions ea2 WHERE ea2.article_id=a.id)
                       AND ea.action IN ('approve','edit','publish_attempt')
+                       AND a.last_error_code<>'QUEUE_RESET_2010'
                     ORDER BY datetime(ea.created_at) ASC""",
                 (int(channel_id),),
             ).fetchall()
