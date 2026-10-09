@@ -283,7 +283,7 @@ def candidate_models_for_task(
 
         eligible = [
             row for row in catalog
-            if row.quality >= tier_rank
+            if row.quality >= (max(3, tier_rank) if editorial_task else tier_rank)
             and (not row.context_length or row.context_length >= required_context)
             and row.blended_price_million <= cap
             and (strategy == "economy" or not row.free)
@@ -291,7 +291,7 @@ def candidate_models_for_task(
         if not eligible and strategy != "economy":
             eligible = [
                 row for row in catalog
-                if row.quality >= tier_rank
+                if row.quality >= (max(3, tier_rank) if editorial_task else tier_rank)
                 and (not row.context_length or row.context_length >= required_context)
                 and row.blended_price_million <= cap
             ]
