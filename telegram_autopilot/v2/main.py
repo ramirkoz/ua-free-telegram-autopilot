@@ -193,7 +193,8 @@ def main() -> int:
             # RC103 startup must never be gated by database housekeeping. The UI
             # and runtime become available first; feedback schema and retention are
             # best-effort background tasks and cannot veto application startup.
-            app.set_startup_ready(True, "Готово · фонове обслуговування БД не блокує запуск")
+            configured_channels = store.list_channels(enabled_only=True)
+            app.set_startup_ready(bool(configured_channels), "Готово · фонове обслуговування БД не блокує запуск" if configured_channels else "Потрібен імпорт Data: немає активних каналів. Програма НЕ готова до роботи.")
             event("app", "startup stage", stage="UI_READY")
 
             try:
@@ -202,7 +203,7 @@ def main() -> int:
             except Exception as exc:
                 event("update", "startup health marker failed", level=30, detail=str(exc)[:1000])
 
-            if store.list_channels(enabled_only=True):
+            if configured_channels:
                 def start_runtime_and_mark_ready() -> None:
                     try:
                         app.start_runtime()
@@ -226,6 +227,7 @@ def main() -> int:
                 app.after(250, start_runtime_and_mark_ready)
             else:
                 app.book.select(app.tabs["migration"])
+                app.set_startup_ready(False, "НЕ ГОТОВО: немає активних каналів. Імпортуйте попередню Data у вкладці «Міграція».")
                 event("app", "startup stage", stage="UI_READY_NO_CHANNELS")
 
             def background_startup_tasks() -> None:
