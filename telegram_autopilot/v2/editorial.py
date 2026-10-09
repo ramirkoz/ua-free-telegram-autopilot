@@ -440,6 +440,41 @@ def _is_editorial_prompt_echo(value: str) -> bool:
     return False
 
 
+_UNSUPPORTED_ANALYSIS_CLAIMS = (
+    (
+        re.compile(r"(?iu)\b(?:це|такий\s+крок|така\s+подія)\s+(?:свідчить|підтверджує)\s+про\b"),
+        re.compile(r"(?iu)(?:свідч\w+\s+про|підтвердж\w+\s+|suggests?\s+that|indicat(?:es|ed)\s+that|demonstrat(?:es|ed)\s+that)"),
+    ),
+    (
+        re.compile(r"(?iu)\bза\s+попередньою\s+інформацією\b"),
+        re.compile(r"(?iu)(?:попередн\w+\s+(?:інформац|дан)|preliminary|initial\s+reports?|early\s+reports?)"),
+    ),
+    (
+        re.compile(r"(?iu)\b(?:експерти|аналітики)\s+(?:припускають|прогнозують)\b"),
+        re.compile(r"(?iu)(?:експерт\w+|аналітик\w+|experts?|analysts?|predict(?:s|ed)?|forecast(?:s|ed)?)"),
+    ),
+)
+
+
+def _unsupported_analysis_claims(article: Any, value: str) -> tuple[str, ...]:
+    """Content Tool-style grounding check for conspicuous invented speculation.
+
+    Works with Ukrainian and English evidence, without low-overlap heuristics that
+    could reject legitimate English-to-Ukrainian translations.
+    """
+    source = " ".join((
+        str(_v(article, "title", "") or ""),
+        _source_text(article),
+    ))
+    output = str(value or "")
+    issues = []
+    for generated, supported in _UNSUPPORTED_ANALYSIS_CLAIMS:
+        if generated.search(output) and not supported.search(source):
+            issues.append("непідтверджений аналітичний висновок або припущення")
+            break
+    return tuple(issues)
+
+
 def validate_writer_output(
     article: Any,
     text: str,
@@ -464,6 +499,9 @@ def validate_writer_output(
         raise ValueError("AI не повернув природний український текст")
     require_source_context(value, required_context)
     validate_fact_guard(article, value)
+    analysis_issues = _unsupported_analysis_claims(article, value)
+    if analysis_issues:
+        raise ValueError("Fact Grounding QA: " + "; ".join(analysis_issues))
     source = "\n".join((
         str(_v(article, "source_name", "")),
         str(_v(article, "title", "")),
@@ -592,9 +630,19 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
         return value
     suffix = "\n\n" + "\n".join(f"{label}: {literal}" for label, literal in missing)
     if len(value) + len(suffix) > int(hard_max_chars):
-        raise ValueError(
-            f"AI прибрав практичні контакти/URL, а відновлення перевищує ліміт {int(hard_max_chars)}"
-        )
+        # Source-owned reader-action links are more important than optional
+        # commentary. Shorten a complete sentence boundary to leave room;
+        # subsequent fact, language and length gates still validate the result.
+        room = int(hard_max_chars) - len(suffix)
+        if room < 80:
+            raise ValueError(
+                f"Практичні контакти/URL джерела не вміщуються в ліміт {int(hard_max_chars)}"
+            )
+        value = _trim_candidate_to_hard_limit(value, room, min_chars=80)
+        if len(value) + len(suffix) > int(hard_max_chars):
+            raise ValueError(
+                f"Не вдалося безпечно зберегти практичні контакти/URL в ліміті {int(hard_max_chars)}"
+            )
     return value + suffix
 
 
@@ -937,7 +985,7 @@ SOURCE:
             if source_context else ""
         )
         source_attribution_instruction = source_body_instruction(channel, article)
-        prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Виправ мову, граматику, узгодження, ясність, повтори і структуру. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
+        prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:

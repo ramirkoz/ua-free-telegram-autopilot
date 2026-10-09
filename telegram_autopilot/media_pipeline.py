@@ -456,6 +456,13 @@ def prepare_article_media(
     seen_hashes: set[str] = set()
     seen_urls: set[str] = set()
     seen_identities: set[str] = set()
+    # Preserve the selected hero's binary identity so alternate-sized body URLs
+    # cannot upload its identical pixels as another gallery image.
+    if featured is not None:
+        if featured.digest:
+            seen_hashes.add(featured.digest)
+        seen_urls.add(featured.url)
+        seen_identities.add(_media_identity(featured.url))
     for item in body:
         identity = _media_identity(item.url)
         if identity in seen_identities or _hard_reject(item, marketing_context=marketing_context):
