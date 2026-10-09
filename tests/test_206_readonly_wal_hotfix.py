@@ -34,7 +34,7 @@ def test_readonly_wal_uses_private_writable_snapshot(tmp_path: Path, monkeypatch
         assert connection.execute("SELECT text FROM facts").fetchone()[0] == "preserved"
 
 
-def test_non_wal_readonly_error_fails_safely(tmp_path: Path, monkeypatch):
+def test_non_wal_readonly_error_uses_private_snapshot(tmp_path: Path, monkeypatch):
     source = tmp_path / "original.sqlite3"
     dest = tmp_path / "output.sqlite3"
     with sqlite3.connect(source) as connection:
@@ -47,5 +47,6 @@ def test_non_wal_readonly_error_fails_safely(tmp_path: Path, monkeypatch):
         return original_connect(db_path, *args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", readonly_fails)
-    with pytest.raises(RuntimeError, match="no WAL fallback"):
-        MigrationManager._sqlite_backup(source, dest)
+    MigrationManager._sqlite_backup(source, dest)
+    with original_connect(dest) as con:
+        assert con.execute("SELECT name FROM sqlite_master WHERE name='facts'").fetchone() is not None

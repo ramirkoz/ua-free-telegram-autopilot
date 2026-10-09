@@ -91,17 +91,19 @@ class MigrationManager:
                 raise
             if not os.access(destination.parent, os.W_OK) or (destination.exists() and not os.access(destination, os.W_OK)):
                 raise RuntimeError(f"Destination Data is not writable: {destination}") from exc
-            wal = Path(str(source) + "-wal")
-            if not wal.is_file():
-                raise RuntimeError(f"Read-only SQLite source failed (no WAL fallback): {source}: {exc}") from exc
+            # SQLite may require writable -shm/WAL metadata even when no -wal
+            # file exists. Never write beside the operator's original database.
             with tempfile.TemporaryDirectory(prefix="autopilot-sqlite-snapshot-") as folder:
                 copy = Path(folder) / source.name
-                shutil.copy2(source, copy)
-                shutil.copy2(wal, Path(str(copy) + "-wal"))
+                shutil.copyfile(source, copy)
+                for suffix in ("-wal", "-shm", "-journal"):
+                    sidecar = Path(str(source) + suffix)
+                    if sidecar.is_file():
+                        shutil.copyfile(sidecar, Path(str(copy) + suffix))
                 try:
                     backup_from(copy, readonly=False)
                 except sqlite3.Error as retry_exc:
-                    raise RuntimeError(f"Private WAL snapshot import failed: {retry_exc}") from retry_exc
+                    raise RuntimeError(f"Private SQLite snapshot import failed: {retry_exc}") from retry_exc
 
     @staticmethod
     def _validate_database(path: Path) -> None:
