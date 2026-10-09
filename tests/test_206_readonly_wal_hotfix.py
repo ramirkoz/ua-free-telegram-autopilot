@@ -20,10 +20,10 @@ def test_readonly_wal_uses_private_writable_snapshot(tmp_path: Path, monkeypatch
     assert Path(str(source) + "-wal").exists()
     original_connect = sqlite3.connect
 
-    def readonly_source_fails(uri, *args, **kwargs):
-        if isinstance(uri, str) and "mode=ro" in uri and "old/" in uri:
+    def readonly_source_fails(db_path, *args, **kwargs):
+        if isinstance(db_path, str) and "mode=ro" in db_path and "old/" in db_path:
             raise sqlite3.OperationalError("attempt to write a readonly database")
-        return original_connect(uri, *args, **kwargs)
+        return original_connect(db_path, *args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", readonly_source_fails)
     try:
@@ -41,10 +41,10 @@ def test_non_wal_readonly_error_fails_safely(tmp_path: Path, monkeypatch):
         connection.execute("CREATE TABLE facts(text TEXT)")
     original_connect = sqlite3.connect
 
-    def readonly_fails(uri, *args, **kwargs):
-        if isinstance(uri, str) and "mode=ro" in uri:
+    def readonly_fails(db_path, *args, **kwargs):
+        if isinstance(db_path, str) and "mode=ro" in db_path:
             raise sqlite3.OperationalError("attempt to write a readonly database")
-        return original_connect(uri, *args, **kwargs)
+        return original_connect(db_path, *args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", readonly_fails)
     with pytest.raises(RuntimeError, match="no WAL fallback"):
