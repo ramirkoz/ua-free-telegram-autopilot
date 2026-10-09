@@ -336,6 +336,24 @@ def _rc111_prepare_candidate(
     return value
 
 
+
+def _is_editorial_prompt_echo(value: str) -> bool:
+    """Reject leaked instructions without rejecting ordinary Ukrainian prose."""
+    instructions = (
+        "Поверни ТІЛЬКИ готовий текст поста без службових пояснень",
+        "Поверни тільки фінальний текст",
+    )
+    for line in str(value or "").splitlines():
+        words = re.findall(r"\w+", line.casefold(), flags=re.UNICODE)
+        if len(words) < 4:
+            continue
+        for instruction in instructions:
+            tokens = set(re.findall(r"\w+", instruction.casefold(), flags=re.UNICODE))
+            if len(set(words) & tokens) >= 4 and len(set(words) & tokens) / len(tokens) >= 0.6:
+                return True
+    return False
+
+
 def validate_writer_output(
     article: Any,
     text: str,
@@ -760,6 +778,8 @@ SOURCE:
         slop_profile = _anti_slop_profile(channel)
 
         def validator(raw: str) -> None:
+            if _is_editorial_prompt_echo(raw):
+                raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
@@ -800,7 +820,7 @@ SOURCE:
 
         # Optional local LanguageTool pass. It never creates a dependency, but if it
         # is already available we accept only conservative edits and re-run every gate.
-        lt = apply_local_languagetool_detailed(final, timeout=1.2, max_changes=18, require_ready=False)
+        lt = apply_local_languagetool_detailed(final, timeout=1.2, max_changes=18, require_ready=False, source_text=_source_pack(article, 6200))
         if lt.changes and preserves_content(final, lt.text):
             candidate = prepared_text(lt.text)
             validator(candidate)
