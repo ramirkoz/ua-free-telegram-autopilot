@@ -255,11 +255,41 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
     return effective_min, effective_max, effective_max
 
 
+_UNSUPPORTED_CAUSE_RE = re.compile(
+    r"(?iu)\\b(?:через|унаслідок|внаслідок)\\s+(?:атаки|удару|обстрілу|влучання|падіння|роботи\\s+ппо|детонації)"
+)
+_UNSUPPORTED_ORIGIN_RE = re.compile(r"(?iu)\\b(?:ворож(?:ого|ої|их)|російськ(?:ого|ої|их))\\s+(?:fpv|фпв|дрон[а-яіїєґ]*|безпілотник[а-яіїєґ]*)")
+_UNSUPPORTED_QUALIFIER_RE = re.compile(r"(?iu)\\bза\\s+попередньою\\s+інформацією\\b")
+_SOURCE_CAUSAL_LINK_RE = re.compile(
+    r"(?iu)\\b(?:через|унаслідок|внаслідок|спричинив|спричинила|спричинило|завдав|завдала|вдарив|вдарила|атакував|атакувала|влучив|влучила)\\b"
+)
+
+
+def _source_grounding_night_issues(article: Any, text: str) -> tuple[str, ...]:
+    """Protect short incident bulletins from invented causality and attribution.
+
+    Avoid trying to settle the entire factual meaning by keyword matching.
+    For short alerts, specific *new* causal links must remain in source.
+    """
+    source = _source_text(article).casefold()
+    output = str(text or "")
+    if len(source) > 280 or not re.search(r"(?iu)\\b(?:вибух|дим|пожеж|удар|атак|дрон|фпв|fpv|обстріл)", source):
+        return ()
+    issues = []
+    if _UNSUPPORTED_CAUSE_RE.search(output) and not _SOURCE_CAUSAL_LINK_RE.search(source):
+        issues.append("нічний факт-контроль: джерело не підтверджує причину події")
+    if _UNSUPPORTED_ORIGIN_RE.search(output) and not re.search(r"(?iu)\\b(?:ворож|російськ|окупант)", source):
+        issues.append("нічний факт-контроль: джерело не встановлює походження дрона")
+    if _UNSUPPORTED_QUALIFIER_RE.search(output) and not re.search(r"(?iu)\\bпопередн", source):
+        issues.append("нічний факт-контроль: придумана атрибуція «за попередньою інформацією»")
+    return tuple(issues)
+
+
 def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     """Block common padding that states things the source never said."""
     source = _source_text(article).casefold()
     text = str(value or "")
-    issues: list[str] = []
+    issues: list[str] = list(_source_grounding_night_issues(article, text))
     for match in _ABSENCE_FILLER_RE.finditer(text):
         fragment = " ".join(match.group(0).split()).casefold()
         if fragment not in source and not any(token in source for token in ("не надан", "відсутн", "невідом")):
