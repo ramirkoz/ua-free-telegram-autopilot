@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dataclasses import dataclass
 from sqlite3 import Row
+
+
+CYRILLIC_ENTITY_GUARD_MODE = "shadow"
+_CYR_CAPS_RE = re.compile(r"(?<!\w)[А-ЯІЇЄҐ]{2,7}(?!\w)")
+_LOG = logging.getLogger("telegram_autopilot.fact_guard")
+
+
+def _cyrillic_entity_mismatches(source: str, output: str) -> tuple[str, ...]:
+    """Observe changed Cyrillic acronyms; never block publication in shadow mode."""
+    originals = set(_CYR_CAPS_RE.findall(source or ""))
+    generated = set(_CYR_CAPS_RE.findall(output or ""))
+    return tuple(sorted(generated - originals))
 
 
 class FactGuardError(ValueError):
@@ -307,10 +320,18 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     output_text = str(output or "")
 
     source_tokens = _protected_latin_tokens(source)
+    # FPV and Ukrainian ФПВ are the same factual token, not an invented model.
+    if re.search(r"(?iu)(?<!\w)фпв(?!\w)", source):
+        source_tokens.add("fpv")
     output_tokens = _protected_latin_tokens(output_text)
     invented = sorted(output_tokens - source_tokens)
     if invented:
         raise FactGuardError("AI додав назву/модель, якої немає у джерелі: " + ", ".join(invented[:8]))
+
+    if CYRILLIC_ENTITY_GUARD_MODE == "shadow":
+        mismatches = _cyrillic_entity_mismatches(source, output_text)
+        if mismatches:
+            _LOG.info("Cyrillic entity guard shadow mismatch: %s", ", ".join(mismatches[:8]))
 
     # Reader-action links are protected facts too. A canonical source footer does
     # not satisfy this contract because it forces the reader to hunt for the actual
