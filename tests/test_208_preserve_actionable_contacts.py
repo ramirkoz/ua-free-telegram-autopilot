@@ -20,7 +20,7 @@ def test_208_contact_payload_too_large_fails_closed(monkeypatch):
         ("Деталі/реєстрація", "https://example.test/" + ("x" * 690)),
     ])
     with pytest.raises(ValueError, match="не вміщуються"):
-        editorial.restore_practical_literals(article, "Короткий текст.", hard_max_chars=750)
+        editorial.restore_practical_literals(article, "Короткий текст. " * 28, hard_max_chars=750)
 
 
 def test_208_within_limit_unchanged():
