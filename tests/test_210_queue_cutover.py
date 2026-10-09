@@ -51,3 +51,11 @@ def test_2010_reset_keeps_uncertain_delivery_quarantined(tmp_path):
     store._reset_2010_queue_once()
     assert store.get_article(aid)["last_error_code"] != "QUEUE_RESET_2010"
     assert store.delivery_journal(aid)["state"] == "UNKNOWN"
+
+
+def test_2010_cutover_happens_before_runtime_can_publish():
+    from pathlib import Path
+    main = (Path(__file__).resolve().parents[1] / "telegram_autopilot" / "v2" / "main.py").read_text(encoding="utf-8")
+    assert main.index("store._reset_2010_queue_once()") < main.index("runtime = RuntimeEngine(store)")
+    # Retiring the queue must not depend on run_startup_maintenance, which RC103 overrides.
+    assert main.index("store._reset_2010_queue_once()") < main.index("store.run_startup_maintenance()")
