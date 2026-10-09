@@ -609,6 +609,9 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues: list[str] = []
     if not value:
         return ("порожній final_text",)
+    postfactum = _postfactum_security_policy(channel, article)
+    if postfactum:
+        issues.append(postfactum)
     source_policy = _source_body_policy_issues(channel, article, value)
     issues.extend(source_policy)
     if channel.mode == ChannelMode.MONITORING:
