@@ -77,3 +77,37 @@ def test_211_media_validation_failure_is_observable(monkeypatch):
     assert bundle.extracted_media_count == 1
     assert bundle.filtered_media_count == 1
     assert "RuntimeError" in bundle.media_validation_error
+
+
+def test_211_near_identical_gallery_images_are_not_published_twice(monkeypatch):
+    def probe(item, **kwargs):
+        item.width, item.height = 1200, 800
+        item.digest = item.url
+        item.perceptual_hash = "1234567890abcdef"
+        return item
+    monkeypatch.setattr(media_pipeline, "_probe_image", probe)
+    images = [
+        {"type": "media", "kind": "image", "url": f"https://cdn.example.com/photo-{i}.jpg",
+         "context": "schema article gallery", "gallery": True, "position": 0.05}
+        for i in (1, 2)
+    ]
+    result = media_pipeline.prepare_article_media(_layout(images), [],
+                                                  title="Robot prototype", article_text="Robot prototype unveiled")
+    assert len(result.body) == 1
+
+
+def test_211_perceptual_hash_survives_image_resize():
+    from PIL import Image
+    from io import BytesIO
+    im = Image.new("RGB", (90, 80))
+    for y in range(80):
+        for x in range(90):
+            im.putpixel((x, y), (x * 2, y * 3, (x + y) % 255))
+    def dump(image):
+        b = BytesIO()
+        image.save(b, format="PNG")
+        return b.getvalue()
+    first = media_pipeline._perceptual_hash(dump(im))
+    resized = media_pipeline._perceptual_hash(dump(im.resize((180, 160))))
+    assert first and resized
+    assert (int(first, 16) ^ int(resized, 16)).bit_count() <= 3
