@@ -32,8 +32,16 @@ def test_arbitrary_news_not_affected():
     assert _postfactum_security_policy(channel(), article("У громаді відкрили бібліотеку.")) == ""
 
 
-def test_other_monitoring_policy_not_affected():
-    assert _postfactum_security_policy(
+def test_all_monitoring_security_alerts_blocked_even_without_explicit_rules():
+    assert "POSTFACTUM_ONLY" in _postfactum_security_policy(
         channel("Протокольні привітання заборонено."),
         article("Олександрівський, фпв. Вибух був."),
-    ) == ""
+    )
+
+
+def test_just_old_smoke_is_not_a_confirmed_event():
+    assert "POSTFACTUM_ONLY" in _postfactum_security_policy(channel(), article("Учора помітили дим."))
+
+
+def test_no_casualties_required_for_confirmed_recap():
+    assert _postfactum_security_policy(channel(), article("За минулу добу громаду атакували дронами.")) == ""
