@@ -52,6 +52,7 @@ class PreparedMedia:
     relevance_score: float = 0.0
     gallery: bool = False
     perceptual_hash: str = ""
+    schema_verified: bool = False
 
     @property
     def filename(self) -> str:
@@ -287,7 +288,7 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.context == "schema article gallery":
+    if item.schema_verified:
         return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
@@ -335,7 +336,7 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
         score = 10.0 if item.featured else 16.0
     if item.context == "verified_article_hero" and item.featured:
         score += 30.0
-    if item.context == "schema article gallery":
+    if item.schema_verified:
         score += 20.0
     if item.caption:
         score += 10.0
@@ -446,6 +447,7 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     alt=str(block.get("alt") or "")[:500], context=str(block.get("context") or "")[:800],
                     position=max(0.0, min(1.0, position)), width=width, height=height,
                     gallery=bool(block.get("gallery")),
+                    schema_verified=bool(block.get("schema_verified")),
                 ))
     # Keep source-owned fallback images even when HTML already exposed a media
     # block (including an iframe or unrelated thumbnail). Fallback candidates
