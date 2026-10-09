@@ -612,7 +612,8 @@ def ensure_languagetool_async(callback: Callable[[str, str], None] | None = None
 
 
 def apply_local_languagetool_detailed(
-    value: str, *, timeout: float = 3.0, max_changes: int = 12, require_ready: bool = False
+    value: str, *, timeout: float = 3.0, max_changes: int = 12, require_ready: bool = False,
+    source_text: str = "",
 ) -> LanguageToolEditResult:
     """Apply conservative local LanguageTool suggestions and report the edits.
 
@@ -662,7 +663,9 @@ def apply_local_languagetool_detailed(
             break
         rule = match.get("rule") or {}
         issue_type = str(rule.get("issueType") or "").casefold()
-        if issue_type not in _ALLOWED_ISSUE_TYPES:
+        if issue_type not in {"typographical", "grammar"}:
+            continue
+        if str(rule.get("id") or "").upper().startswith("MORFOLOGIK_"):
             continue
         replacements = match.get("replacements") or []
         if not replacements:
@@ -677,6 +680,11 @@ def apply_local_languagetool_detailed(
         old = text[offset: offset + length]
         new = str(replacements[0].get("value") or "").strip()
         if not _safe_replacement(old, new):
+            continue
+        # The checker is not a factual editor: never change words or entities.
+        # In particular, Ukrainian MORFOLOGIK suggestions used to corrupt FPV,
+        # surnames and local place names after a correct AI draft.
+        if re.sub(r"[^\\wА-Яа-яІіЇїЄєҐґ]", "", old, flags=re.UNICODE) != re.sub(r"[^\\wА-Яа-яІіЇїЄєҐґ]", "", new, flags=re.UNICODE):
             continue
         edits.append((offset, offset + length, new))
 
