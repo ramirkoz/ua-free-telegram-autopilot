@@ -6,7 +6,7 @@ def _seed(store):
     stamp = now_iso()
     with store.connect() as con:
         con.execute("INSERT INTO channels(id,name,telegram_chat_id,created_at,updated_at) VALUES(1,'TEST','@test',?,?)", (stamp, stamp))
-        con.execute("INSERT INTO sources(id,channel_id,kind,name,url,enabled,priority) VALUES(1,1,'rss','Feed','https://example.com/feed',1,50))
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url,enabled,priority) VALUES(1,1,'rss','Feed','https://example.com/feed',1,50)")
 
 
 def _article(store, eid, stage, text="text"):
