@@ -110,8 +110,54 @@ def _rule_mentions(rules: str, *tokens: str) -> bool:
     return any(token.casefold() in low for token in tokens)
 
 
+_LIVE_SECURITY_ALERT_RE = re.compile(
+    r"(?iu)(?:"
+    r"\b(?:повітрян\w*\s+тривог\w*|відбій\s+тривог\w*|загроз\w*\s+(?:бпла|ракет)|"
+    r"(?:чути|чутно|чули|пролунав|пролунавши|пролунали|був|було)\s+(?:\w+\s+){0,3}вибух\w*|"
+    r"(?:бачать|видно|помітили|спостерігають)\s+(?:\w+\s+){0,3}дим\w*|"
+    r"(?:летить|рухається|курс\w*|проліт\w*)\s+(?:\w+\s+){0,3}(?:fpv|фпв|бпла|дрон\w*|ракет\w*|шахед\w*))\b"
+    r"|(?:\bвибух\s+(?:був|є)\b)"
+    r")"
+)
+_RECAP_FACT_RE = re.compile(
+    r"(?iu)\b(?:за\s+(?:минул\w+\s+добу|останні\s+24\s+годин)|"
+    r"вранці|зранку|сьогодні\s+вранці|учора|вчора|"
+    r"минулої\s+ночі|внаслідок\s+атаки|унаслідок\s+удару|"
+    r"було\s+атаковано|зазнал\w+\s+атаки|пошкоджен\w+|"
+    r"зруйнован\w+|постраждал\w+|загинул\w+|поранен\w+)\b"
+)
+_RESULT_FACT_RE = re.compile(
+    r"(?iu)\b(?:було\s+атаковано|зазнал\w+\s+атаки|"
+    r"пошкоджен\w+|зруйнован\w+|постраждал\w+|"
+    r"загинул\w+|поранен\w+|"
+    r"(?:рятувальник\w+|ДСНС)\s+(?:ліквідувал\w+|завершил\w+)|"
+    r"ліквідован\w+\s+пожеж\w+)\b"
+)
+
+
+def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
+    """Operator rules enable a postfactum-only security alert policy.
+
+    A timing word alone must not turn 'saw smoke yesterday' into a real event.
+    """
+    if channel.mode != ChannelMode.MONITORING:
+        return ""
+    rules = " ".join((channel.policy.selection_rules, channel.policy.rejection_rules)).casefold()
+    if not any(word in rules for word in ("постфактум", "підсумк", "за добу", "тривог", "дим", "вибух")):
+        return ""
+    source = " ".join((str(_v(article, "title", "")), _source_text(article))).casefold()
+    if not _LIVE_SECURITY_ALERT_RE.search(source):
+        return ""
+    if _RECAP_FACT_RE.search(source) and _RESULT_FACT_RE.search(source):
+        return ""
+    return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженого підсумку події"
+
+
 def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Apply local exclusions only when the operator explicitly configured them."""
+    postfactum = _postfactum_security_policy(channel, article)
+    if postfactum:
+        return postfactum
     rules = channel.policy.rejection_rules
     if not rules.strip():
         return ""
