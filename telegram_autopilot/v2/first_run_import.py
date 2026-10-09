@@ -329,7 +329,18 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
     marker = target / _MARKER
     target_db = target / "telegram_autopilot_v2.sqlite3"
     if marker.exists() or target_db.exists():
-        return {"imported": False, "reason": "already_initialized"}
+        # Treat an existing DB as initialized only if it actually contains
+        # imported channels; earlier failed runs left empty DBs/markers behind.
+        if target_db.exists():
+            try:
+                with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
+                    count = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
+                if count > 0:
+                    return {"imported": True, "reason": "already_initialized", "channels": count}
+            except sqlite3.Error:
+                pass
+        # Keep failed-run Data for forensic recovery; it is not import evidence.
+
 
     if str(os.environ.get("UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT") or "").strip() == "1":
         marker.write_text(
@@ -386,7 +397,19 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
         if source_data.resolve() == target.resolve():
             raise RuntimeError("Не можна імпортувати поточну Data у саму себе.")
         source_db = source_data / "telegram_autopilot_v2.sqlite3"
-        counts = _selective_import(source_db, target_db)
+        # Import V2 through the Windows-safe atomic migration path rather
+        # than the older SELECT/INSERT route which can fail on WAL readonly DBs.
+        from .migration_service import MigrationManager
+        report, backup, credentials_message = MigrationManager(target_db).import_legacy_atomic(
+            source_data, import_credentials=True, overwrite_credentials=False,
+        )
+        counts = {
+            "channels": report.channels_imported,
+            "sources": report.sources_imported,
+            "articles": report.articles_imported,
+            "published_preserved": report.published_imported,
+            "feedback": report.feedback_imported,
+        }
         try:
             credentials_state = merge_missing_credentials_from_data(source_data)
         except Exception as exc:
@@ -429,10 +452,8 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
         )
         return payload
     except Exception as exc:
-        try:
-            target_db.unlink(missing_ok=True)
-        except Exception:
-            pass
+        # Never delete an existing database on failed import. The atomic
+        # migration path has its own backup and rollback.
         messagebox.showerror("Імпорт не виконано", str(exc), parent=root)
         return {"imported": False, "reason": "error", "error": str(exc)}
     finally:
