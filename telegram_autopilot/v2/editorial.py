@@ -136,21 +136,29 @@ _RESULT_FACT_RE = re.compile(
 
 
 def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
-    """Operator rules enable a postfactum-only security alert policy.
+    """Monitoring security notices must describe confirmed past events.
 
-    A timing word alone must not turn 'saw smoke yesterday' into a real event.
+    Reject raw sound/smoke/flight alerts *before* invoking AI. Do not interpret
+    a timestamp or the word 'yesterday' as evidence of a completed event.
     """
     if channel.mode != ChannelMode.MONITORING:
         return ""
-    rules = " ".join((channel.policy.selection_rules, channel.policy.rejection_rules)).casefold()
-    if not any(word in rules for word in ("постфактум", "підсумк", "за добу", "тривог", "дим", "вибух")):
-        return ""
     source = " ".join((str(_v(article, "title", "")), _source_text(article))).casefold()
-    if not _LIVE_SECURITY_ALERT_RE.search(source):
+    security = re.search(r"(?iu)(?:вибух\w*|дим\w*|тривог\w*|відбій|дрон\w*|фпв|fpv|бпла|ракет\w*|шахед\w*|обстріл\w*|атак\w*|удар\w*)", source)
+    if not security:
         return ""
-    if _RECAP_FACT_RE.search(source) and _RESULT_FACT_RE.search(source):
+    result = _RESULT_FACT_RE.search(source)
+    # Confirmed retrospect alone suffices: casualties and damage are NOT mandatory.
+    completed = re.search(
+        r"(?iu)(?:було\s+атаковано|зазнал\w*\s+атаки|"
+        r"унаслідок\s+(?:атаки|удару)|внаслідок\s+(?:атаки|удару)|"
+        r"(?:зранку|вранці|учора|вчора|за\s+(?:минул\w+\s+добу|добу)).{0,110}"
+        r"(?:атакувал\w*|атак\w*|обстрілял\w*|завдал\w*\s+удар\w*))",
+        source,
+    )
+    if completed or result:
         return ""
-    return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженого підсумку події"
+    return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженої завершеної події"
 
 
 def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> str:
