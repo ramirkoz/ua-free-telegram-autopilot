@@ -630,9 +630,19 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
         return value
     suffix = "\n\n" + "\n".join(f"{label}: {literal}" for label, literal in missing)
     if len(value) + len(suffix) > int(hard_max_chars):
-        raise ValueError(
-            f"AI прибрав практичні контакти/URL, а відновлення перевищує ліміт {int(hard_max_chars)}"
-        )
+        # Source-owned reader-action links are more important than optional
+        # commentary. Shorten a complete sentence boundary to leave room;
+        # subsequent fact, language and length gates still validate the result.
+        room = int(hard_max_chars) - len(suffix)
+        if room < 80:
+            raise ValueError(
+                f"Практичні контакти/URL джерела не вміщуються в ліміт {int(hard_max_chars)}"
+            )
+        value = _trim_candidate_to_hard_limit(value, room, min_chars=80)
+        if len(value) + len(suffix) > int(hard_max_chars):
+            raise ValueError(
+                f"Не вдалося безпечно зберегти практичні контакти/URL в ліміті {int(hard_max_chars)}"
+            )
     return value + suffix
 
 
