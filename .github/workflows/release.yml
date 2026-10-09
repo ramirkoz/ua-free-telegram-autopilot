@@ -187,11 +187,12 @@ jobs:
                   return False, str(exc)
 
           def _first_run_setup():
-              if os.environ.get('UA_FREE_CODEX_BOOTSTRAP', '1') == '0' or _codex_present():
-                  return True
               if os.environ.get('UA_FREE_CODEX_BOOTSTRAP_ONLY', '') == '1':
                   ok, error = _bootstrap_codex()
                   os._exit(0 if ok else 2)
+              # Codex is opt-in. Never install it during ordinary Autopilot launch.
+              if os.environ.get('UA_FREE_CODEX_BOOTSTRAP', '0') != '1' or _codex_present():
+                  return True
               try:
                   import tkinter as tk
                   from tkinter import messagebox, ttk
@@ -234,8 +235,8 @@ jobs:
           Розпакуйте у нову папку та запустіть UA_FREE_Telegram_Autopilot.exe.
           V2 database: Data\telegram_autopilot_v2.sqlite3
           Логи: Data\logs\v2
-          Codex 0.156.1 НЕ роздуває базовий portable: при першому запуску він автоматично встановлюється окремо у Tools\Codex.
-          Для першого встановлення Codex потрібен інтернет; системний Python не потрібен.
+          Codex за замовчуванням вимкнений: Autopilot запускається без завантаження додаткового AI runtime.
+          Додаткове встановлення Codex можливе лише за явним UA_FREE_CODEX_BOOTSTRAP=1; для основного режиму не потрібне.
           "@ | Set-Content (Join-Path $stage 'README_V2.txt') -Encoding utf8
           New-Item -ItemType File -Force -Path (Join-Path $stage 'portable.flag') | Out-Null
 

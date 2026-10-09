@@ -8,3 +8,9 @@
 - Import, Data migration, credentials, channel settings, Content Tool and disabled Codex are unchanged.
 
 **Scope disclaimer:** This is a safety-focused editorial release, not evidence that all long-form quality or duplicate clustering issues are resolved. Live operator review is required before unattended overnight use.
+
+## Same-version 2.0.7 first-run hotfix
+
+- Fix unwanted Codex runtime installation on normal first startup. Codex remains optional and operator-disabled by default. Explicit `UA_FREE_CODEX_BOOTSTRAP=1` opt-in is required to launch installer; no network download or startup delay without opt-in.
+- Source Data, migrations, database, editorial filters, budgets and channel configuration unchanged.
+- Same 2.0.7 version is republished with new portable SHA-256; old ZIP is superseded. Live acceptance still pending.
