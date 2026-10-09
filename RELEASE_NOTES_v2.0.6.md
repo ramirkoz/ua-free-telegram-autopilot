@@ -20,3 +20,11 @@ Windows CI and portable build are engineering gates, not proof of editorial qual
 - Displays explicit NOT READY status and opens Migration when no enabled channels are loaded instead of misleading operator with Ready / 0 workers.
 - Keeps version 2.0.6 and preserves channel settings, database backup/rollback, credentials, operator-disabled Codex and Content Tool.
 - Adds readonly-WAL and negative regression tests. The packaged update is not live-accepted until the operator confirms channel counts and publication runtime.
+
+## Same-version 2.0.6 first-run import contract restoration
+
+- A zero-channel V2 DB or stale first-run marker is **not** treated as successful import.
+- Before the main window appears, complete explicit import and verify a nonempty channel table.
+- Use the existing atomic SQLite V2-to-V2 import service for initial import; retain its backup/rollback instead of destructive unlink on error.
+- Declined or cancelled import stops application startup rather than opening an empty dashboard.
+- Keep 2.0.6 release number unchanged; do not modify editorial language safety or channel policies.
