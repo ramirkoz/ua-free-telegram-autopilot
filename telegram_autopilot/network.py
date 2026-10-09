@@ -8,7 +8,7 @@ import ssl
 import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from .security import redact_url
 
@@ -153,9 +153,17 @@ def fetch_url(
             raise NetworkError("Only ports 80 and 443 are allowed.")
         host = parts.hostname.lower().rstrip(".")
         addresses = _resolve_with_timeout(resolver, host, port, timeout)
-        path = parts.path or "/"
+        # http.client encodes request targets as ASCII. URLs from web article
+        # media frequently contain Unicode (including U+2014 em dash), so
+        # percent-encode only non-ASCII characters before sending the request.
+        # Keep existing %XX escapes and reserved path/query separators intact.
+        path = quote(parts.path or "/", safe="/%:@!        path = parts.path or "/"
         if parts.query:
-            path += "?" + parts.query
+            path += "?" + parts.query'()*+,;=-._~")
+        if parts.query:
+            path += "?" + quote(parts.query, safe="/?%:@!        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query'()*+,;=-._~")
         host_header = host if port in {80, 443} else f"{host}:{port}"
         outgoing_headers = dict(request_headers)
         outgoing_headers["Host"] = host_header
