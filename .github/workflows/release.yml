@@ -405,6 +405,20 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $tag="v$env:VERSION"
+          # Same-version 2.0.6 operator hotfix: update exact assets instead of failing on existing tag.
+          if ($env:VERSION -eq "2.0.6" -and (gh release view $tag --repo "${{ github.repository }}" 2>$null)) {
+            gh release upload $tag `
+              ${{ steps.assets.outputs.portable_zip }} `
+              ${{ steps.assets.outputs.source_zip }} `
+              ${{ steps.assets.outputs.sha_file }} `
+              --repo "${{ github.repository }}" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Hotfix release asset replacement failed" }
+            gh api --method PATCH "repos/${{ github.repository }}/git/refs/tags/$tag" -f sha="${{ github.sha }}" -F force=true
+            if ($LASTEXITCODE -ne 0) { throw "Hotfix tag update failed" }
+            gh release edit $tag --repo "${{ github.repository }}" --target "${{ github.sha }}" --notes-file $env:NOTES
+            if ($LASTEXITCODE -ne 0) { throw "Hotfix release metadata update failed" }
+            exit 0
+          }
           gh release create $tag `
             ${{ steps.assets.outputs.portable_zip }} `
             ${{ steps.assets.outputs.source_zip }} `

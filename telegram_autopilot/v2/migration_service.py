@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import os
 import sqlite3
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -63,22 +64,44 @@ class MigrationManager:
 
     @staticmethod
     def _sqlite_backup(source: Path, destination: Path) -> None:
-        """Copy one SQLite database into another using SQLite locking, not rename."""
+        """SQLite backup with isolated WAL retry when source is strictly read-only."""
         source = Path(source)
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        src = sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True, timeout=30)
-        dst = sqlite3.connect(destination, timeout=30)
-        try:
-            src.execute("PRAGMA busy_timeout=30000")
-            dst.execute("PRAGMA busy_timeout=30000")
-            src.backup(dst, pages=512, sleep=0.05)
-            dst.commit()
-        finally:
+
+        def backup_from(src_path: Path, *, readonly: bool) -> None:
+            uri = f"file:{src_path.resolve().as_posix()}?mode=ro" if readonly else str(src_path)
+            src = sqlite3.connect(uri, uri=readonly, timeout=30)
             try:
-                dst.close()
+                dst = sqlite3.connect(destination, timeout=30)
+                try:
+                    src.execute("PRAGMA busy_timeout=30000")
+                    dst.execute("PRAGMA busy_timeout=30000")
+                    src.backup(dst, pages=512, sleep=0.05)
+                    dst.commit()
+                finally:
+                    dst.close()
             finally:
                 src.close()
+
+        try:
+            backup_from(source, readonly=True)
+        except sqlite3.OperationalError as exc:
+            if "readonly" not in str(exc).casefold() and "read-only" not in str(exc).casefold():
+                raise
+            if not os.access(destination.parent, os.W_OK) or (destination.exists() and not os.access(destination, os.W_OK)):
+                raise RuntimeError(f"Destination Data is not writable: {destination}") from exc
+            wal = Path(str(source) + "-wal")
+            if not wal.is_file():
+                raise RuntimeError(f"Read-only SQLite source failed (no WAL fallback): {source}: {exc}") from exc
+            with tempfile.TemporaryDirectory(prefix="autopilot-sqlite-snapshot-") as folder:
+                copy = Path(folder) / source.name
+                shutil.copy2(source, copy)
+                shutil.copy2(wal, Path(str(copy) + "-wal"))
+                try:
+                    backup_from(copy, readonly=False)
+                except sqlite3.Error as retry_exc:
+                    raise RuntimeError(f"Private WAL snapshot import failed: {retry_exc}") from retry_exc
 
     @staticmethod
     def _validate_database(path: Path) -> None:
