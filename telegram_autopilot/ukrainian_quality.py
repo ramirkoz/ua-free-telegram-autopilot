@@ -211,6 +211,7 @@ def language_quality_issues(value: str) -> tuple[str, ...]:
 
 
 _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?iu)\bнизькокачесн[а-яіїєґ]*\b"), "русизм «низькокачесні» замість «низької якості»"),
     (re.compile(r"\bгучний\s+гудіння\b", re.I), "порушене узгодження «гучний гудіння»"),
     (re.compile(r"\bтепловий\s+мап\b", re.I), "порушене узгодження «тепловий мап»"),
     (re.compile(r"\bподібний\s+теплова\s+карта\b", re.I), "порушене узгодження після виправлення heat map"),
