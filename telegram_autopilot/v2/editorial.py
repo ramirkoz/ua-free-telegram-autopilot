@@ -148,7 +148,7 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     if not security:
         return ""
     result = _RESULT_FACT_RE.search(source)
-    # Confirmed retrospect alone suffices: casualties and damage are NOT mandatory.
+    # Confirmed retrospective attack alone suffices: damage is NOT mandatory.
     completed = re.search(
         r"(?iu)(?:було\s+атаковано|зазнал\w*\s+атаки|"
         r"унаслідок\s+(?:атаки|удару)|внаслідок\s+(?:атаки|удару)|"
