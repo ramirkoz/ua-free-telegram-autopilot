@@ -310,12 +310,14 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
 
 
 _UNSUPPORTED_CAUSE_RE = re.compile(
-    r"(?iu)\\b(?:через|унаслідок|внаслідок)\\s+(?:атаки|удару|обстрілу|влучання|падіння|роботи\\s+ппо|детонації)"
+    r"(?iu)\b(?:через|унаслідок|внаслідок)\s+(?:атаки|удару|обстрілу|влучання|падіння|роботи\s+ппо|детонації)"
 )
-_UNSUPPORTED_ORIGIN_RE = re.compile(r"(?iu)\\b(?:ворож(?:ого|ої|их)|російськ(?:ого|ої|их))\\s+(?:fpv|фпв|дрон[а-яіїєґ]*|безпілотник[а-яіїєґ]*)")
-_UNSUPPORTED_QUALIFIER_RE = re.compile(r"(?iu)\\bза\\s+попередньою\\s+інформацією\\b")
+_UNSUPPORTED_ORIGIN_RE = re.compile(
+    r"(?iu)\b(?:ворож(?:ого|ої|их)|російськ(?:ого|ої|их))\s+(?:fpv|фпв|дрон[а-яіїєґ]*|безпілотник[а-яіїєґ]*)"
+)
+_UNSUPPORTED_QUALIFIER_RE = re.compile(r"(?iu)\bза\s+попередньою\s+інформацією\b")
 _SOURCE_CAUSAL_LINK_RE = re.compile(
-    r"(?iu)\\b(?:через|унаслідок|внаслідок|спричинив|спричинила|спричинило|завдав|завдала|вдарив|вдарила|атакував|атакувала|влучив|влучила)\\b"
+    r"(?iu)\b(?:через|унаслідок|внаслідок|спричинив|спричинила|спричинило|завдав|завдала|вдарив|вдарила|атакував|атакувала|влучив|влучила)\b"
 )
 
 
@@ -327,14 +329,14 @@ def _source_grounding_night_issues(article: Any, text: str) -> tuple[str, ...]:
     """
     source = _source_text(article).casefold()
     output = str(text or "")
-    if len(source) > 280 or not re.search(r"(?iu)\\b(?:вибух|дим|пожеж|удар|атак|дрон|фпв|fpv|обстріл)", source):
+    if len(source) > 280 or not re.search(r"(?iu)\b(?:вибух|дим|пожеж|удар|атак|дрон|фпв|fpv|обстріл)", source):
         return ()
     issues = []
     if _UNSUPPORTED_CAUSE_RE.search(output) and not _SOURCE_CAUSAL_LINK_RE.search(source):
         issues.append("нічний факт-контроль: джерело не підтверджує причину події")
-    if _UNSUPPORTED_ORIGIN_RE.search(output) and not re.search(r"(?iu)\\b(?:ворож|російськ|окупант)", source):
+    if _UNSUPPORTED_ORIGIN_RE.search(output) and not re.search(r"(?iu)\b(?:ворож|російськ|окупант)", source):
         issues.append("нічний факт-контроль: джерело не встановлює походження дрона")
-    if _UNSUPPORTED_QUALIFIER_RE.search(output) and not re.search(r"(?iu)\\bпопередн", source):
+    if _UNSUPPORTED_QUALIFIER_RE.search(output) and not re.search(r"(?iu)\bпопередн", source):
         issues.append("нічний факт-контроль: придумана атрибуція «за попередньою інформацією»")
     return tuple(issues)
 
