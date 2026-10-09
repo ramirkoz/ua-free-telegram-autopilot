@@ -111,49 +111,55 @@ def _enable_crash_diagnostics(logs: Path) -> None:
     threading.excepthook = thread_hook
 
 
-def _run_visible_first_run_import() -> None:
+def _run_visible_first_run_import() -> bool:
+    import sqlite3
+    """Finish a valid Data import before ever constructing the main window."""
     target = data_dir()
-    marker = target / "first_run_import.json"
     target_db = target / "telegram_autopilot_v2.sqlite3"
-    if marker.exists() or target_db.exists():
-        return
+
+    # Existing databases are not evidence of successful initialization.
+    # A failed earlier attempt can leave a zero-channel SQLite database.
+    if target_db.exists():
+        try:
+            with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
+                channels = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
+            if channels:
+                return True
+        except sqlite3.Error:
+            pass
+    if str(__import__("os").environ.get("UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT") or "") == "1":
+        # CI/headless contract may start without configured channels.
+        return True
 
     import tkinter as tk
+    from tkinter import messagebox
 
     root = tk.Tk()
-    root.title("UA FREE Telegram Autopilot V2 · запуск")
+    root.title("UA FREE Telegram Autopilot V2 · імпорт перед запуском")
     root.geometry("620x180")
     root.resizable(False, False)
     root.protocol("WM_DELETE_WINDOW", lambda: None)
-
     frame = tk.Frame(root, padx=22, pady=22)
     frame.pack(fill="both", expand=True)
-    tk.Label(frame, text="UA FREE Telegram Autopilot запускається", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-    tk.Label(
-        frame,
-        text=(
-            "Перший запуск може зайняти кілька хвилин: перевіряються попередні дані, "
-            "налаштування та AI-компоненти. Не запускайте другу копію програми."
-        ),
-        wraplength=560,
-        justify="left",
-    ).pack(anchor="w", pady=(12, 8))
-    tk.Label(frame, text="Очікую рішення щодо імпорту попередніх даних…", fg="#555").pack(anchor="w")
-
+    tk.Label(frame, text="Відновлення каналів перед запуском", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
+    tk.Label(frame, text="Поки імпорт не завершиться і канали не будуть перевірені, головне вікно не відкриється.", wraplength=560, justify="left").pack(anchor="w", pady=(12, 8))
     try:
         root.deiconify()
         root.lift()
-        root.attributes("-topmost", True)
         root.update_idletasks()
-        root.after(1200, lambda: root.attributes("-topmost", False))
-        event("app", "first-run UI visible")
-        maybe_import_legacy_data(root)
-        event("app", "first-run import stage complete")
+        outcome = maybe_import_legacy_data(root)
+        if not outcome.get("imported"):
+            event("app", "startup import incomplete", level=30, reason=str(outcome.get("reason")))
+            return False
+        with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
+            channels = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
+        if channels <= 0:
+            messagebox.showerror("Імпорт неповний", "Імпорт не відновив жодного каналу. Головне вікно не відкриється.", parent=root)
+            return False
+        event("app", "startup import verified", channels=channels)
+        return True
     finally:
-        try:
-            root.destroy()
-        except Exception:
-            pass
+        root.destroy()
 
 
 def _present_main_window(app) -> None:
@@ -175,7 +181,8 @@ def main() -> int:
     event("app", "V2 startup", database=str(v2_database_path()), version=V2_VERSION)
     try:
         with InstanceLock():
-            _run_visible_first_run_import()
+            if not _run_visible_first_run_import():
+                return 0
 
             store = HardenedV2Store(v2_database_path())
             try:
