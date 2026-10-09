@@ -861,6 +861,8 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         slop_profile = _anti_slop_profile(channel)
 
         def validator(raw: str) -> None:
+            if _is_editorial_prompt_echo(raw):
+                raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
