@@ -264,7 +264,12 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
     )
     allowed: set[str] = set()
     for match in _URL_RE.finditer(source):
-        context = _local_url_context(source, match.start(), match.end(), radius=100).casefold()
+        context = source[max(0, match.start() - 130):match.start()].casefold()
+        # Multiple different URLs may sit on the same line. A registration
+        # prompt must not make a later unrelated "read more" URL actionable.
+        for separator in ("детальніше", "читати", "джерело", "докладніше"):
+            if separator in context:
+                context = context.rsplit(separator, 1)[-1]
         if any(cue in context for cue in form_cues):
             allowed.add(_url_identity(match.group(0)))
     value = str(text or "")
