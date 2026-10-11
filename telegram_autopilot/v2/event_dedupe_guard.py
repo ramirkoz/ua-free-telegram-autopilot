@@ -506,8 +506,8 @@ def event_fingerprint_same_event(
     if (
         not commercial_profile
         and numeric_pairs
-        and len(salient_shared) >= 4
-        and len(shared) >= 5
+        and len(salient_shared) >= 3
+        and len(shared) >= 4
         and "день жалоби" in stats["left"]
         and "день жалоби" in stats["right"]
     ):
