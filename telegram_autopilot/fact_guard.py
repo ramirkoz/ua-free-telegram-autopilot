@@ -236,6 +236,16 @@ def _explicit_registration_context(value: str) -> bool:
     ))
 
 
+def _action_url_context(source: str, start: int) -> str:
+    """Evidence preceding this URL only; never borrow cues from later links."""
+    prefix = source[max(0, start - 220):start]
+    for separator in ("детальніше", "читати", "джерело", "докладніше"):
+        matches = list(re.finditer(re.escape(separator), prefix, flags=re.I))
+        if matches:
+            prefix = prefix[matches[-1].end():]
+    return prefix.casefold()
+
+
 def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=()) -> list[str]:
     """Return only reader-action URLs, excluding plain attribution/article links."""
     text = str(source or "")
@@ -248,7 +258,7 @@ def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=
             continue
         if _url_identity(url) in excluded or _is_generic_telegram_reference(url):
             continue
-        context = _local_url_context(text, match.start(), match.end()).casefold()
+        context = _action_url_context(text, match.start())
         attribution = any(cue in context for cue in _ATTRIBUTION_LINK_CUES)
         if name and name in context and any(cue in context for cue in ("інформує", "повідомляє", "пише", "детальніше")):
             attribution = True
@@ -284,12 +294,7 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         url = match.group(0)
         if _is_generic_telegram_reference(url) or _url_identity(url) in article_non_actionable_urls(article):
             continue
-        context = _local_url_context(source, match.start(), match.end()).casefold()
-        # Multiple different URLs may sit on the same line. A registration
-        # prompt must not make a later unrelated "read more" URL actionable.
-        for separator in ("детальніше", "читати", "джерело", "докладніше"):
-            if separator in context:
-                context = context.rsplit(separator, 1)[-1]
+        context = _action_url_context(source, match.start())
         if _explicit_registration_context(context):
             allowed.add(_url_identity(url))
     value = str(text or "")
