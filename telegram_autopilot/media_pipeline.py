@@ -283,7 +283,15 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         item, title=title, article_text=article_text
     )
     if item.featured:
+        # An advertised/recommended site-wide image can be incorrectly labeled
+        # verified_article_hero by upstream extraction. Structural position is
+        # not independent semantic evidence. Always enforce hard-noise checks
+        # and reject explicitly unrelated hero captions, even for featured.
+        if _hard_reject(item):
+            return False
         if item.context == "verified_article_hero":
+            if token_count >= 3 and title_overlap == 0 and article_overlap == 0:
+                return False
             return True
         if token_count == 0:
             return True
