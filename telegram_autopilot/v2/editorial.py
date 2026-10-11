@@ -161,8 +161,54 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженої завершеної події"
 
 
+_MONITORING_LIVE_NOISE = re.compile(
+    r"(?iu)(?:\\b(?:каби|кабів|каб|бпла|шахед(?:и|ів)?|фпв|fpv|"
+    r"пуски|запуски|приліт|прильот|вибух(?:и|ів)?|гучно|"
+    r"знову\\s+гучно|повітряна\\s+тривога|відбій|"
+    r"летить|рухається|дим\\b|задимлення)\\b|"
+    r"\\b(?:молнія|молния)\\b)"
+)
+_MONITORING_SHORT_NOISE = re.compile(
+    r"(?iu)^(?:ще|знову|гучно!?|каби?|кабів|молнія|молния|"
+    r"вибух(?:и)?|дим|приліт|прильот|бпла|пуски|"
+    r"запоріжжя|пожежа(?:\\s+в\\s+запоріжжі)?)[!?.\\s]*$"
+)
+_EDITORIAL_META_LEAK = re.compile(
+    r"(?imu)^\\s*(?:\\*\\*)?(?:готовий\\s+текст\\s+поста|"
+    r"джерело\\s+додасть\\s+footer|не\\s+публікувати\\b|"
+    r"повідомлення\\s+не\\s+підходить\\s+для\\s+публікації|"
+    r"нового\\s+повідомлення\\s+для\\s+публікації\\s+немає|"
+    r"редакторське\\s+рішення\\s*:)"
+)
+
+
+def _monitoring_safety_exclusion(article: Any) -> str:
+    """Fail closed on Telegram live-event noise and source text without a fact."""
+    raw = str(_v(article, "raw_text", "") or "").strip()
+    # The actual source must carry context; titles fabricated by a previous
+    # model or a copied source URL are not evidence of the event.
+    clean = re.sub(r"https?://\\S+", " ", raw)
+    clean = re.sub(r"[^\\w\\s]", " ", clean, flags=re.UNICODE).strip()
+    words = re.findall(r"\\b[\\w-]+\\b", clean, flags=re.UNICODE)
+    if len(words) < 4 or _MONITORING_SHORT_NOISE.fullmatch(raw.casefold()):
+        return "MONITORING_CONTEXT_MISSING: short/emoji-only/no fact"
+    # Operator forbids live combat alerts; do not infer outcomes from them.
+    # Official finalized service/recovery decisions are evaluated elsewhere.
+    low = raw.casefold()
+    if _MONITORING_LIVE_NOISE.search(low) and re.search(
+        r"(?iu)\\b(?:попередньо|щойно|просто\\s+зараз|прямо\\s+зараз|"
+        r"триває|у\\s+напрямку|в\\s+бік|курсом|на\\s+місці|"
+        r"влучив|летить|вибухи|гучно|пуски|знову)\\b", low
+    ):
+        return "MONITORING_LIVE_ATTACK_NOISE: real-time security update"
+    return ""
+
+
 def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Apply local exclusions only when the operator explicitly configured them."""
+    immediate = _monitoring_safety_exclusion(article)
+    if immediate:
+        return immediate
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         return postfactum
@@ -657,6 +703,12 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues: list[str] = []
     if not value:
         return ("порожній final_text",)
+    if _EDITORIAL_META_LEAK.search(value):
+        issues.append("EDITORIAL_META_LEAK: service/prompt/decline text")
+    if channel.mode == ChannelMode.MONITORING:
+        context_issue = _monitoring_safety_exclusion(article)
+        if context_issue:
+            issues.append(context_issue)
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
@@ -710,13 +762,13 @@ class EditorialEngine:
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:\n{inclusion or 'Не задано: inclusion виконаний.'}\n\nEXCLUSION RULES:\n{exclusion or 'Не задано.'}
-Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; сумнів -> publish.
+Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; сумнів або брак контексту -> reject.
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"included":true,"excluded":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
-            return bool(obj.get("included", True)), bool(obj.get("excluded", False)), _clean(obj.get("reason"), 500)
+            return bool(obj.get("included", False)), bool(obj.get("excluded", True)), _clean(obj.get("reason"), 500)
 
         result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22, purpose="monitoring_selector")
         included, excluded, reason = parse(result.text)
