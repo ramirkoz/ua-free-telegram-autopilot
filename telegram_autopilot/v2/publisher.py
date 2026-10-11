@@ -6,7 +6,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from ..secrets_store import load_secrets
-from ..fact_guard import strip_non_actionable_article_urls
+from ..fact_guard import strip_non_actionable_article_urls, strip_monitoring_nonform_urls
 from ..facebook import FacebookError, publish_page_link
 from ..telegram import (
     TelegramError,
@@ -471,6 +471,7 @@ class Publisher:
                 )
         if channel.mode == ChannelMode.MONITORING:
             sanitized = strip_non_actionable_article_urls(article, current_text)
+            sanitized = strip_monitoring_nonform_urls(article, sanitized)
             if sanitized != current_text:
                 current_text = sanitized
                 self.store.update_article(article_id, final_text=current_text)
