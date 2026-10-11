@@ -412,8 +412,8 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $tag="v$env:VERSION"
-          # Same-version 2.0.6 operator hotfix: update exact assets instead of failing on existing tag.
-          if ($env:VERSION -eq "2.0.6" -and (gh release view $tag --repo "${{ github.repository }}" 2>$null)) {
+          # Same-version operator hotfix: replace exact assets for any existing tag.
+          if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
             gh release upload $tag `
               ${{ steps.assets.outputs.portable_zip }} `
               ${{ steps.assets.outputs.source_zip }} `
