@@ -201,8 +201,20 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return "MONITORING_CONTEXT_MISSING"
     # Unresolved active threats must not become normal news posts.
     # Official confirmed end-of-event notices remain eligible separately.
-    if _LIVE_THREAT_RE.search(clean) and not _RESULT_FACT_RE.search(clean):
+    if _LIVE_THREAT_RE.search(clean):
         return "MONITORING_LIVE_ALERT"
+    # Even with a casualty/damage figure, an unfolding rescue or new strike
+    # is not a settled community notice. Wait for a coherent official recap.
+    if (
+        re.search(r"(?iu)\b(?:атак\w*|удар\w*|обстріл\w*|вибух\w*|завал\w*|прильот\w*|дрон\w*|каб\w*)\b", clean)
+        and re.search(r"(?iu)(?:щойно|тільки\s+що|прямо\s+зараз|"
+                      r"рятувальн\w*\s+операці\w*\s+трива\w*|"
+                      r"(?:рятувальник\w*|служб\w*)\s+продовж\w*|"
+                      r"під\s+завал\w*\s+шука\w*|"
+                      r"(?:наслідки|інформац\w*)\s+уточню\w*|"
+                      r"на\s+місці\s+працю\w*)", clean)
+    ):
+        return "MONITORING_UNSETTLED_EVENT"
     if re.search(r"(?iu)\bмолні(?:я|ї)\b", clean):
         return "MONITORING_CONTEXT_MISSING"
     # Catch abbreviated live alerts such as "Вибухи у Запоріжжі", which
