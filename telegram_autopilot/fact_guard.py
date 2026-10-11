@@ -231,7 +231,7 @@ def _is_generic_telegram_reference(url: str) -> bool:
 def _explicit_registration_context(value: str) -> bool:
     return bool(re.search(
         r"(?iu)(?:реєстрац|зареєстр|заповн.{0,20}(?:форм|анкет)|"
-        r"(?:подати|подач).{0,20}(?:заяв|анкет)|registration|sign\\s*up|apply\\s+here)",
+        r"(?:подати|подач).{0,20}(?:заяв|анкет)|registration|sign\s*up|apply\s+here)",
         value,
     ))
 
@@ -302,7 +302,7 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         last = match.end()
     out.append(value[last:])
     cleaned = "".join(out)
-    cleaned = re.sub(r"(?m)^\s*(?:детальніше|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
