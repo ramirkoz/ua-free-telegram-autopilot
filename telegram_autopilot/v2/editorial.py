@@ -710,13 +710,13 @@ class EditorialEngine:
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:\n{inclusion or 'Не задано: inclusion виконаний.'}\n\nEXCLUSION RULES:\n{exclusion or 'Не задано.'}
-Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; сумнів -> publish.
+Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; якщо бракує контексту або фактів -> reject; сумнів -> reject. Не доповнюй невідомі факти здогадками.
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"included":true,"excluded":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
-            return bool(obj.get("included", True)), bool(obj.get("excluded", False)), _clean(obj.get("reason"), 500)
+            return bool(obj.get("included", False)), bool(obj.get("excluded", True)), _clean(obj.get("reason"), 500)
 
         result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22, purpose="monitoring_selector")
         included, excluded, reason = parse(result.text)
