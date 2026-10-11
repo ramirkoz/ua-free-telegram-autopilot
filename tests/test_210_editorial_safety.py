@@ -25,7 +25,7 @@ def article(source, title=""):
 ])
 def test_monitoring_context_never_invented(raw):
     code = hard_editorial_reject(monitor(), article(raw), "Офіційне повідомлення про відновлення послуг")
-    assert code in {"MONITORING_CONTEXT_MISSING", "MONITORING_LIVE_ALERT", "POSTFACTUM_ONLY"}
+    assert code in {"MONITORING_CONTEXT_MISSING", "MONITORING_LIVE_ALERT"} or code.startswith("POSTFACTUM_ONLY")
     assert deterministic_monitoring_exclusion(monitor(), article(raw))
 
 
