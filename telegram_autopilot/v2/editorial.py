@@ -203,6 +203,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     # Official confirmed end-of-event notices remain eligible separately.
     if _LIVE_THREAT_RE.search(clean) and not _RESULT_FACT_RE.search(clean):
         return "MONITORING_LIVE_ALERT"
+    if re.search(r"(?iu)\bмолні(?:я|ї)\b", clean):
+        return "MONITORING_CONTEXT_MISSING"
+    # Catch abbreviated live alerts such as "Вибухи у Запоріжжі", which
+    # have no actionable verified outcome even if the final text invents one.
+    postfactum = _postfactum_security_policy(channel, article)
+    if postfactum:
+        return "MONITORING_LIVE_ALERT"
     return ""
 
 
