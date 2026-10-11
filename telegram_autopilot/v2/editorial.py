@@ -165,23 +165,23 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
 # immediately before publication. The body is never allowed to supply missing
 # facts absent from the source itself.
 _EDITORIAL_META_LEAK_RE = re.compile(
-    r"(?iu)(?:\\b(?:готовий\\s+текст\\s+(?:поста|публікації)|джерело\\s+додасть\\s+footer|"
-    r"не\\s+публікувати\\b|не\\s+підходить\\s+для\\s+публікації|"
-    r"немає\\s+нового\\s+повідомлення\\s+для\\s+публікації|"
-    r"за\\s+наданим\\s+контекстом|ось\\s+(?:готовий|переписаний)\\s+(?:текст|пост))"
-    r"|\\b(?:as\\s+an\\s+ai|i\\s+cannot\\s+comply)\\b)"
+    r"(?iu)(?:\b(?:готовий\s+текст\s+(?:поста|публікації)|джерело\s+додасть\s+footer|"
+    r"не\s+публікувати\b|не\s+підходить\s+для\s+публікації|"
+    r"немає\s+нового\s+повідомлення\s+для\s+публікації|"
+    r"за\s+наданим\s+контекстом|ось\s+(?:готовий|переписаний)\s+(?:текст|пост))"
+    r"|\b(?:as\s+an\s+ai|i\s+cannot\s+comply)\b)"
 )
 _BARE_ALERT_RE = re.compile(
-    r"(?iu)(?:^|\\s)(?:гучно[!. ]*|знову[!. ]*|ще[!. ]*|каби[!. ]*|"
-    r"молні(?:я|ї)[!. ]*|пуски\\s+каб\\w*[!. ]*|"
-    r"вибух\\w*[!. ]*|дим[!. ]*|тривог\\w*[!. ]*)$"
+    r"(?iu)(?:^|\s)(?:гучно[!. ]*|знову[!. ]*|ще[!. ]*|каби[!. ]*|"
+    r"молні(?:я|ї)[!. ]*|пуски\s+каб\w*[!. ]*|"
+    r"вибух\w*[!. ]*|дим[!. ]*|тривог\w*[!. ]*)$"
 )
 _LIVE_THREAT_RE = re.compile(
-    r"(?iu)\\b(?:пуски\\s+(?:каб\\w*|ракет\\w*)|каб\\w*\\s+(?:в\\s+бік|у\\s+напрямку)|"
-    r"бпла\\s+(?:летить|рухається)|(?:летить|рухається)\\s+(?:бпла|ракета|шахед)|"
-    r"(?:(?:знову|ще)\\s+)?гучно[!. ]*|"
-    r"(?:чути|чутно|пролунав|пролунали)\\s+вибух\\w*|"
-    r"повітрян\\w*\\s+тривог\\w*|відбій\\s+тривог\\w*)\\b"
+    r"(?iu)\b(?:пуски\s+(?:каб\w*|ракет\w*)|каб\w*\s+(?:в\s+бік|у\s+напрямку)|"
+    r"бпла\s+(?:летить|рухається)|(?:летить|рухається)\s+(?:бпла|ракета|шахед)|"
+    r"(?:(?:знову|ще)\s+)?гучно[!. ]*|"
+    r"(?:чути|чутно|пролунав|пролунали)\s+вибух\w*|"
+    r"повітрян\w*\s+тривог\w*|відбій\s+тривог\w*)\b"
 )
 
 
@@ -196,7 +196,7 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if channel.mode != ChannelMode.MONITORING:
         return ""
     source = _source_text(article).strip()
-    clean = re.sub(r"https?://\\S+", "", source).strip(" .!?—–:;\\n\\t")
+    clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
         return "MONITORING_CONTEXT_MISSING"
     # Unresolved active threats must not become normal news posts.
