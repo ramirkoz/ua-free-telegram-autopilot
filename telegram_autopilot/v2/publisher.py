@@ -517,7 +517,21 @@ class Publisher:
             source_urls=source_urls,
         )
 
-        bundle = build_publication_media_bundle(channel, article)
+        # An image reused on unrelated pages of one website is not reliable
+        # article evidence. Exclude it and continue seeking story-owned art.
+        recurring = (
+            self.store.recurrent_web_media_urls(article_id)
+            if channel.mode == ChannelMode.EDITORIAL else set()
+        )
+        if recurring:
+            event(
+                "media", "repeated site-wide media excluded",
+                level=30, channel_id=channel_id, article_id=article_id,
+                repeated_count=len(recurring),
+            )
+            bundle = build_publication_media_bundle(channel, article, excluded_urls=recurring)
+        else:
+            bundle = build_publication_media_bundle(channel, article)
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
