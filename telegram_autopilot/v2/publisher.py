@@ -479,9 +479,21 @@ class Publisher:
                     "publish", "removed non-actionable source/media URL from body",
                     channel_id=channel_id, article_id=article_id,
                 )
-        # Local import avoids publisher <-> semantic/editorial module cycles while
-        # keeping the current channel rules authoritative at the last boundary.
-        from .editorial import prepublish_quality_issues
+        # Non-retryable hard stop. A model refusal, a one-word caption or
+        # an active threat must never become a public post after an AI retry.
+        from .editorial import hard_editorial_reject, prepublish_quality_issues
+        critical = hard_editorial_reject(channel, article, current_text)
+        if critical:
+            self.store.block_article(
+                article_id, blocked_by=BlockedBy.QUALITY, error_code=critical,
+                detail="2.1.0 editorial hard stop: " + critical,
+                retry_seconds=None,
+            )
+            event(
+                "publish", "editorial hard stop", level=30, channel_id=channel_id,
+                article_id=article_id, reason=critical,
+            )
+            return critical
         qa_issues = prepublish_quality_issues(channel, article, current_text)
         if qa_issues:
             detail = "; ".join(qa_issues[:6])
