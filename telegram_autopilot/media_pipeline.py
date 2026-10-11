@@ -283,6 +283,10 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         item, title=title, article_text=article_text
     )
     if item.featured:
+        # OG metadata is only a hint, not authoritative story media. A site-wide
+        # promotional JPG can be present on many unrelated articles.
+        if item.context == "open_graph_hint":
+            return title_overlap >= 1 or article_overlap >= 3
         if item.context == "verified_article_hero":
             return True
         if token_count == 0:
@@ -415,9 +419,10 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                 kind, url = parsed
                 featured = PreparedMedia(
                     0, kind, url, alt=str(featured_meta.get("alt") or "")[:500], featured=True,
-                    context="verified_article_hero" if str(featured_meta.get("provenance") or "") in {
-                        "jsonld_article_image", "page_hero", "verified_og", "verified_video_poster"
-                    } else "",
+                    context=("open_graph_hint" if str(featured_meta.get("provenance") or "") == "verified_og"
+                        else "verified_article_hero" if str(featured_meta.get("provenance") or "") in {
+                            "jsonld_article_image", "page_hero", "verified_video_poster"
+                        } else ""),
                 )
         if featured_video_raw:
             parsed_video = valid_public_media(featured_video_raw)
@@ -476,6 +481,7 @@ def prepare_article_media(
     title: str = "",
     article_text: str = "",
     marketing_context: bool = False,
+    excluded_urls: set[str] | None = None,
 ) -> PreparedArticleMedia:
     """Validate and rank source media. Media is mandatory at publication time.
 
@@ -484,6 +490,9 @@ def prepare_article_media(
     or logo/avatar safety rules.
     """
     featured, body = _layout_items(layout_json, fallback_urls)
+    excluded_identities = {_media_identity(url) for url in (excluded_urls or set())}
+    if featured and _media_identity(featured.url) in excluded_identities:
+        featured = None
     if featured and featured.kind == "image":
         featured.classification = _classify(featured)
         featured = _probe_image(featured, marketing_context=marketing_context)
@@ -518,7 +527,7 @@ def prepare_article_media(
         seen_identities.add(_media_identity(featured.url))
     for item in body:
         identity = _media_identity(item.url)
-        if identity in seen_identities or _hard_reject(item, marketing_context=marketing_context):
+        if identity in excluded_identities or identity in seen_identities or _hard_reject(item, marketing_context=marketing_context):
             continue
         item.classification = _classify(item)
         if item.kind == "image":
