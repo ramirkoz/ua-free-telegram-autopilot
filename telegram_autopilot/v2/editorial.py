@@ -796,7 +796,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
-        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Перевір лише відповідність SOURCE політиці каналу. Не оцінюй broad appeal або wow.
+        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
@@ -887,7 +887,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return False, "below_sold_value", max(score, broad_score)
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
-        prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
+        prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true для старих ігрових портів, одиничних експериментів, нішевих хобі та саморобок без доведеного широкого результату; не прирівнюй технічну новизну до значущості.
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"reason":"коротко"}}"""
 
@@ -905,7 +905,9 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         weights = {"novelty": .14, "consequence_or_insight": .19, "mechanism": .14, "reader_payoff": .19, "retellability": .15, "concrete_stakes": .09, "why_now": .10}
         score = int(round(sum(int(data.get(key, 0) or 0) * weight for key, weight in weights.items())))
         novelty = int(data.get("novelty", 0)); insight = int(data.get("consequence_or_insight", 0)); mechanism = int(data.get("mechanism", 0)); payoff = int(data.get("reader_payoff", 0)); retell = int(data.get("retellability", 0)); stakes = int(data.get("concrete_stakes", 0)); why_now = int(data.get("why_now", 0)); curiosity = bool(data.get("curiosity_only", False))
-        standard = not (curiosity and insight < 55 and payoff < 60) and score >= t["standard_score"] and payoff >= t["standard_payoff"] and retell >= t["standard_retellability"] and max(insight, mechanism, stakes) >= t["standard_signal"] and not (why_now < t["standard_why_now"] and novelty < t["standard_novelty_exception"])
+        if curiosity and not (insight >= 80 and payoff >= 80 and novelty >= 80):
+            return False, "niche_curiosity_only", score
+        standard = score >= t["standard_score"] and payoff >= t["standard_payoff"] and retell >= t["standard_retellability"] and max(insight, mechanism, stakes) >= t["standard_signal"] and not (why_now < t["standard_why_now"] and novelty < t["standard_novelty_exception"])
         if standard: return True, "standard", score
         if fit >= t["mechanism_lane_fit"] and score >= t["mechanism_lane_score"] and mechanism >= t["mechanism_lane_mechanism"] and payoff >= t["mechanism_lane_payoff"] and retell >= t["mechanism_lane_retellability"]: return True, "policy_fit_mechanism_lane", score
         if fit >= t["insight_lane_fit"] and score >= t["insight_lane_score"] and insight >= t["insight_lane_insight"] and payoff >= t["insight_lane_payoff"] and retell >= t["insight_lane_retellability"]: return True, "policy_fit_insight_lane", score
@@ -944,7 +946,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         )
         named_source_style = source_body_instruction(channel, article)
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
-СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий пост — 2–4 абзаци. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
+СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
