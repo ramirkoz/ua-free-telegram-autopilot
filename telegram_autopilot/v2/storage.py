@@ -2345,6 +2345,26 @@ class V2Store:
             return False,f"ALREADY_PUBLISHED:{int(published['id'])}"
         return True,"OK"
 
+    def reject_editorial_article(self, article_id: int, reason: str) -> None:
+        """Permanently reject a final-gate policy violation.
+
+        Unlike block_article(), this is not retried: a refused or fabricated
+        source must not be rephrased by another model and sent to Telegram.
+        """
+        detail = str(reason)[:2000]
+        self.update_article(
+            article_id, stage=str(Stage.ARCHIVED), decision=str(Decision.REJECT),
+            blocked_by=str(BlockedBy.QUALITY), reject_reason=detail,
+            status_detail=detail, last_error_code="EDITORIAL_HARD_REJECT",
+            last_error_detail=detail, next_retry_at="",
+        )
+        with self.connect() as con:
+            con.execute(
+                "UPDATE jobs SET state='DONE',lease_owner='',lease_until='',"
+                "error_code='',error_detail='',updated_at=? WHERE article_id=?",
+                (now_iso(), int(article_id)),
+            )
+
     def mark_duplicate(self, article_id:int, duplicate_of:int, reason:str) -> None:
         detail=str(reason)[:2000]
         self.update_article(article_id,stage=str(Stage.DEDUPED),decision=str(Decision.DUPLICATE),blocked_by=str(BlockedBy.NONE),duplicate_of=int(duplicate_of),reject_reason=detail,status_detail=detail,last_error_code="",last_error_detail="",next_retry_at="")
