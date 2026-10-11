@@ -209,7 +209,7 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     # have no actionable verified outcome even if the final text invents one.
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
-        return "MONITORING_LIVE_ALERT"
+        return postfactum
     return ""
 
 
