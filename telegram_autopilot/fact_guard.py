@@ -214,6 +214,38 @@ def article_non_actionable_urls(article) -> set[str]:
     return result
 
 
+def _is_generic_telegram_reference(url: str) -> bool:
+    """A Telegram channel/post is an attribution link, not an action."""
+    try:
+        parts = urlsplit(url)
+        if (parts.hostname or "").casefold() not in {"t.me", "telegram.me", "www.t.me"}:
+            return False
+        path = parts.path.strip("/")
+        # Only explicit bot launch links can be reader actions, and only
+        # when the source text itself asks the reader to register via the bot.
+        return not (path.casefold().endswith("bot") and "start=" in parts.query.casefold())
+    except ValueError:
+        return True
+
+
+def _explicit_registration_context(value: str) -> bool:
+    return bool(re.search(
+        r"(?iu)(?:реєстрац|зареєстр|заповн.{0,20}(?:форм|анкет)|"
+        r"(?:подати|подач).{0,20}(?:заяв|анкет)|registration|sign\s*up|apply\s+here)",
+        value,
+    ))
+
+
+def _action_url_context(source: str, start: int) -> str:
+    """Evidence preceding this URL only; never borrow cues from later links."""
+    prefix = source[max(0, start - 220):start]
+    for separator in ("детальніше", "читати", "джерело", "докладніше"):
+        matches = list(re.finditer(re.escape(separator), prefix, flags=re.I))
+        if matches:
+            prefix = prefix[matches[-1].end():]
+    return prefix.casefold()
+
+
 def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=()) -> list[str]:
     """Return only reader-action URLs, excluding plain attribution/article links."""
     text = str(source or "")
@@ -224,15 +256,15 @@ def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=
         url = match.group(0).rstrip(".,;:!?")
         if not url:
             continue
-        if _url_identity(url) in excluded:
+        if _url_identity(url) in excluded or _is_generic_telegram_reference(url):
             continue
-        context = _local_url_context(text, match.start(), match.end()).casefold()
+        context = _action_url_context(text, match.start())
         attribution = any(cue in context for cue in _ATTRIBUTION_LINK_CUES)
         if name and name in context and any(cue in context for cue in ("інформує", "повідомляє", "пише", "детальніше")):
             attribution = True
         if attribution:
             continue
-        if not any(cue in context for cue in _ACTIONABLE_LINK_CUES):
+        if not _explicit_registration_context(context):
             continue
         if url not in result:
             result.append(url)
@@ -257,21 +289,14 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
     insert that URL into the text.
     """
     source = _row_text(article, "raw_text")
-    form_cues = (
-        "реєстрац", "зареєстр", "анкет", "форма", "форму",
-        "заповн", "заявк", "подати", "registration", "sign up",
-        "signup", "application form", "apply here",
-    )
     allowed: set[str] = set()
     for match in _URL_RE.finditer(source):
-        context = source[max(0, match.start() - 130):match.start()].casefold()
-        # Multiple different URLs may sit on the same line. A registration
-        # prompt must not make a later unrelated "read more" URL actionable.
-        for separator in ("детальніше", "читати", "джерело", "докладніше"):
-            if separator in context:
-                context = context.rsplit(separator, 1)[-1]
-        if any(cue in context for cue in form_cues):
-            allowed.add(_url_identity(match.group(0)))
+        url = match.group(0)
+        if _is_generic_telegram_reference(url) or _url_identity(url) in article_non_actionable_urls(article):
+            continue
+        context = _action_url_context(source, match.start())
+        if _explicit_registration_context(context):
+            allowed.add(_url_identity(url))
     value = str(text or "")
     out: list[str] = []
     last = 0
@@ -282,7 +307,7 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         last = match.end()
     out.append(value[last:])
     cleaned = "".join(out)
-    cleaned = re.sub(r"(?m)^\s*(?:детальніше|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
