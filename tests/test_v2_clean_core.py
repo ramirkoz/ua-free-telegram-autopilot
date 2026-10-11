@@ -185,7 +185,7 @@ def test_monitoring_never_fail_opens_on_ai_outage(tmp_path: Path):
     seed_source(store, 3, 3)
     aid = add_article(
         store, 3, 3, "1", title="Рішення громади",
-        url="https://t.me/source/1", body="Офіційне рішення",
+        url="https://t.me/source/1", body="Офіційне рішення громади про порядок надання соціальних послуг для ВПО.",
     )
 
     class DeadGateway:

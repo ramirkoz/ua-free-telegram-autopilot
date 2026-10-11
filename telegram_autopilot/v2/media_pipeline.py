@@ -145,7 +145,10 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
     )
 
 
-def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str, Any] | Any) -> MediaBundle:
+def build_publication_media_bundle(
+    channel: ChannelConfig, article: Mapping[str, Any] | Any, *,
+    excluded_urls: set[str] | None = None,
+) -> MediaBundle:
     """Build the validated publication media set.
 
     RC112 removes the historical EDITORIAL single-media truncation. A validated
@@ -172,8 +175,11 @@ def build_publication_media_bundle(channel: ChannelConfig, article: Mapping[str,
             str(_v(article, "article_layout_json", "{}") or "{}"),
             raw.encoded_items,
             title=str(_v(article, "title", "") or ""),
-            article_text=(str(_v(article, "raw_text", "") or "") + "\n" + str(_v(article, "final_text", "") or ""))[:12000],
+            # Relevance evidence must be source-owned. AI-written final text
+            # cannot justify an unrelated source image by mentioning its subject.
+            article_text=str(_v(article, "raw_text", "") or "")[:12000],
             marketing_context=marketing_context,
+            excluded_urls=excluded_urls,
         )
         video_link = str(getattr(prepared, "video_link", "") or "")
 

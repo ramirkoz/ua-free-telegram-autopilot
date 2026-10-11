@@ -249,6 +249,44 @@ _ORPHAN_SOURCE_LABEL_RE = re.compile(
 )
 
 
+def strip_monitoring_nonform_urls(article, text: str) -> str:
+    """Monitoring body links: only verified source-owned forms/registration.
+
+    Source/article attribution remains a separate Telegram footer. The presence
+    of a general 'details' or 'information' link is NOT operator permission to
+    insert that URL into the text.
+    """
+    source = _row_text(article, "raw_text")
+    form_cues = (
+        "реєстрац", "зареєстр", "анкет", "форма", "форму",
+        "заповн", "заявк", "подати", "registration", "sign up",
+        "signup", "application form", "apply here",
+    )
+    allowed: set[str] = set()
+    for match in _URL_RE.finditer(source):
+        context = source[max(0, match.start() - 130):match.start()].casefold()
+        # Multiple different URLs may sit on the same line. A registration
+        # prompt must not make a later unrelated "read more" URL actionable.
+        for separator in ("детальніше", "читати", "джерело", "докладніше"):
+            if separator in context:
+                context = context.rsplit(separator, 1)[-1]
+        if any(cue in context for cue in form_cues):
+            allowed.add(_url_identity(match.group(0)))
+    value = str(text or "")
+    out: list[str] = []
+    last = 0
+    for match in _URL_RE.finditer(value):
+        out.append(value[last:match.start()])
+        if _url_identity(match.group(0)) in allowed:
+            out.append(match.group(0))
+        last = match.end()
+    out.append(value[last:])
+    cleaned = "".join(out)
+    cleaned = re.sub(r"(?m)^\s*(?:детальніше|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
 def strip_non_actionable_article_urls(article, text: str) -> str:
     """Remove source/canonical/already-attached-media URLs from body text.
 

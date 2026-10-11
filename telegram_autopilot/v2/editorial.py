@@ -161,8 +161,84 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженої завершеної події"
 
 
+# 2.1.0: deterministic stop conditions are checked before AI selection AND
+# immediately before publication. The body is never allowed to supply missing
+# facts absent from the source itself.
+_EDITORIAL_META_LEAK_RE = re.compile(
+    r"(?iu)(?:\b(?:готовий\s+текст\s+(?:поста|публікації)|джерело\s+додасть\s+footer|"
+    r"не\s+публікувати\b|не\s+підходить\s+для\s+публікації|"
+    r"немає\s+нового\s+повідомлення\s+для\s+публікації|"
+    r"за\s+наданим\s+контекстом|ось\s+(?:готовий|переписаний)\s+(?:текст|пост))"
+    r"|\b(?:as\s+an\s+ai|i\s+cannot\s+comply)\b)"
+)
+_BARE_ALERT_RE = re.compile(
+    r"(?iu)(?:^|\s)(?:гучно[!. ]*|знову[!. ]*|ще[!. ]*|каби[!. ]*|"
+    r"молні(?:я|ї)[!. ]*|пуски\s+каб\w*[!. ]*|"
+    r"вибух\w*[!. ]*|дим[!. ]*|тривог\w*[!. ]*)$"
+)
+_LIVE_THREAT_RE = re.compile(
+    r"(?iu)\b(?:пуски\s+(?:каб\w*|ракет\w*)|каб\w*\s+(?:в\s+бік|у\s+напрямку)|"
+    r"бпла\s+(?:летить|рухається)|(?:летить|рухається)\s+(?:бпла|ракета|шахед)|"
+    r"(?:(?:знову|ще)\s+)?гучно[!. ]*|"
+    r"(?:чути|чутно|пролунав|пролунали)\s+вибух\w*|"
+    r"повітрян\w*\s+тривог\w*|відбій\s+тривог\w*)\b"
+)
+
+
+def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") -> str:
+    """Reasons for irreversible, non-AI publication rejection.
+
+    The monitoring policy may be customized with channel rules. Its invariant
+    is source sufficiency: no rewriter can manufacture missing event context.
+    """
+    if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
+        return "EDITORIAL_META_LEAK"
+    if channel.mode != ChannelMode.MONITORING:
+        return ""
+    source = _source_text(article).strip()
+    clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
+    if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
+        return "MONITORING_CONTEXT_MISSING"
+    # A photo/video caption cannot stand in for reading the video. When it
+    # contains no established event/result, never invent the missing context.
+    if (
+        re.search(r"(?iu)\b(?:відео|фото|ілюстраці\w*|кадр\w*)\b", clean)
+        and len(clean) < 95
+        and not _RESULT_FACT_RE.search(clean)
+        and not re.search(r"(?iu)\b(?:відкрили|уклали|запустили|призначили|оголосили|надають|отримати|відбудеться)\b", clean)
+    ):
+        return "MONITORING_MEDIA_CONTEXT_MISSING"
+    # Unresolved active threats must not become normal news posts.
+    # Official confirmed end-of-event notices remain eligible separately.
+    if _LIVE_THREAT_RE.search(clean):
+        return "MONITORING_LIVE_ALERT"
+    # Even with a casualty/damage figure, an unfolding rescue or new strike
+    # is not a settled community notice. Wait for a coherent official recap.
+    if (
+        re.search(r"(?iu)\b(?:атак\w*|удар\w*|обстріл\w*|вибух\w*|завал\w*|прильот\w*|дрон\w*|каб\w*)\b", clean)
+        and re.search(r"(?iu)(?:щойно|тільки\s+що|прямо\s+зараз|"
+                      r"рятувальн\w*\s+операці\w*\s+трива\w*|"
+                      r"(?:рятувальник\w*|служб\w*)\s+продовж\w*|"
+                      r"під\s+завал\w*\s+шука\w*|"
+                      r"(?:наслідки|інформац\w*)\s+уточню\w*|"
+                      r"на\s+місці\s+працю\w*)", clean)
+    ):
+        return "MONITORING_UNSETTLED_EVENT"
+    if re.search(r"(?iu)\bмолні(?:я|ї)\b", clean):
+        return "MONITORING_CONTEXT_MISSING"
+    # Catch abbreviated live alerts such as "Вибухи у Запоріжжі", which
+    # have no actionable verified outcome even if the final text invents one.
+    postfactum = _postfactum_security_policy(channel, article)
+    if postfactum:
+        return postfactum
+    return ""
+
+
 def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Apply local exclusions only when the operator explicitly configured them."""
+    critical = hard_editorial_reject(channel, article)
+    if critical:
+        return critical
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         return postfactum
@@ -710,13 +786,13 @@ class EditorialEngine:
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:\n{inclusion or 'Не задано: inclusion виконаний.'}\n\nEXCLUSION RULES:\n{exclusion or 'Не задано.'}
-Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; сумнів -> publish.
+Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; якщо бракує контексту або фактів -> reject; сумнів -> reject. Не доповнюй невідомі факти здогадками.
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"included":true,"excluded":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
-            return bool(obj.get("included", True)), bool(obj.get("excluded", False)), _clean(obj.get("reason"), 500)
+            return bool(obj.get("included", False)), bool(obj.get("excluded", True)), _clean(obj.get("reason"), 500)
 
         result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22, purpose="monitoring_selector")
         included, excluded, reason = parse(result.text)
@@ -741,7 +817,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
-        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Перевір лише відповідність SOURCE політиці каналу. Не оцінюй broad appeal або wow.
+        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
@@ -832,7 +908,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         return False, "below_sold_value", max(score, broad_score)
 
     def _value_gate(self, article: Any) -> dict[str, Any]:
-        prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true лише якщо цінність тримається на поверхневому wow без payoff.
+        prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true для старих ігрових портів, одиничних експериментів, нішевих хобі та саморобок без доведеного широкого результату; не прирівнюй технічну новизну до значущості.
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"reason":"коротко"}}"""
 
@@ -850,7 +926,9 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         weights = {"novelty": .14, "consequence_or_insight": .19, "mechanism": .14, "reader_payoff": .19, "retellability": .15, "concrete_stakes": .09, "why_now": .10}
         score = int(round(sum(int(data.get(key, 0) or 0) * weight for key, weight in weights.items())))
         novelty = int(data.get("novelty", 0)); insight = int(data.get("consequence_or_insight", 0)); mechanism = int(data.get("mechanism", 0)); payoff = int(data.get("reader_payoff", 0)); retell = int(data.get("retellability", 0)); stakes = int(data.get("concrete_stakes", 0)); why_now = int(data.get("why_now", 0)); curiosity = bool(data.get("curiosity_only", False))
-        standard = not (curiosity and insight < 55 and payoff < 60) and score >= t["standard_score"] and payoff >= t["standard_payoff"] and retell >= t["standard_retellability"] and max(insight, mechanism, stakes) >= t["standard_signal"] and not (why_now < t["standard_why_now"] and novelty < t["standard_novelty_exception"])
+        if curiosity and not (insight >= 80 and payoff >= 80 and novelty >= 80):
+            return False, "niche_curiosity_only", score
+        standard = score >= t["standard_score"] and payoff >= t["standard_payoff"] and retell >= t["standard_retellability"] and max(insight, mechanism, stakes) >= t["standard_signal"] and not (why_now < t["standard_why_now"] and novelty < t["standard_novelty_exception"])
         if standard: return True, "standard", score
         if fit >= t["mechanism_lane_fit"] and score >= t["mechanism_lane_score"] and mechanism >= t["mechanism_lane_mechanism"] and payoff >= t["mechanism_lane_payoff"] and retell >= t["mechanism_lane_retellability"]: return True, "policy_fit_mechanism_lane", score
         if fit >= t["insight_lane_fit"] and score >= t["insight_lane_score"] and insight >= t["insight_lane_insight"] and payoff >= t["insight_lane_payoff"] and retell >= t["insight_lane_retellability"]: return True, "policy_fit_insight_lane", score
@@ -889,7 +967,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         )
         named_source_style = source_body_instruction(channel, article)
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
-СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий пост — 2–4 абзаци. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
+СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}

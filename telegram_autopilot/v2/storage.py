@@ -2345,6 +2345,88 @@ class V2Store:
             return False,f"ALREADY_PUBLISHED:{int(published['id'])}"
         return True,"OK"
 
+    def recurrent_web_media_urls(self, article_id: int, *, lookback: int = 120) -> set[str]:
+        """Identify page-wide image assets reused on DIFFERENT stories of one source.
+
+        Same-domain advertising/house images often survive a single-page extractor
+        because they are valid JPGs with plausible dimensions. Reuse on unrelated
+        story URLs is strong negative provenance evidence. This guard never scans
+        Telegram albums and never treats merely similar colors as repeated media.
+        """
+        from ..media import media_identity, valid_public_media
+
+        row = self.get_article(article_id)
+        if row is None:
+            return set()
+        canonical = str(row["canonical_source_url"] or row["source_url"] or "")
+        if not canonical.startswith(("https://", "http://")) or "t.me/" in canonical:
+            return set()
+
+        def images(media_raw: str, layout_raw: str) -> dict[str, str]:
+            entries: list[str] = []
+            try:
+                media = json.loads(str(media_raw or "[]"))
+                if isinstance(media, list):
+                    entries.extend(str(v) for v in media)
+            except (TypeError, ValueError):
+                pass
+            try:
+                layout = json.loads(str(layout_raw or "{}"))
+                if isinstance(layout, dict):
+                    entries.append(str(layout.get("featured") or ""))
+                    for block in layout.get("blocks", []):
+                        if isinstance(block, dict) and block.get("type") == "media":
+                            entries.append(str(block.get("url") or ""))
+            except (TypeError, ValueError):
+                pass
+            result: dict[str, str] = {}
+            for value in entries:
+                parsed = valid_public_media(value)
+                if not parsed or parsed[0] != "image":
+                    continue
+                _, url = parsed
+                result.setdefault(media_identity("image", url), url)
+            return result
+
+        current = images(str(row["media_json"]), str(row["article_layout_json"]))
+        if not current:
+            return set()
+        repeats: set[str] = set()
+        with self.connect() as con:
+            others = con.execute(
+                """SELECT source_url,canonical_source_url,media_json,article_layout_json
+                   FROM articles WHERE source_id=? AND id<>?
+                   ORDER BY id DESC LIMIT ?""",
+                (int(row["source_id"]), int(article_id), max(1, min(300, int(lookback)))),
+            ).fetchall()
+        for other in others:
+            other_canonical = str(other["canonical_source_url"] or other["source_url"] or "")
+            if other_canonical == canonical:
+                continue
+            other_keys = images(str(other["media_json"]), str(other["article_layout_json"]))
+            repeats.update(current.keys() & other_keys.keys())
+        return {url for key, url in current.items() if key in repeats}
+
+    def reject_editorial_article(self, article_id: int, reason: str) -> None:
+        """Permanently reject a final-gate policy violation.
+
+        Unlike block_article(), this is not retried: a refused or fabricated
+        source must not be rephrased by another model and sent to Telegram.
+        """
+        detail = str(reason)[:2000]
+        self.update_article(
+            article_id, stage=str(Stage.ARCHIVED), decision=str(Decision.REJECT),
+            blocked_by=str(BlockedBy.QUALITY), reject_reason=detail,
+            status_detail=detail, last_error_code="EDITORIAL_HARD_REJECT",
+            last_error_detail=detail, next_retry_at="",
+        )
+        with self.connect() as con:
+            con.execute(
+                "UPDATE jobs SET state='DONE',lease_owner='',lease_until='',"
+                "error_code='',error_detail='',updated_at=? WHERE article_id=?",
+                (now_iso(), int(article_id)),
+            )
+
     def mark_duplicate(self, article_id:int, duplicate_of:int, reason:str) -> None:
         detail=str(reason)[:2000]
         self.update_article(article_id,stage=str(Stage.DEDUPED),decision=str(Decision.DUPLICATE),blocked_by=str(BlockedBy.NONE),duplicate_of=int(duplicate_of),reject_reason=detail,status_detail=detail,last_error_code="",last_error_detail="",next_retry_at="")

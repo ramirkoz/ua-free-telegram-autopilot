@@ -6,7 +6,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from ..secrets_store import load_secrets
-from ..fact_guard import strip_non_actionable_article_urls
+from ..fact_guard import strip_non_actionable_article_urls, strip_monitoring_nonform_urls
 from ..facebook import FacebookError, publish_page_link
 from ..telegram import (
     TelegramError,
@@ -471,6 +471,7 @@ class Publisher:
                 )
         if channel.mode == ChannelMode.MONITORING:
             sanitized = strip_non_actionable_article_urls(article, current_text)
+            sanitized = strip_monitoring_nonform_urls(article, sanitized)
             if sanitized != current_text:
                 current_text = sanitized
                 self.store.update_article(article_id, final_text=current_text)
@@ -479,9 +480,17 @@ class Publisher:
                     "publish", "removed non-actionable source/media URL from body",
                     channel_id=channel_id, article_id=article_id,
                 )
-        # Local import avoids publisher <-> semantic/editorial module cycles while
-        # keeping the current channel rules authoritative at the last boundary.
-        from .editorial import prepublish_quality_issues
+        # Non-retryable hard stop. A model refusal, a one-word caption or
+        # an active threat must never become a public post after an AI retry.
+        from .editorial import hard_editorial_reject, prepublish_quality_issues
+        critical = hard_editorial_reject(channel, article, current_text)
+        if critical:
+            self.store.reject_editorial_article(article_id, "2.1.0 editorial hard stop: " + critical)
+            event(
+                "publish", "editorial hard stop", level=30, channel_id=channel_id,
+                article_id=article_id, reason=critical,
+            )
+            return critical
         qa_issues = prepublish_quality_issues(channel, article, current_text)
         if qa_issues:
             detail = "; ".join(qa_issues[:6])
@@ -509,7 +518,21 @@ class Publisher:
             source_urls=source_urls,
         )
 
-        bundle = build_publication_media_bundle(channel, article)
+        # An image reused on unrelated pages of one website is not reliable
+        # article evidence. Exclude it and continue seeking story-owned art.
+        recurring = (
+            self.store.recurrent_web_media_urls(article_id)
+            if channel.mode == ChannelMode.EDITORIAL else set()
+        )
+        if recurring:
+            event(
+                "media", "repeated site-wide media excluded",
+                level=30, channel_id=channel_id, article_id=article_id,
+                repeated_count=len(recurring),
+            )
+            bundle = build_publication_media_bundle(channel, article, excluded_urls=recurring)
+        else:
+            bundle = build_publication_media_bundle(channel, article)
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
