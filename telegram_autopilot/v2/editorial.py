@@ -918,6 +918,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
         effective_min, effective_max, validation_hard_max = _monitoring_limits(channel, article, body_hard_max)
+        if channel.mode != ChannelMode.MONITORING:
+            # Full editorial articles should be worth reading, not teaser fragments.
+            # Do not stretch short/inaccessible sources with invented filler.
+            source_chars = len(_source_text(article).strip())
+            if source_chars >= 500 and validation_hard_max >= 650:
+                effective_min = max(effective_min, 500)
+                effective_max = min(validation_hard_max, max(800, effective_max))
         if channel.mode == ChannelMode.MONITORING:
             event(
                 "editorial", "monitoring dynamic length", channel_id=channel.id,
@@ -942,7 +949,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         )
         named_source_style = source_body_instruction(channel, article)
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
-СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий пост — 2–4 абзаци. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
+СТРУКТУРА: для редакційного каналу пиши 2–3 змістовні абзаци, орієнтир 500–900 символів тільки якщо це підтримано SOURCE; спершу факт, потім механізм/значення, наприкінці важливе обмеження. Не вигадуй для добору довжини. Для моніторингового каналу зберігай повну конкретику і природну стислу довжину. Якщо текст має 350+ символів, поділи щонайменше на 2 абзаци. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
