@@ -199,6 +199,15 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
         return "MONITORING_CONTEXT_MISSING"
+    # A photo/video caption cannot stand in for reading the video. When it
+    # contains no established event/result, never invent the missing context.
+    if (
+        re.search(r"(?iu)\b(?:відео|фото|ілюстраці\w*|кадр\w*)\b", clean)
+        and len(clean) < 95
+        and not _RESULT_FACT_RE.search(clean)
+        and not re.search(r"(?iu)\b(?:відкрили|уклали|запустили|призначили|оголосили|надають|отримати|відбудеться)\b", clean)
+    ):
+        return "MONITORING_MEDIA_CONTEXT_MISSING"
     # Unresolved active threats must not become normal news posts.
     # Official confirmed end-of-event notices remain eligible separately.
     if _LIVE_THREAT_RE.search(clean):
