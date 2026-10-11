@@ -493,6 +493,34 @@ class Publisher:
                 channel_id=channel_id, article_id=article_id, outcome=outcome, detail=detail[:1200],
             )
             return outcome
+        # Second, publication-boundary dedupe against already published rewrites.
+        # A separate source, headline or late queue item cannot bypass this gate.
+        # Any ambiguous match is rejected before an external Telegram send.
+        if channel.mode != ChannelMode.MONITORING:
+            from ..event_dedupe import find_event_duplicate
+            with self.store.connect() as con:
+                recent = con.execute(
+                    """SELECT id, title, final_text AS teaser_text, raw_text AS event_summary
+                       FROM articles WHERE channel_id=? AND id<>?
+                       AND stage='PUBLISHED'
+                       ORDER BY published_at DESC, id DESC LIMIT 240""",
+                    (channel_id, int(article_id)),
+                ).fetchall()
+            confirmed_repeat = find_event_duplicate(
+                str(article["title"] or ""), current_text, recent,
+            )
+            if confirmed_repeat is not None:
+                self.store.mark_duplicate(
+                    article_id, confirmed_repeat.article_id,
+                    "PREPUBLISH_EVENT_DUPLICATE: " + confirmed_repeat.reason,
+                )
+                event(
+                    "publish", "semantic duplicate stopped before Telegram send",
+                    level=30, channel_id=channel_id, article_id=article_id,
+                    duplicate_of=confirmed_repeat.article_id,
+                    reason=confirmed_repeat.reason,
+                )
+                return "DUPLICATE_PUBLISHED"
         schedule_ok, schedule_reason = self.can_publish_now(channel_id)
         if not schedule_ok:
             return schedule_reason
