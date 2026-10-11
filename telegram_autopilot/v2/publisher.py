@@ -484,11 +484,7 @@ class Publisher:
         from .editorial import hard_editorial_reject, prepublish_quality_issues
         critical = hard_editorial_reject(channel, article, current_text)
         if critical:
-            self.store.block_article(
-                article_id, blocked_by=BlockedBy.QUALITY, error_code=critical,
-                detail="2.1.0 editorial hard stop: " + critical,
-                retry_seconds=None,
-            )
+            self.store.reject_editorial_article(article_id, "2.1.0 editorial hard stop: " + critical)
             event(
                 "publish", "editorial hard stop", level=30, channel_id=channel_id,
                 article_id=article_id, reason=critical,
