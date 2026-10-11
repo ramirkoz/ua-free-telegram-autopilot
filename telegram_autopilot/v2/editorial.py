@@ -162,23 +162,23 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
 
 
 _MONITORING_LIVE_NOISE = re.compile(
-    r"(?iu)(?:\\b(?:каби|кабів|каб|бпла|шахед(?:и|ів)?|фпв|fpv|"
+    r"(?iu)(?:\b(?:каби|кабів|каб|бпла|шахед(?:и|ів)?|фпв|fpv|"
     r"пуски|запуски|приліт|прильот|вибух(?:и|ів)?|гучно|"
-    r"знову\\s+гучно|повітряна\\s+тривога|відбій|"
-    r"летить|рухається|дим\\b|задимлення)\\b|"
-    r"\\b(?:молнія|молния)\\b)"
+    r"знову\s+гучно|повітряна\s+тривога|відбій|"
+    r"летить|рухається|дим\b|задимлення)\b|"
+    r"\b(?:молнія|молния)\b)"
 )
 _MONITORING_SHORT_NOISE = re.compile(
     r"(?iu)^(?:ще|знову|гучно!?|каби?|кабів|молнія|молния|"
     r"вибух(?:и)?|дим|приліт|прильот|бпла|пуски|"
-    r"запоріжжя|пожежа(?:\\s+в\\s+запоріжжі)?)[!?.\\s]*$"
+    r"запоріжжя|пожежа(?:\s+в\s+запоріжжі)?)[!?.\s]*$"
 )
 _EDITORIAL_META_LEAK = re.compile(
-    r"(?imu)^\\s*(?:\\*\\*)?(?:готовий\\s+текст\\s+поста|"
-    r"джерело\\s+додасть\\s+footer|не\\s+публікувати\\b|"
-    r"повідомлення\\s+не\\s+підходить\\s+для\\s+публікації|"
-    r"нового\\s+повідомлення\\s+для\\s+публікації\\s+немає|"
-    r"редакторське\\s+рішення\\s*:)"
+    r"(?imu)^\s*(?:\*\*)?(?:готовий\s+текст\s+поста|"
+    r"джерело\s+додасть\s+footer|не\s+публікувати\b|"
+    r"повідомлення\s+не\s+підходить\s+для\s+публікації|"
+    r"нового\s+повідомлення\s+для\s+публікації\s+немає|"
+    r"редакторське\s+рішення\s*:)"
 )
 
 
@@ -187,18 +187,18 @@ def _monitoring_safety_exclusion(article: Any) -> str:
     raw = str(_v(article, "raw_text", "") or "").strip()
     # The actual source must carry context; titles fabricated by a previous
     # model or a copied source URL are not evidence of the event.
-    clean = re.sub(r"https?://\\S+", " ", raw)
-    clean = re.sub(r"[^\\w\\s]", " ", clean, flags=re.UNICODE).strip()
-    words = re.findall(r"\\b[\\w-]+\\b", clean, flags=re.UNICODE)
+    clean = re.sub(r"https?://\S+", " ", raw)
+    clean = re.sub(r"[^\w\s]", " ", clean, flags=re.UNICODE).strip()
+    words = re.findall(r"\b[\w-]+\b", clean, flags=re.UNICODE)
     if len(words) < 4 or _MONITORING_SHORT_NOISE.fullmatch(raw.casefold()):
         return "MONITORING_CONTEXT_MISSING: short/emoji-only/no fact"
     # Operator forbids live combat alerts; do not infer outcomes from them.
     # Official finalized service/recovery decisions are evaluated elsewhere.
     low = raw.casefold()
     if _MONITORING_LIVE_NOISE.search(low) and re.search(
-        r"(?iu)\\b(?:попередньо|щойно|просто\\s+зараз|прямо\\s+зараз|"
-        r"триває|у\\s+напрямку|в\\s+бік|курсом|на\\s+місці|"
-        r"влучив|летить|вибухи|гучно|пуски|знову)\\b", low
+        r"(?iu)\b(?:попередньо|щойно|просто\s+зараз|прямо\s+зараз|"
+        r"триває|у\s+напрямку|в\s+бік|курсом|на\s+місці|"
+        r"влучив|летить|вибухи|гучно|пуски|знову)\b", low
     ):
         return "MONITORING_LIVE_ATTACK_NOISE: real-time security update"
     return ""
