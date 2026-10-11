@@ -54,3 +54,11 @@ def test_model_meta_never_published_any_channel(text):
 
 def test_editorial_scope_not_randomly_restricted_by_monitoring_rules():
     assert hard_editorial_reject(editor(), article("Пуски КАБів у напрямку міста"), "Технічна стаття про системи") == ""
+
+@pytest.mark.parametrize("raw", [
+    "Ілюстрація дня сьогодні на Пісках",
+    "Відео з ще одного місця влучання в Запоріжжі",
+    "На відео одне з місць прильотів у Запоріжжі",
+])
+def test_uncontextualized_photo_or_video_caption_rejected(raw):
+    assert hard_editorial_reject(monitor(), article(raw)).startswith("MONITORING_")
