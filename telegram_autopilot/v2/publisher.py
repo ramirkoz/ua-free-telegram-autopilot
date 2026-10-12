@@ -61,13 +61,13 @@ def strip_monitoring_system_placeholders(text: str) -> str:
     Do not strip actual addresses, attached-card descriptions or useful content.
     """
     pattern = (
-        r"(?im)^\\s*(?:Деталі|Подробиці|Більше інформації)\\s*[—–:-]\\s*"
-        r"[^\\n]{0,150}?\\b(?:посиланням|лінком|покликанням)\\b"
-        r"[^\\n]{0,100}?\\b(?:додасть|вставить|підставить|додано буде|згенерує)\\b"
-        r"[^\\n]{0,100}?\\b(?:система|програма|бот|автопілот)\\b[^\\n]*$"
+        r"(?im)^\s*(?:Деталі|Подробиці|Більше інформації)\s*[—–:-]\s*"
+        r"[^\n]{0,150}?\b(?:посиланням|лінком|покликанням)\b"
+        r"[^\n]{0,100}?\b(?:додасть|вставить|підставить|додано буде|згенерує)\b"
+        r"[^\n]{0,100}?\b(?:система|програма|бот|автопілот)\b[^\n]*$"
     )
     cleaned = re.sub(pattern, "", str(text or ""))
-    return re.sub(r"\\n{3,}", "\\n\\n", cleaned).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 def _parse_time(value: str, fallback: dt_time) -> dt_time:
@@ -549,8 +549,8 @@ class Publisher:
                     channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
                 )
         if channel.mode == ChannelMode.MONITORING:
-            current_text = strip_monitoring_system_placeholders(current_text)
-            sanitized = strip_non_actionable_article_urls(article, current_text)
+            sanitized = strip_monitoring_system_placeholders(current_text)
+            sanitized = strip_non_actionable_article_urls(article, sanitized)
             sanitized = strip_monitoring_nonform_urls(article, sanitized)
             if sanitized != current_text:
                 current_text = sanitized
