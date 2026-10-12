@@ -95,6 +95,12 @@ class BoundedStrictIngestService(StrictIngestService):
             seen += len(items)
             source_added = 0
             for item in items:
+                if '"source_reader"' in str(item.article_layout_json or ""):
+                    event(
+                        "reader", "optional source reader used",
+                        channel_id=channel_id, source_id=source.id,
+                        source=source.name, article_url=item.url, reader="jina",
+                    )
                 media_json = json.dumps(list(item.media_urls or []), ensure_ascii=False, separators=(",", ":"))
                 reason = self._existing_reason(channel_id, source.id, item.external_id, item.url)
                 before = bool(reason)
