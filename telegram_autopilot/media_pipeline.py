@@ -462,7 +462,7 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
         existing.add((featured.kind, _media_identity(featured.url)))
     # An article-level layout may already have properly scoped body creatives.
     # Do not mingle them with global page/RSS fallbacks from related stories.
-    if not body and featured is None:
+    if not any(item.kind == 'image' for item in body) and featured is None:
         for idx, raw in enumerate(fallback_urls[:24], start=1):
             parsed = valid_public_media(raw)
             if not parsed:
@@ -553,7 +553,7 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and resolved.schema_verified and resolved.gallery:
+            if marketing_context and not semantic_ok and resolved.gallery:
                 # Commercial/editorial source media is already structurally scoped to the
                 # story by article_extractor. Explicit gallery items and ordinary body
                 # images may have weak/empty alt text, so lexical overlap is not a safe
@@ -576,7 +576,7 @@ def prepare_article_media(
             )
             video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
             semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
-            if marketing_context and item.schema_verified and item.gallery:
+            if marketing_context and item.gallery:
                 semantic_ok = True
                 item.relevance_score = max(40.0, item.relevance_score)
             if not video_story and not semantic_ok:
