@@ -51,3 +51,20 @@ def test_scoped_article_body_disallows_unrelated_rss_fallback():
         "url":"https://example.com/oslo-photo.jpg","schema_verified":True,"gallery":True}]})
     hero, body = _layout_items(layout, ["https://example.com/dolly-parton.jpg"])
     assert [x.url for x in body] == ["https://example.com/oslo-photo.jpg"]
+
+
+def test_commercial_story_body_not_happymeal_for_sponsor_url():
+    from telegram_autopilot.v2.publisher import commercial_source_text_identity
+    wrong = "McDonald's has launched Happy Meal boxes with eye-testing arches. " * 8
+    correct = "The PPC EuroLeague sponsorship campaign is about sponsoring the joy of the game. " * 8
+    assert not commercial_source_text_identity("What does an official sponsor really sponsor?", wrong)
+    assert commercial_source_text_identity("What does an official sponsor really sponsor?", correct)
+
+
+def test_commercial_story_body_not_other_brand_for_visit_oslo():
+    from telegram_autopilot.v2.publisher import commercial_source_text_identity
+    actual = "Visit Oslo brings back the famous grump in a Christmas musical for the city. " * 8
+    other = "Absolut KAWS limited edition vodka bottle and creative design releases. " * 8
+    title = "Visit Oslo turns its famous grump into a Christmas musical"
+    assert commercial_source_text_identity(title, actual)
+    assert not commercial_source_text_identity(title, other)
