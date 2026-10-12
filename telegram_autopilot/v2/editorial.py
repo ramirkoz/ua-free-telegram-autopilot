@@ -189,7 +189,7 @@ _MONITORING_READER_RUMOR = re.compile(
     r"(?iu)(?:\b(?:підписник[иаів]*|читач[іів]*|очевидц[іів]*|свідк[иів]*)\b"
     r".{0,95}\b(?:повідом|пиш|розпов|каж|ствердж)|"
     r"\b(?:зі\s+слів|за\s+словами)\s+(?:читач|підписник|очевидц|свідк)|"
-    r"\b(?:нам\s+пишуть|пишуть\s+нам|читачі\s+пишуть))"
+    r"\b(?:нам\s+пишуть|пишуть\s+нам|читачі\s+пишуть|пишуть\s+читачі))"
 )
 _MONITORING_PRIVATE_NOTICES = re.compile(
     r"(?iu)(?:\b(?:загубил[аи]|загублен[аийі]|знайшли|чиї|чий)\b"
@@ -230,7 +230,7 @@ def _monitoring_official_context_reject(article: Any) -> str:
     # not aggregators reproducing eyewitness, subscriber, or reader messages.
     # Empty names in migrated records are handled by the other source gates.
     source_url = str(_v(article, "source_url", "") or "")
-    if source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\\d+", source_name) and not re.search(
+    if source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
         r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
         r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
         r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
