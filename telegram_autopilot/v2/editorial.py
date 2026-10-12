@@ -759,7 +759,27 @@ def _practical_literals(article: Any) -> list[tuple[str, str]]:
 
 def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) -> str:
     value = str(text or "").strip()
-    missing = [(label, literal) for label, literal in _practical_literals(article) if literal not in value]
+    # Compare canonical source URLs, not substrings: a model may append a word
+    # directly to a forms.gle token. That is a CORRUPTED link, not a new form.
+    source_urls = [(label, literal) for label, literal in _practical_literals(article)]
+    seen_urls = {m.group(0).rstrip(".,;:!?") for m in re.finditer(r"https?://[^\\s<>]+", value)}
+    missing = []
+    for label, literal in source_urls:
+        if literal.startswith(("http://", "https://")):
+            if literal in seen_urls:
+                continue
+            # A malformed model URL beginning with a source URL must be
+            # repaired by replacing it, rather than appending another copy.
+            contaminated = [u for u in seen_urls if u.startswith(literal) and u != literal]
+            for bad in contaminated:
+                value = value.replace(bad, literal)
+                seen_urls.discard(bad)
+                seen_urls.add(literal)
+            if contaminated:
+                continue
+        elif literal in value:
+            continue
+        missing.append((label, literal))
     if not missing:
         return value
     suffix = "\n\n" + "\n".join(f"{label}: {literal}" for label, literal in missing)
