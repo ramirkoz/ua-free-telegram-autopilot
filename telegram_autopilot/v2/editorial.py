@@ -211,16 +211,6 @@ def _monitoring_official_context_reject(article: Any) -> str:
     raw = str(_v(article, "raw_text", "") or "").strip()
     source_name = str(_v(article, "source_name", "") or "").strip()
     title = str(_v(article, "title", "") or "").strip()
-    # Explicit operator rule: only original institutional/community accounts,
-    # not aggregators reproducing eyewitness, subscriber, or reader messages.
-    # Empty names in migrated records are handled by the other source gates.
-    if source_name and not re.search(
-        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
-        r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
-        r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
-        r"комунальн\w*\s+(?:заклад|установ|підприємств))", source_name
-    ):
-        return "MONITORING_SOURCE_NOT_OFFICIAL"
     # Title is not proof. The first source caption takes precedence.
     if _MONITORING_READER_RUMOR.search(raw):
         return "MONITORING_READER_RUMOR_NOT_OFFICIAL"
@@ -236,6 +226,16 @@ def _monitoring_official_context_reject(article: Any) -> str:
     # a news event. The collector must not silently join their contacts.
     if re.search(r"(?iu)\bключ[іи]\b", raw) and re.search(r"(?iu)\bвейп\b", raw):
         return "MONITORING_MULTIPLE_INDEPENDENT_NOTICES"
+    # Explicit operator rule: only original institutional/community accounts,
+    # not aggregators reproducing eyewitness, subscriber, or reader messages.
+    # Empty names in migrated records are handled by the other source gates.
+    if source_name and not re.search(
+        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
+        r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
+        r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
+        r"комунальн\w*\s+(?:заклад|установ|підприємств))", source_name
+    ):
+        return "MONITORING_SOURCE_NOT_OFFICIAL"
     return ""
 
 
