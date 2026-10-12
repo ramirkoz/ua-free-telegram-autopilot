@@ -341,6 +341,20 @@ def parse_rss(xml_bytes: bytes) -> list[CollectedArticle]:
     return items
 
 
+def _article_title_identity(left: str, right: str) -> bool:
+    """Reject enrichment from a different story, not merely weakly matching site terms."""
+    import re
+    def terms(value: str) -> set[str]:
+        return {w for w in re.findall(r"(?u)[^\W_]{4,}", (value or "").casefold())
+                if w not in {"with", "from", "that", "this", "about", "what", "their", "news",
+                             "campaign", "campaigns", "advertising", "official", "story", "more"}}
+    a, c = terms(left), terms(right)
+    if not a or not c:
+        return True  # Missing title isn't evidence of a mismatch.
+    shared = a & c
+    return bool(len(shared) >= 2 or (len(shared) >= 1 and min(len(a), len(c)) <= 2))
+
+
 def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0, reader_fallback_enabled: bool = False) -> CollectedArticle:
     if not item.url:
         return item
@@ -352,6 +366,18 @@ def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0, reader_fal
             timeout=max(5.0, min(20.0, float(timeout))),
         )
         extracted = extract_article_content(response.body.decode("utf-8", errors="replace"), item.url)
+        if extracted.title and item.title and not _article_title_identity(item.title, extracted.title):
+            # A real HTTP 200 may be a neighboring news page or malformed feed URL.
+            # Keep evidence of the failure so the publisher can fail closed.
+            item.article_layout_json = json.dumps({
+                "article_identity": {
+                    "status": "MISMATCH", "rss_title": item.title[:250],
+                    "page_title": extracted.title[:250], "original_url": item.url,
+                }
+            }, ensure_ascii=False)
+            item.media_urls = []
+            return item
+
         if len(extracted.text) > len(item.raw_text):
             item.raw_text = extracted.text
         if extracted.layout_json:
