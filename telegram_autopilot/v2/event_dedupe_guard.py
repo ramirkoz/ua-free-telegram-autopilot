@@ -491,24 +491,11 @@ def event_fingerprint_same_event(
                     f"concepts={len(shared)}/{containment:.2f} salient={len(salient_shared)}/{salient_containment:.2f}"
                 )
 
-    # 2.1.0: the same named real-world event can be retold in dramatically
-    # different language, especially when one publisher supplies a full report
-    # and the next only a short social summary. Strong long-form event terms
-    # plus the SAME named actor are more discriminative than text containment.
-    if (
-        shared_entities
-        and len(stats["shared_rare"]) >= 3
-        and len(salient_long_shared) >= 6
-        and len(salient_shared) >= 7
-        and len(shared) >= 9
-        and not commercial_profile
-    ):
-        return True, (
-            "named event with rare long-phrase corroboration "
-            f"entities={','.join(sorted(shared_entities))} "
-            f"rare={len(stats['shared_rare'])} long={len(salient_long_shared)}"
-        )
-
+    # 2.1.4: This broad lane merged unrelated pages sharing social-footer text
+    # (Facebook/Flipboard/Email) and, separately, independent AI-agent research.
+    # Exact URL/hash and high-precision subject/method lanes above remain active.
+    # Generic long phrases and named entities are NEVER sufficient on their own.
+    # Keep its shadow telemetry for evaluation instead of blocking new articles.
     # Repeated official public decisions are not new events simply because
     # another source repeats the same date, location and decision. Require
     # shared non-generic terms and matching numerical date to avoid merging
