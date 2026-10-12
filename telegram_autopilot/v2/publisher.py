@@ -627,16 +627,22 @@ class Publisher:
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
-        if bundle.video_link and bundle.video_link not in attribution_urls:
+        verified_videos = list(dict.fromkeys(
+            [*getattr(bundle, "video_links", ()), *([bundle.video_link] if bundle.video_link else [])]
+        ))
+        if verified_videos:
             if attribution_labels is None:
                 count = len(attribution_urls)
-                attribution_labels = [
-                    "Джерело" if count == 1 else f"Джерело {idx + 1}"
-                    for idx in range(count)
-                ]
-            attribution_urls = [*attribution_urls, bundle.video_link]
-            attribution_labels = [*list(attribution_labels or []), "🎬 Відео"]
-            event("media", "video link attached to publication", channel_id=channel_id, article_id=article_id, video_url=bundle.video_link)
+                attribution_labels = ["Джерело" if count == 1 else f"Джерело {idx + 1}" for idx in range(count)]
+            attribution_labels = list(attribution_labels or [])
+            for idx, video_url in enumerate(verified_videos[:10]):
+                if video_url in attribution_urls:
+                    continue
+                attribution_urls = [*attribution_urls, video_url]
+                attribution_labels.append("🎬 Відео" if len(verified_videos) == 1 else f"🎬 Відео {idx + 1}")
+            event("media", "source-owned video links attached", channel_id=channel_id,
+                  article_id=article_id, video_link_count=len(verified_videos),
+                  video_urls=verified_videos[:10], video_embed_count=bundle.video_embed_count)
         else:
             try:
                 commercial_editorial = EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
@@ -936,7 +942,7 @@ class Publisher:
                 "media", "captioned local media chunk published" if is_final_chunk else "local media chunk published",
                 channel_id=channel_id, article_id=article_id, source_media_count=source_media_count,
                 bundle_media_count=bundle.count, prepared_media_count=delivery_count,
-                published_media_count=len(media_ids), media_outcome="COMPLETE" if is_final_chunk else "PARTIAL",
+                published_media_count=len(media_ids), media_outcome=("VIDEO_LINK_ONLY" if is_final_chunk and verified_videos and all(m.kind == "image" for m in bundle.items) else "COMPLETE") if is_final_chunk else "PARTIAL",
                 caption_attached=is_final_chunk, source_message_ids=list(bundle.source_message_ids), upload_mode="multipart_local",
             )
             pending = pending[len(chunk):]
@@ -960,7 +966,7 @@ class Publisher:
             message_id=final_caption_message_id, message_ids=media_ids[:delivery_count],
             media_policy=policy, source_media_count=source_media_count, bundle_media_count=bundle.count,
             prepared_media_count=delivery_count, published_media_count=delivery_count,
-            media_outcome="COMPLETE", upload_mode="multipart_local", source_url=source_url,
+            media_outcome="VIDEO_LINK_ONLY" if verified_videos and all(m.kind == "image" for m in bundle.items) else "COMPLETE", video_link_count=len(verified_videos), upload_mode="multipart_local", source_url=source_url,
         )
         return "PUBLISHED"
 
