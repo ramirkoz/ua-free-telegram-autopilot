@@ -29,3 +29,12 @@ def test_official_material_remains_eligible():
         "Департамент соціального захисту Запорізької міської ради оголосив прийом заявок на допомогу ВПО.",
         "Запорізька міська рада",
     ))
+
+
+def test_news_aggregator_without_official_source_is_rejected():
+    assert _monitoring_official_context_reject(item(
+        "У місті оголошено новий графік роботи пунктів підтримки", "ЗАПОРІЖЖЯ.INFO"
+    )) == "MONITORING_SOURCE_NOT_OFFICIAL"
+    assert _monitoring_official_context_reject(item(
+        "У районі тимчасово відсутнє світло, відновлення триває", "ЗаБор Запоріжжя"
+    ))
