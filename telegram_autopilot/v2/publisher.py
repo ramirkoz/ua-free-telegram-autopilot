@@ -49,7 +49,10 @@ def commercial_source_text_identity(title: str, raw_text: str) -> bool:
     if not distinctive or len(distinctive) == 1 and len(next(iter(distinctive))) <= 4:
         return True
     body_tokens = set(re.findall(r"[a-z]{4,}", text[:2200].casefold()))
-    return bool(distinctive & body_tokens)
+    return bool(distinctive & body_tokens or any(
+        len(word) >= 5 and any(body_word.startswith(word) or word.startswith(body_word) for body_word in body_tokens if len(body_word) >= 5)
+        for word in distinctive
+    ))
 
 
 def _parse_time(value: str, fallback: dt_time) -> dt_time:
