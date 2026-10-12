@@ -745,7 +745,7 @@ def _practical_literals(article: Any) -> list[tuple[str, str]]:
     seen: set[str] = set()
     for value in actionable_source_urls(source, source_name=source_name, excluded_urls=article_non_actionable_urls(article)):
         if value not in seen:
-            seen.add(value); out.append(("Деталі/реєстрація", value))
+            seen.add(value); out.append(("Переглянути відео" if ("youtube.com" in value or "youtu.be" in value or "vimeo.com" in value) else "Деталі/реєстрація", value))
     for email in re.findall(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source, flags=re.I):
         if email not in seen:
             seen.add(email); out.append(("Email", email))

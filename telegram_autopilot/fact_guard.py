@@ -236,6 +236,30 @@ def _explicit_registration_context(value: str) -> bool:
     ))
 
 
+def _source_video_action(url: str, context: str) -> bool:
+    """Allow an actual source-owned video URL, not a generic news attribution."""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").casefold()
+        video_host = host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "vimeo.com", "www.vimeo.com"}
+        if not video_host:
+            return False
+        if not re.search(r"(?iu)(?:відео|відеозапис|переглян|дивитись|дивитися|watch|video)", context):
+            return False
+        return bool(parts.path and parts.path != "/")
+    except ValueError:
+        return False
+
+
+def clean_orphan_video_cues(value: str) -> str:
+    """Never leave a promise to watch video without a playable URL."""
+    value = re.sub(
+        r"(?im)^\s*(?:🎥\s*)?(?:переглянути|дивитися|дивитись|подивитися)\s+відео\s*[:：-]?\s*$",
+        "", str(value or ""),
+    )
+    return re.sub(r"\n{3,}", "\n\n", value).strip()
+
+
 def _action_url_context(source: str, start: int) -> str:
     """Evidence preceding this URL only; never borrow cues from later links."""
     prefix = source[max(0, start - 220):start]
@@ -264,7 +288,7 @@ def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=
             attribution = True
         if attribution:
             continue
-        if not _explicit_registration_context(context):
+        if not (_explicit_registration_context(context) or _source_video_action(url, context)):
             continue
         if url not in result:
             result.append(url)
@@ -295,7 +319,7 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         if _is_generic_telegram_reference(url) or _url_identity(url) in article_non_actionable_urls(article):
             continue
         context = _action_url_context(source, match.start())
-        if _explicit_registration_context(context):
+        if _explicit_registration_context(context) or _source_video_action(url, context):
             allowed.add(_url_identity(url))
     value = str(text or "")
     # Repair only a URL prefix exactly attested by the original source. This
@@ -317,9 +341,9 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         last = match.end()
     out.append(value[last:])
     cleaned = "".join(out)
-    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|деталі|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
+    return clean_orphan_video_cues(cleaned)
 
 
 def strip_non_actionable_article_urls(article, text: str) -> str:
