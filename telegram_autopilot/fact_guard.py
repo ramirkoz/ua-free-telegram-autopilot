@@ -254,10 +254,10 @@ def _source_video_action(url: str, context: str) -> bool:
 def clean_orphan_video_cues(value: str) -> str:
     """Never leave a promise to watch video without a playable URL."""
     value = re.sub(
-        r"(?im)^\\s*(?:🎥\\s*)?(?:переглянути|дивитися|дивитись|подивитися)\\s+відео\\s*[:：-]?\\s*$",
+        r"(?im)^\s*(?:🎥\s*)?(?:переглянути|дивитися|дивитись|подивитися)\s+відео\s*[:：-]?\s*$",
         "", str(value or ""),
     )
-    return re.sub(r"\\n{3,}", "\\n\\n", value).strip()
+    return re.sub(r"\n{3,}", "\n\n", value).strip()
 
 
 def _action_url_context(source: str, start: int) -> str:
