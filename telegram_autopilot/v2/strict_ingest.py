@@ -517,6 +517,7 @@ class StrictIngestService(base.IngestService):
                 name=str(row["name"]), url=str(row["url"]), enabled=bool(row["enabled"]),
                 initialized=bool(row["initialized"]), last_checked_at=str(row["last_checked_at"] or "") or None,
                 last_error=str(row["last_error"] or "") or None, priority=int(row["priority"] or 100),
+                reader_fallback_enabled=self.store.source_reader_fallback_enabled(int(row["id"])),
             )
             cooling, cooldown_until = self.store.source_cooldown_active(source.id)
             if cooling:
