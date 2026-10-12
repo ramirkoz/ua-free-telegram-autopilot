@@ -762,7 +762,7 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
     # Compare canonical source URLs, not substrings: a model may append a word
     # directly to a forms.gle token. That is a CORRUPTED link, not a new form.
     source_urls = [(label, literal) for label, literal in _practical_literals(article)]
-    seen_urls = {m.group(0).rstrip(".,;:!?") for m in re.finditer(r"https?://[^\\s<>]+", value)}
+    seen_urls = {m.group(0).rstrip(".,;:!?") for m in re.finditer(r"https?://[^\s<>]+", value)}
     missing = []
     for label, literal in source_urls:
         if literal.startswith(("http://", "https://")):
