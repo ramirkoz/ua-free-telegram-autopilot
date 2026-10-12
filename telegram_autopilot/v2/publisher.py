@@ -457,6 +457,25 @@ class Publisher:
         delivery_preflight = self._delivery_preflight(article_id, channel)
         if delivery_preflight != "CONTINUE":
             return delivery_preflight
+        # Publication hard stop: linked page is NOT the RSS story. Never publish
+        # another campaign's URL or media alongside this article's generated text.
+        try:
+            identity_layout = json.loads(str(article["article_layout_json"] or "{}"))
+        except (ValueError, TypeError):
+            identity_layout = {}
+        identity = identity_layout.get("article_identity") if isinstance(identity_layout, dict) else None
+        if isinstance(identity, dict) and identity.get("status") == "MISMATCH":
+            self.store.block_article(
+                article_id, blocked_by=BlockedBy.SOURCE,
+                error_code="ARTICLE_IDENTITY_MISMATCH",
+                detail="Заголовок RSS не відповідає сторінці за URL; публікацію заблоковано.",
+            )
+            event("publish", "article identity mismatch blocked", level=40,
+                  channel_id=channel_id, article_id=article_id,
+                  rss_title=str(identity.get("rss_title") or "")[:200],
+                  page_title=str(identity.get("page_title") or "")[:200],
+                  source_url=str(identity.get("original_url") or "")[:350])
+            return "ARTICLE_IDENTITY_MISMATCH"
         current_text = str(article["final_text"] or "").strip()
         strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
         if strip_body_links:
