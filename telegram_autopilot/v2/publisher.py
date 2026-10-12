@@ -98,6 +98,25 @@ _EMPTY_PROMO_LINE_RE = re.compile(
 )
 
 
+def _publication_text_cleanup(text: str) -> str:
+    """Remove model Markdown artifacts and orphaned calls to action before QA.
+
+    Never invent or infer a destination from the wording of a source post.
+    """
+    value = str(text or "").strip()
+    # Telegram's outgoing text may use HTML entities, not Markdown bold.
+    # Raw asterisks were visible in the live Семенівська article #44567.
+    value = re.sub(r"(?<!\\w)\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*(?!\\w)", r"\\1", value)
+    value = re.sub(r"(?m)^\\s*\\*\\*(.+?)\\*\\*\\s*$", r"\\1", value)
+    # A call to watch/read/register without a real URL is not actionable.
+    value = re.sub(
+        r"(?imu)^\\s*(?:🎬\\s*)?(?:переглянути|дивитися|подивитися)\\s+відео\\s*[:：-]?\\s*$",
+        "", value,
+    )
+    value = re.sub(r"\\n{3,}", "\\n\\n", value).strip()
+    return value
+
+
 def _strip_all_publication_links(text: str) -> str:
     """Remove clickable/bare URLs while preserving useful linked anchor text."""
     value = _MARKDOWN_LINK_RE.sub(lambda match: str(match.group(1) or "").strip(), str(text or ""))
@@ -480,6 +499,13 @@ class Publisher:
                     "publish", "removed non-actionable source/media URL from body",
                     channel_id=channel_id, article_id=article_id,
                 )
+        normalized_text = _publication_text_cleanup(current_text)
+        if normalized_text != current_text:
+            current_text = normalized_text
+            self.store.update_article(article_id, final_text=current_text)
+            article = self.store.get_article(article_id) or article
+            event("publish", "cleaned markup and dangling video labels",
+                  channel_id=channel_id, article_id=article_id)
         # Non-retryable hard stop. A model refusal, a one-word caption or
         # an active threat must never become a public post after an AI retry.
         from .editorial import hard_editorial_reject, prepublish_quality_issues
