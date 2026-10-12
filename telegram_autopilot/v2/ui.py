@@ -479,7 +479,7 @@ class SourceDialog(tk.Toplevel):
                         cursor = con.execute("INSERT INTO sources(channel_id,kind,name,url,enabled,priority) VALUES(?,?,?,?,1,?)", (self.channel_id, vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get())))
                         source_id = int(cursor.lastrowid)
                 self.store.set_source_strip_body_links(source_id, bool(strip_body_links.get()))
-                self.store.set_source_reader_fallback_enabled(source_id, bool(reader_fallback.get()))
+                self.store.set_source_reader_fallback_enabled(source_id, bool(reader_fallback.get()) and vars["Тип"].get() in {"rss", "page"})
                 saved["ok"] = True
                 win.destroy()
             except Exception as exc:
