@@ -2344,6 +2344,19 @@ class V2Store:
         row=self.get_article(article_id)
         if row is None:return False,"ARTICLE_MISSING"
         if str(row["decision"])!=str(Decision.PUBLISH) or str(row["stage"])!=str(Stage.READY):return False,"NOT_READY"
+        # Defense in depth: collection refresh or competing publisher callers
+        # must never bypass the persisted publication retry clock.
+        retry_at = str(row["next_retry_at"] or "").strip()
+        if retry_at:
+            try:
+                clock = datetime.fromisoformat(retry_at.replace("Z", "+00:00"))
+                if clock.tzinfo is None:
+                    clock = clock.replace(tzinfo=timezone.utc)
+                if clock.astimezone(timezone.utc) > datetime.now(timezone.utc):
+                    return False, "PUBLICATION_BACKOFF_ACTIVE"
+            except (ValueError, TypeError):
+                return False, "PUBLICATION_BACKOFF_INVALID"
+
         canonical=normalize_url(str(row["canonical_source_url"] or row["source_url"] or "").strip())
         if not canonical.startswith(("http://","https://")):return False,"SOURCE_MISSING"
         if canonical != str(row["canonical_source_url"] or ""):

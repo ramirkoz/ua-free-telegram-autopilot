@@ -414,6 +414,34 @@ def event_fingerprint_same_event(
     combines generic scientific names, concepts, rare terms, proper names, actions
     and normalized facts.
     """
+    # Precondition for fuzzy cross-publisher decisions: shared topical labels
+    # like "AI agents", "technology" and page footer vocabulary do not prove
+    # that two headlines describe the same concrete event. Exact identity
+    # remains valid, even when the headline was completely rewritten.
+    from .dedupe import _title_words
+    from .urlnorm import normalize_url
+    left_url = normalize_url(str(_value(current, "canonical_source_url", "") or _value(current, "source_url", "") or ""))
+    right_url = normalize_url(str(_value(candidate, "canonical_source_url", "") or _value(candidate, "source_url", "") or ""))
+    left_hash = str(_value(current, "content_hash", "") or "").strip()
+    right_hash = str(_value(candidate, "content_hash", "") or "").strip()
+    same_exact = bool(
+        (left_url and right_url and left_url == right_url)
+        or (left_hash and right_hash and left_hash == right_hash)
+    )
+    generic_headline = {
+        "ai", "agents", "agent", "new", "technology", "tech", "research",
+        "study", "could", "more", "first", "world", "helps", "what",
+        "reveals", "computer", "power", "using", "model", "models",
+    }
+    a_words = _title_words(current) - generic_headline
+    b_words = _title_words(candidate) - generic_headline
+    anchored = a_words & b_words
+    stem_anchor = any(
+        len(left) >= 6 and len(right) >= 6 and left[:6] == right[:6]
+        for left in a_words for right in b_words
+    )
+    if not same_exact and a_words and b_words and len(anchored) < 2 and not stem_anchor:
+        return False, "insufficient independent headline event identity anchors"
     same, reason = semantic_same_event(current, candidate)
     if same:
         return True, reason
@@ -491,24 +519,11 @@ def event_fingerprint_same_event(
                     f"concepts={len(shared)}/{containment:.2f} salient={len(salient_shared)}/{salient_containment:.2f}"
                 )
 
-    # 2.1.0: the same named real-world event can be retold in dramatically
-    # different language, especially when one publisher supplies a full report
-    # and the next only a short social summary. Strong long-form event terms
-    # plus the SAME named actor are more discriminative than text containment.
-    if (
-        shared_entities
-        and len(stats["shared_rare"]) >= 3
-        and len(salient_long_shared) >= 6
-        and len(salient_shared) >= 7
-        and len(shared) >= 9
-        and not commercial_profile
-    ):
-        return True, (
-            "named event with rare long-phrase corroboration "
-            f"entities={','.join(sorted(shared_entities))} "
-            f"rare={len(stats['shared_rare'])} long={len(salient_long_shared)}"
-        )
-
+    # 2.1.4: This broad lane merged unrelated pages sharing social-footer text
+    # (Facebook/Flipboard/Email) and, separately, independent AI-agent research.
+    # Exact URL/hash and high-precision subject/method lanes above remain active.
+    # Generic long phrases and named entities are NEVER sufficient on their own.
+    # Keep its shadow telemetry for evaluation instead of blocking new articles.
     # Repeated official public decisions are not new events simply because
     # another source repeats the same date, location and decision. Require
     # shared non-generic terms and matching numerical date to avoid merging
