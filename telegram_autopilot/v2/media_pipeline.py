@@ -35,6 +35,7 @@ class MediaBundle:
     declared_media_count: int = 0
     source_media_count: int = 0
     video_link: str = ""
+    video_links: tuple[str, ...] = ()
     gallery_detected: bool = False
     gallery_items_found: int = 0
     gallery_items_kept: int = 0
@@ -77,7 +78,14 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
         layout = json.loads(str(_v(article, "article_layout_json", "{}") or "{}"))
     except Exception:
         layout = {}
+    canonical_links: list[str] = []
     if isinstance(layout, dict):
+        from ..video_links import canonical_video_url, scoped_video_links
+        for candidate in list(layout.get("video_links") or []) + scoped_video_links(layout):
+            url = canonical_video_url(str(candidate))
+            if url and url not in canonical_links:
+                canonical_links.append(url)
+        video_embed_count = len(canonical_links)
         source_kind = str(layout.get("source_kind") or "")
         blocks = layout.get("blocks")
         if isinstance(blocks, list):
@@ -89,7 +97,7 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
                 if bool(block.get("gallery")):
                     gallery_detected = True
                     gallery_items_found += 1
-                if kind == "iframe":
+                if kind == "iframe" and not canonical_links:
                     video_embed_count += 1
                 if kind in {"image", "video"} and url:
                     raw_values.append(encode_media(kind, url))
@@ -142,6 +150,7 @@ def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24)
         gallery_detected=gallery_detected, gallery_items_found=gallery_items_found,
         gallery_items_kept=min(gallery_items_found, len(items)), video_embed_count=video_embed_count,
         web_media_source=web_media_source,
+        video_links=tuple(canonical_links[:10]),
     )
 
 
@@ -229,6 +238,7 @@ def build_publication_media_bundle(
         declared_media_count=len(chosen),
         source_media_count=len(chosen),
         video_link=video_link,
+        video_links=raw.video_links,
         gallery_detected=gallery_detected,
         gallery_items_found=gallery_items_found,
         gallery_items_kept=len(chosen) if gallery_detected else 0,
