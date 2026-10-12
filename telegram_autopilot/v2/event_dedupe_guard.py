@@ -420,6 +420,16 @@ def event_fingerprint_same_event(
     if reason.startswith("conflicting strong event/version/product codes"):
         return False, reason
 
+    # Cross-site template fragments ("Email", "Flipboard", "Subscribe") were
+    # classified as entities/rare phrases even when the two headlines share no
+    # actual event. Keep exact canonical URL/hash and scientific confirmations
+    # above, but never let whole-page boilerplate alone prove a new event.
+    from .dedupe import _title_words
+    left_title = _title_words(current)
+    right_title = _title_words(candidate)
+    if left_title and right_title and not (left_title & right_title):
+        return False, "event identity rejected: zero substantive headline anchors"
+
     same_source = int(_value(current, "source_id", 0) or 0) == int(_value(candidate, "source_id", 0) or -1)
     stats = _fingerprint_stats(current, candidate)
     shared = stats["shared"]
@@ -750,7 +760,9 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
         best_summary = ""
         for candidate in candidates:
             try:
-                if str(candidate["decision"]) == str(Decision.DUPLICATE):
+                # A rejected/expired article is not an authoritative published
+                # event; comparing it as a canonical source silences new news.
+                if str(candidate["decision"]) in {str(Decision.DUPLICATE), str(Decision.REJECT)}:
                     continue
             except Exception:
                 pass
