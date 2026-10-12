@@ -482,7 +482,7 @@ class Publisher:
                 )
         # Telegram receives plain text here; raw Markdown markers must not leak.
         # Only unwrap paired title-line bold tokens, never remove arbitrary stars.
-        formatted = re.sub(r"(?m)^(\\s*)\\*\\*(.{4,180}?)\\*\\*(\\s*)$", r"\\1\\2\\3", current_text)
+        formatted = re.sub(r"(?m)^(\s*)\*\*(.{4,180}?)\*\*(\s*)$", r"\1\2\3", current_text)
         if channel.mode == ChannelMode.MONITORING:
             formatted = clean_orphan_video_cues(formatted)
         if formatted != current_text:
