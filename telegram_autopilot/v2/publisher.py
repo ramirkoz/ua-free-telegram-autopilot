@@ -942,7 +942,7 @@ class Publisher:
                 "media", "captioned local media chunk published" if is_final_chunk else "local media chunk published",
                 channel_id=channel_id, article_id=article_id, source_media_count=source_media_count,
                 bundle_media_count=bundle.count, prepared_media_count=delivery_count,
-                published_media_count=len(media_ids), media_outcome="COMPLETE" if is_final_chunk else "PARTIAL",
+                published_media_count=len(media_ids), media_outcome=("VIDEO_LINK_ONLY" if is_final_chunk and verified_videos and all(m.kind == "image" for m in bundle.items) else "COMPLETE") if is_final_chunk else "PARTIAL",
                 caption_attached=is_final_chunk, source_message_ids=list(bundle.source_message_ids), upload_mode="multipart_local",
             )
             pending = pending[len(chunk):]
@@ -966,7 +966,7 @@ class Publisher:
             message_id=final_caption_message_id, message_ids=media_ids[:delivery_count],
             media_policy=policy, source_media_count=source_media_count, bundle_media_count=bundle.count,
             prepared_media_count=delivery_count, published_media_count=delivery_count,
-            media_outcome="COMPLETE", upload_mode="multipart_local", source_url=source_url,
+            media_outcome="VIDEO_LINK_ONLY" if verified_videos and all(m.kind == "image" for m in bundle.items) else "COMPLETE", video_link_count=len(verified_videos), upload_mode="multipart_local", source_url=source_url,
         )
         return "PUBLISHED"
 
