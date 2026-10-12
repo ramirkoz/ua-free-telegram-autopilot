@@ -99,22 +99,11 @@ _EMPTY_PROMO_LINE_RE = re.compile(
 
 
 def _publication_text_cleanup(text: str) -> str:
-    """Remove model Markdown artifacts and orphaned calls to action before QA.
-
-    Never invent or infer a destination from the wording of a source post.
-    """
+    """Remove visible model markup and orphaned video CTA, without inventing links."""
     value = str(text or "").strip()
-    # Telegram's outgoing text may use HTML entities, not Markdown bold.
-    # Raw asterisks were visible in the live Семенівська article #44567.
-    value = re.sub(r"(?<!\\w)\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*(?!\\w)", r"\\1", value)
-    value = re.sub(r"(?m)^\\s*\\*\\*(.+?)\\*\\*\\s*$", r"\\1", value)
-    # A call to watch/read/register without a real URL is not actionable.
-    value = re.sub(
-        r"(?imu)^\\s*(?:🎬\\s*)?(?:переглянути|дивитися|подивитися)\\s+відео\\s*[:：-]?\\s*$",
-        "", value,
-    )
-    value = re.sub(r"\\n{3,}", "\\n\\n", value).strip()
-    return value
+    value = re.sub(r"(?<!\w)\*\*(?=\S)(.+?)(?<=\S)\*\*(?!\w)", r"\1", value)
+    value = re.sub(r"(?imu)^\s*(?:🎬\s*)?(?:переглянути|дивитися|подивитися)\s+відео\s*[:：-]?\s*$", "", value)
+    return re.sub(r"\n{3,}", "\n\n", value).strip()
 
 
 def _strip_all_publication_links(text: str) -> str:
