@@ -341,7 +341,7 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         last = match.end()
     out.append(value[last:])
     cleaned = "".join(out)
-    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*(?:детальніше|деталі\s*/\s*реєстрація|деталі|реєстрація|читати|джерело|посилання)\s*[:：-]?\s*$", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return clean_orphan_video_cues(cleaned)
 
