@@ -460,17 +460,20 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
     existing = {(item.kind, _media_identity(item.url)) for item in body}
     if featured:
         existing.add((featured.kind, _media_identity(featured.url)))
-    for idx, raw in enumerate(fallback_urls[:24], start=1):
-        parsed = valid_public_media(raw)
-        if not parsed:
-            continue
-        kind, url = parsed
-        identity = (kind, _media_identity(url))
-        if identity in existing:
-            continue
-        existing.add(identity)
-        body.append(PreparedMedia(len(body) + 1, kind, url,
-                                  position=min(0.95, 0.75 + idx * 0.01)))
+    # An article-level layout may already have properly scoped body creatives.
+    # Do not mingle them with global page/RSS fallbacks from related stories.
+    if not body and featured is None:
+        for idx, raw in enumerate(fallback_urls[:24], start=1):
+            parsed = valid_public_media(raw)
+            if not parsed:
+                continue
+            kind, url = parsed
+            identity = (kind, _media_identity(url))
+            if identity in existing:
+                continue
+            existing.add(identity)
+            body.append(PreparedMedia(len(body) + 1, kind, url,
+                                      position=min(0.95, 0.75 + idx * 0.01)))
     return featured, body
 
 
@@ -505,9 +508,8 @@ def prepare_article_media(
             # marketing newsroom, generic metadata like "campaign creative" may
             # contain no title tokens even though the image is the subject of the
             # story. Keep it, but only after hard-noise and binary image checks.
-            if marketing_context and not semantic_ok:
-                featured.relevance_score = max(40.0, featured.relevance_score)
-                semantic_ok = True
+            # No blanket semantic bypass for marketing hero: unrelated
+            # sponsor/related-story images are otherwise marked valid.
             if featured.relevance_score < 35 or not semantic_ok:
                 featured = None
 
@@ -551,7 +553,7 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and (resolved.gallery or resolved.position <= 0.65):
+            if marketing_context and not semantic_ok and resolved.schema_verified and resolved.gallery:
                 # Commercial/editorial source media is already structurally scoped to the
                 # story by article_extractor. Explicit gallery items and ordinary body
                 # images may have weak/empty alt text, so lexical overlap is not a safe
@@ -574,7 +576,7 @@ def prepare_article_media(
             )
             video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
             semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
-            if marketing_context and (item.gallery or item.position <= 0.65):
+            if marketing_context and item.schema_verified and item.gallery:
                 semantic_ok = True
                 item.relevance_score = max(40.0, item.relevance_score)
             if not video_story and not semantic_ok:
