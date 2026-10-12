@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
+import ipaddress
 import re
 
 from .network import fetch_url, NetworkError
@@ -34,6 +35,11 @@ def eligible_article_url(url: str) -> bool:
         return False
     if host.endswith((".local", ".internal", ".localhost", ".onion")):
         return False
+    try:
+        ipaddress.ip_address(host)
+        return False  # Never send raw IP targets to the external reader.
+    except ValueError:
+        pass
     if not ("." in host and len(host) <= 253):
         return False
     return True
