@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -12,6 +13,7 @@ from .article_extractor import editorial_media_candidate, extract_article_conten
 from .models import CollectedArticle, Source
 from .media import encode_media
 from .network import NetworkError, fetch_url
+from .source_readers import read_with_jina
 
 
 class CollectorError(RuntimeError):
@@ -339,7 +341,7 @@ def parse_rss(xml_bytes: bytes) -> list[CollectedArticle]:
     return items
 
 
-def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0) -> CollectedArticle:
+def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0, reader_fallback_enabled: bool = False) -> CollectedArticle:
     if not item.url:
         return item
     try:
@@ -364,6 +366,30 @@ def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0) -> Collect
         item.media_urls = list(dict.fromkeys(preferred_media))[:24]
     except Exception:
         pass
+    # Only the operator-enabled original article URL may be relayed to Jina.
+    # Never replace verified native extraction or media with third-party text.
+    if reader_fallback_enabled and len(str(item.raw_text or "").strip()) < 250:
+        try:
+            fallback = read_with_jina(item.url, enabled=True, timeout=timeout)
+            if fallback is not None and len(fallback.text) > len(str(item.raw_text or "")):
+                item.raw_text = fallback.text
+                # Provenance is recorded for diagnostics without changing source URL.
+                try:
+                    layout = json.loads(str(item.article_layout_json or "{}"))
+                    if not isinstance(layout, dict):
+                        layout = {}
+                except (ValueError, TypeError):
+                    layout = {}
+                layout["source_reader"] = {
+                    "mode": "jina_fallback",
+                    "original_url": item.url,
+                    "external_reader": True,
+                }
+                item.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            # A failed optional reader must never turn a valid RSS/news item
+            # into an error or delay other sources beyond their own timeout.
+            pass
     return item
 
 
@@ -513,10 +539,11 @@ def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
             if not items:
                 continue
             deadline = time.monotonic() + 70.0
-            for item in items[:6]:
+            reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
+            for index, item in enumerate(items[:4] if reader_enabled else items[:6]):
                 if time.monotonic() >= deadline:
                     break
-                _enrich_article(item, timeout=12.0)
+                _enrich_article(item, timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and index < 2 and time.monotonic() < deadline - 20.0)
             return items[:40]
         except Exception:
             continue
@@ -600,7 +627,10 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if prior is None or score > prior[0]:
                     unique[key] = (score, order, url, text)
             scan_limit = max(8, min(120, int(page_candidate_scan_limit or 24)))
+            reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
             fetch_limit = max(4, min(40, int(page_fetch_limit or 8)))
+            if reader_enabled:
+                fetch_limit = min(fetch_limit, 2)
             candidates = sorted(unique.values(), key=lambda row: (-row[0], row[1]))[:scan_limit]
             result: list[CollectedArticle] = []
             deadline = time.monotonic() + 75.0
@@ -611,7 +641,7 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if score < -4:
                     continue
                 attempted += 1
-                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=12.0)
+                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and attempted <= 2 and time.monotonic() < deadline - 20.0)
                 if len(item.raw_text) < 250:
                     continue
                 result.append(item)

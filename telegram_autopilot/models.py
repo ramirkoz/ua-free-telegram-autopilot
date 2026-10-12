@@ -46,6 +46,7 @@ class Source:
     last_checked_at: str | None
     last_error: str | None
     priority: int = 50
+    reader_fallback_enabled: bool = False
 
 
 @dataclass(slots=True)

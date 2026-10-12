@@ -1379,6 +1379,34 @@ class V2Store:
                 (int(channel_id),),
             ))
 
+    def source_reader_fallback_enabled(self, source_id: int) -> bool:
+        """Explicit per-source opt-in. Never auto-enable for existing Data."""
+        with self.connect() as con:
+            row = con.execute("SELECT kind,legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
+        if row is None or str(row["kind"] or "") not in {"rss", "page"}:
+            return False
+        try:
+            value = json.loads(str(row["legacy_config_json"] or "{}"))
+        except (ValueError, TypeError):
+            return False
+        return bool(value.get("reader_jina_enabled") is True) if isinstance(value, dict) else False
+
+    def set_source_reader_fallback_enabled(self, source_id: int, enabled: bool) -> None:
+        with self.connect() as con:
+            row = con.execute("SELECT kind,legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
+            if row is None:
+                raise KeyError(source_id)
+            if enabled and str(row["kind"] or "") not in {"rss", "page"}:
+                raise ValueError("Jina Reader підтримує тільки вебсторінки та RSS")
+            try:
+                value = json.loads(str(row["legacy_config_json"] or "{}"))
+            except (ValueError, TypeError):
+                value = {}
+            if not isinstance(value, dict):
+                value = {}
+            value["reader_jina_enabled"] = bool(enabled)
+            con.execute("UPDATE sources SET legacy_config_json=? WHERE id=?", (json.dumps(value, ensure_ascii=False), int(source_id)))
+
     def source_strip_body_links(self, source_id: int) -> bool:
         with self.connect() as con:
             row = con.execute("SELECT legacy_config_json FROM sources WHERE id=?", (int(source_id),)).fetchone()
