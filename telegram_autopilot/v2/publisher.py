@@ -627,16 +627,22 @@ class Publisher:
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
-        if bundle.video_link and bundle.video_link not in attribution_urls:
+        verified_videos = list(dict.fromkeys(
+            [*getattr(bundle, "video_links", ()), *([bundle.video_link] if bundle.video_link else [])]
+        ))
+        if verified_videos:
             if attribution_labels is None:
                 count = len(attribution_urls)
-                attribution_labels = [
-                    "Джерело" if count == 1 else f"Джерело {idx + 1}"
-                    for idx in range(count)
-                ]
-            attribution_urls = [*attribution_urls, bundle.video_link]
-            attribution_labels = [*list(attribution_labels or []), "🎬 Відео"]
-            event("media", "video link attached to publication", channel_id=channel_id, article_id=article_id, video_url=bundle.video_link)
+                attribution_labels = ["Джерело" if count == 1 else f"Джерело {idx + 1}" for idx in range(count)]
+            attribution_labels = list(attribution_labels or [])
+            for idx, video_url in enumerate(verified_videos[:10]):
+                if video_url in attribution_urls:
+                    continue
+                attribution_urls = [*attribution_urls, video_url]
+                attribution_labels.append("🎬 Відео" if len(verified_videos) == 1 else f"🎬 Відео {idx + 1}")
+            event("media", "source-owned video links attached", channel_id=channel_id,
+                  article_id=article_id, video_link_count=len(verified_videos),
+                  video_urls=verified_videos[:10], video_embed_count=bundle.video_embed_count)
         else:
             try:
                 commercial_editorial = EditorialRuntimeProfile(str(channel.editorial_runtime_profile)) == EditorialRuntimeProfile.COMMERCIAL_EDITORIAL
