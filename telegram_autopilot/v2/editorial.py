@@ -185,6 +185,61 @@ _LIVE_THREAT_RE = re.compile(
 )
 
 
+_MONITORING_READER_RUMOR = re.compile(
+    r"(?iu)(?:\b(?:підписник[иаів]*|читач[іів]*|очевидц[іів]*|свідк[иів]*)\b"
+    r".{0,95}\b(?:повідом|пиш|розпов|каж|ствердж)|"
+    r"\b(?:зі\s+слів|за\s+словами)\s+(?:читач|підписник|очевидц|свідк)|"
+    r"\b(?:нам\s+пишуть|пишуть\s+нам|читачі\s+пишуть|пишуть\s+читачі))"
+)
+_MONITORING_PRIVATE_NOTICES = re.compile(
+    r"(?iu)(?:\b(?:загубил[аи]|загублен[аийі]|знайшли|чиї|чий)\b"
+    r".{0,85}\b(?:ключ[іи]|вейп|електронн\w*\s+сигарет|гаманець|телефон|собак|тварин)|"
+    r"\b(?:загубили\s+вейп|чий\s+малий\s+бігає|чия\s+собак))"
+)
+_MONITORING_UNOFFICIAL_POWER = re.compile(
+    r"(?iu)(?:зникло\s+світло|немає\s+світла|вимкнул\w*\s+світло|"
+    r"електрик\w*\s+вже\s+відновил\w*)"
+)
+_MONITORING_OFFICIAL_ORIGIN = re.compile(
+    r"(?iu)(?:військов\w*\s+адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад\w*|"
+    r"\b(?:ОВА|МВА|ДСНС|поліці\w*|міськрад\w*|обленерго|"
+    r"міністерств\w*|департамент\w*|комунальн\w*\s+установ\w*)\b)"
+)
+
+
+def _monitoring_official_context_reject(article: Any) -> str:
+    raw = str(_v(article, "raw_text", "") or "").strip()
+    source_name = str(_v(article, "source_name", "") or "").strip()
+    title = str(_v(article, "title", "") or "").strip()
+    # Title is not proof. The first source caption takes precedence.
+    if _MONITORING_READER_RUMOR.search(raw):
+        return "MONITORING_READER_RUMOR_NOT_OFFICIAL"
+    if _MONITORING_PRIVATE_NOTICES.search(raw):
+        return "MONITORING_PRIVATE_ANNOUNCEMENT"
+    if _MONITORING_UNOFFICIAL_POWER.search(raw) and not _MONITORING_OFFICIAL_ORIGIN.search(raw + " " + source_name):
+        return "MONITORING_UNVERIFIED_SERVICE_RUMOR"
+    # Headlines without independently verifiable factual content do not
+    # acquire meaning merely because a photo/video is attached.
+    if len(raw) < 95 and re.search(r"(?iu)\b(?:чий|чиї|малий|хтось|незнайом\w*)\b", raw):
+        return "MONITORING_AMBIGUOUS_CAPTION"
+    # Two unrelated lost-and-found objects in one stitched source are not
+    # a news event. The collector must not silently join their contacts.
+    if re.search(r"(?iu)\bключ[іи]\b", raw) and re.search(r"(?iu)\bвейп\b", raw):
+        return "MONITORING_MULTIPLE_INDEPENDENT_NOTICES"
+    # Explicit operator rule: only original institutional/community accounts,
+    # not aggregators reproducing eyewitness, subscriber, or reader messages.
+    # Empty names in migrated records are handled by the other source gates.
+    source_url = str(_v(article, "source_url", "") or "")
+    if source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
+        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
+        r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
+        r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
+        r"комунальн\w*\s+(?:заклад|установ|підприємств))", source_name
+    ):
+        return "MONITORING_SOURCE_NOT_OFFICIAL"
+    return ""
+
+
 def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") -> str:
     """Reasons for irreversible, non-AI publication rejection.
 
@@ -196,6 +251,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if channel.mode != ChannelMode.MONITORING:
         return ""
     source = _source_text(article).strip()
+    official_gate = _monitoring_official_context_reject(article)
+    if official_gate:
+        return official_gate
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
         return "MONITORING_CONTEXT_MISSING"
@@ -733,6 +791,9 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues: list[str] = []
     if not value:
         return ("порожній final_text",)
+    critical = hard_editorial_reject(channel, article, value)
+    if critical:
+        issues.append(critical)
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
