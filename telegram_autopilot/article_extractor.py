@@ -397,7 +397,7 @@ class _ArticleHTMLParser(HTMLParser):
                         "gallery": bool(self.in_gallery),
                     })
             elif tag == "iframe":
-                candidate = values.get("src") or values.get("data-src") or values.get("data-lazy-src") or ""
+                candidate = next((values.get(key) for key in ("src", "data-src", "data-lazy-src", "data-embed-url", "data-video-url", "data-url") if values.get(key)), "")
                 low = candidate.casefold()
                 if any(host in low for host in ("youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "player.vimeo.com")):
                     url = editorial_media_candidate(self.base_url, candidate, context=self._context())
@@ -1064,8 +1064,25 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
                 elif parser.featured_media:
                     provenance = "rejected_foreign"
 
+    # Bind article-scoped embed blocks to canonical watch links without relying
+    # on uploadable-media extraction or selecting unrelated page recommendations.
+    from .video_links import scoped_video_links
+    video_links = scoped_video_links({"blocks": blocks})
+    if parser.featured_video:
+        try:
+            featured_kind, featured_url = parser.featured_video.split("|", 1)
+        except ValueError:
+            featured_kind, featured_url = "", ""
+        if featured_kind == "iframe":
+            from .video_links import canonical_video_url
+            featured_watch = canonical_video_url(featured_url)
+            if featured_watch and featured_watch not in video_links:
+                video_links.insert(0, featured_watch)
+
     layout_json = json.dumps({
-        "version": 7,
+        "version": 8,
+        "video_links": video_links[:10],
+        "video_embed_count": len(video_links),
         "featured": selected_featured,
         "featured_video": parser.featured_video,
         "featured_meta": {
