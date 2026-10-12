@@ -298,12 +298,22 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
         if _explicit_registration_context(context):
             allowed.add(_url_identity(url))
     value = str(text or "")
+    # Repair only a URL prefix exactly attested by the original source. This
+    # catches an adjacent Ukrainian word concatenated to a valid forms.gle URL.
+    source_exact = [m.group(0).rstrip(".,;:!?") for m in _URL_RE.finditer(source)]
+    for url in source_exact:
+        if _url_identity(url) not in allowed:
+            continue
+        value = re.sub(re.escape(url) + r"(?=[А-Яа-яІіЇїЄєҐґ])" + r"[А-Яа-яІіЇїЄєҐґ]+", url, value)
     out: list[str] = []
     last = 0
+    seen_allowed: set[str] = set()
     for match in _URL_RE.finditer(value):
         out.append(value[last:match.start()])
-        if _url_identity(match.group(0)) in allowed:
+        identity = _url_identity(match.group(0))
+        if identity in allowed and identity not in seen_allowed:
             out.append(match.group(0))
+            seen_allowed.add(identity)
         last = match.end()
     out.append(value[last:])
     cleaned = "".join(out)
