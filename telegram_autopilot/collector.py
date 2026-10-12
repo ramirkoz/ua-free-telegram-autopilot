@@ -539,10 +539,11 @@ def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
             if not items:
                 continue
             deadline = time.monotonic() + 70.0
-            for index, item in enumerate(items[:6]):
+            reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
+            for index, item in enumerate(items[:4] if reader_enabled else items[:6]):
                 if time.monotonic() >= deadline:
                     break
-                _enrich_article(item, timeout=12.0, reader_fallback_enabled=bool(getattr(source, "reader_fallback_enabled", False)) and index < 2 and time.monotonic() < deadline - 20.0)
+                _enrich_article(item, timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and index < 2 and time.monotonic() < deadline - 20.0)
             return items[:40]
         except Exception:
             continue
@@ -626,7 +627,10 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if prior is None or score > prior[0]:
                     unique[key] = (score, order, url, text)
             scan_limit = max(8, min(120, int(page_candidate_scan_limit or 24)))
+            reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
             fetch_limit = max(4, min(40, int(page_fetch_limit or 8)))
+            if reader_enabled:
+                fetch_limit = min(fetch_limit, 2)
             candidates = sorted(unique.values(), key=lambda row: (-row[0], row[1]))[:scan_limit]
             result: list[CollectedArticle] = []
             deadline = time.monotonic() + 75.0
@@ -637,7 +641,7 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if score < -4:
                     continue
                 attempted += 1
-                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=12.0, reader_fallback_enabled=bool(getattr(source, "reader_fallback_enabled", False)) and attempted <= 2 and time.monotonic() < deadline - 20.0)
+                item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and attempted <= 2 and time.monotonic() < deadline - 20.0)
                 if len(item.raw_text) < 250:
                     continue
                 result.append(item)
