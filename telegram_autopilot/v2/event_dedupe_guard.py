@@ -437,7 +437,7 @@ def event_fingerprint_same_event(
     b_words = _title_words(candidate) - generic_headline
     anchored = a_words & b_words
     stem_anchor = any(
-        len(left) >= 5 and len(right) >= 5 and left[:5] == right[:5]
+        len(left) >= 7 and len(right) >= 7 and left[:7] == right[:7]
         for left in a_words for right in b_words
     )
     if not same_exact and a_words and b_words and len(anchored) < 2 and not stem_anchor:
