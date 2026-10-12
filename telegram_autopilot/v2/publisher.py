@@ -6,7 +6,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from ..secrets_store import load_secrets
-from ..fact_guard import strip_non_actionable_article_urls, strip_monitoring_nonform_urls
+from ..fact_guard import clean_orphan_video_cues, strip_non_actionable_article_urls, strip_monitoring_nonform_urls
 from ..facebook import FacebookError, publish_page_link
 from ..telegram import (
     TelegramError,
@@ -480,6 +480,17 @@ class Publisher:
                     "publish", "removed non-actionable source/media URL from body",
                     channel_id=channel_id, article_id=article_id,
                 )
+        # Telegram receives plain text here; raw Markdown markers must not leak.
+        # Only unwrap paired title-line bold tokens, never remove arbitrary stars.
+        formatted = re.sub(r"(?m)^(\\s*)\\*\\*(.{4,180}?)\\*\\*(\\s*)$", r"\\1\\2\\3", current_text)
+        if channel.mode == ChannelMode.MONITORING:
+            formatted = clean_orphan_video_cues(formatted)
+        if formatted != current_text:
+            current_text = formatted
+            self.store.update_article(article_id, final_text=current_text)
+            article = self.store.get_article(article_id) or article
+            event("publish", "normalized plain-text formatting and orphan video cues",
+                  channel_id=channel_id, article_id=article_id)
         # Non-retryable hard stop. A model refusal, a one-word caption or
         # an active threat must never become a public post after an AI retry.
         from .editorial import hard_editorial_reject, prepublish_quality_issues
