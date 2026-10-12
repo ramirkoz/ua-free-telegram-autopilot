@@ -345,7 +345,7 @@ def _article_title_identity(left: str, right: str) -> bool:
     """Reject enrichment from a different story, not merely weakly matching site terms."""
     import re
     def terms(value: str) -> set[str]:
-        return {w for w in re.findall(r"(?u)[^\\W_]{4,}", (value or "").casefold())
+        return {w for w in re.findall(r"(?u)[^\W_]{4,}", (value or "").casefold())
                 if w not in {"with", "from", "that", "this", "about", "what", "their", "news",
                              "campaign", "campaigns", "advertising", "official", "story", "more"}}
     a, c = terms(left), terms(right)
