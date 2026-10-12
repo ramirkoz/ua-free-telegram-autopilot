@@ -414,6 +414,30 @@ def event_fingerprint_same_event(
     combines generic scientific names, concepts, rare terms, proper names, actions
     and normalized facts.
     """
+    # Precondition for fuzzy cross-publisher decisions: shared topical labels
+    # like "AI agents", "technology" and page footer vocabulary do not prove
+    # that two headlines describe the same concrete event. Exact identity
+    # remains valid, even when the headline was completely rewritten.
+    from .dedupe import _title_words
+    from .urlnorm import normalize_url
+    left_url = normalize_url(str(_value(current, "canonical_source_url", "") or _value(current, "source_url", "") or ""))
+    right_url = normalize_url(str(_value(candidate, "canonical_source_url", "") or _value(candidate, "source_url", "") or ""))
+    left_hash = str(_value(current, "content_hash", "") or "").strip()
+    right_hash = str(_value(candidate, "content_hash", "") or "").strip()
+    same_exact = bool(
+        (left_url and right_url and left_url == right_url)
+        or (left_hash and right_hash and left_hash == right_hash)
+    )
+    generic_headline = {
+        "ai", "agents", "agent", "new", "technology", "tech", "research",
+        "study", "could", "more", "first", "world", "helps", "what",
+        "reveals", "computer", "power", "using", "model", "models",
+    }
+    a_words = _title_words(current) - generic_headline
+    b_words = _title_words(candidate) - generic_headline
+    anchored = a_words & b_words
+    if not same_exact and a_words and b_words and len(anchored) < 2:
+        return False, "insufficient independent headline event identity anchors"
     same, reason = semantic_same_event(current, candidate)
     if same:
         return True, reason
