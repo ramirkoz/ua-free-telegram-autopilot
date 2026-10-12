@@ -4,7 +4,7 @@ from telegram_autopilot.v2.editorial import restore_practical_literals
 
 SOURCE="https://forms.gle/ZurafEVbmhAytXxw8"
 def article():
-    return SimpleNamespace(raw_text="Шановні захисники! Заповніть анкету за посиланням: "+SOURCE+"\nІніціатива реалізується за підтримки партнерів", source_name="Терпіннівська громада", source_url="https://t.me/terpinne/99", title="Опитування ветеранів")
+    return {"raw_text":"Шановні захисники! Заповніть анкету за посиланням: "+SOURCE+"\nІніціатива реалізується за підтримки партнерів", "source_name":"Терпіннівська громада", "source_url":"https://t.me/terpinne/99", "title":"Опитування ветеранів"}
 
 def test_210_correct_existing_form_not_duplicated():
     a=article()
@@ -21,5 +21,5 @@ def test_210_polluted_form_suffix_repaired_not_appended():
     assert "Деталі/реєстрація" not in cleaned
 
 def test_210_news_channel_cannot_be_registration():
-    a=SimpleNamespace(raw_text="Читайте: https://t.me/five_redakcia",source_name="5 РЕДАКЦІЯ",source_url="https://t.me/five_redakcia/111211")
+    a={"raw_text":"Читайте: https://t.me/five_redakcia", "source_name":"5 РЕДАКЦІЯ", "source_url":"https://t.me/five_redakcia/111211"}
     assert "five_redakcia" not in strip_monitoring_nonform_urls(a,"Деталі/реєстрація: https://t.me/five_redakcia")
