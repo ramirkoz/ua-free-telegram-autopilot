@@ -399,11 +399,11 @@ class SourceDialog(tk.Toplevel):
         self.channel_id = channel_id
         self.on_saved = on_saved
         self.title("Джерела каналу")
-        self.geometry("820x460")
+        self.geometry("920x480")
         self.transient(master)
         self.grab_set()
-        self.tree = ttk.Treeview(self, columns=("id", "kind", "name", "url", "links", "enabled", "error"), show="headings")
-        for col, label, width in (("id", "ID", 55), ("kind", "Тип", 90), ("name", "Назва", 170), ("url", "URL", 270), ("links", "Посилання", 105), ("enabled", "Увімк.", 65), ("error", "Остання помилка", 200)):
+        self.tree = ttk.Treeview(self, columns=("id", "kind", "name", "url", "links", "reader", "enabled", "error"), show="headings")
+        for col, label, width in (("id", "ID", 55), ("kind", "Тип", 90), ("name", "Назва", 170), ("url", "URL", 270), ("links", "Посилання", 105), ("reader", "Jina", 55), ("enabled", "Увімк.", 65), ("error", "Остання помилка", 200)):
             self.tree.heading(col, text=label)
             self.tree.column(col, width=width, anchor="w")
         self.tree.pack(fill="both", expand=True, padx=10, pady=10)
@@ -422,7 +422,7 @@ class SourceDialog(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         for row in self.store.sources_for_channel(self.channel_id, enabled_only=False):
             links = "заборонені" if self.store.source_strip_body_links(int(row["id"])) else "дозволені"
-            self.tree.insert("", "end", iid=str(row["id"]), values=(row["id"], row["kind"], row["name"], row["url"], links, "так" if row["enabled"] else "ні", str(row["last_error"] or "")[:160]))
+            self.tree.insert("", "end", iid=str(row["id"]), values=(row["id"], row["kind"], row["name"], row["url"], links, "так" if self.store.source_reader_fallback_enabled(int(row["id"])) else "ні", "так" if row["enabled"] else "ні", str(row["last_error"] or "")[:160]))
         children = self.tree.get_children()
         target = wanted if wanted in children else (children[0] if children else "")
         if target:
@@ -455,6 +455,18 @@ class SourceDialog(tk.Toplevel):
             text="Прибирає URL і службові рядки з тексту, але нижнє «Читати у …» залишається.",
         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 8))
 
+        reader_fallback = tk.BooleanVar(
+            value=self.store.source_reader_fallback_enabled(int(row["id"])) if row else False
+        )
+        ttk.Checkbutton(
+            win,
+            text="Jina Reader: резервне читання лише цього RSS/вебджерела (передає публічні URL сторонньому сервісу)",
+            variable=reader_fallback,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4))
+        ttk.Label(
+            win, text="За замовчуванням вимкнено. Використовувати лише якщо звичайне читання не дало матеріалу.",
+        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 8))
+
         saved = {"ok": False}
 
         def save():
@@ -467,12 +479,13 @@ class SourceDialog(tk.Toplevel):
                         cursor = con.execute("INSERT INTO sources(channel_id,kind,name,url,enabled,priority) VALUES(?,?,?,?,1,?)", (self.channel_id, vars["Тип"].get(), vars["Назва"].get().strip(), vars["URL"].get().strip(), int(vars["Пріоритет"].get())))
                         source_id = int(cursor.lastrowid)
                 self.store.set_source_strip_body_links(source_id, bool(strip_body_links.get()))
+                self.store.set_source_reader_fallback_enabled(source_id, bool(reader_fallback.get()))
                 saved["ok"] = True
                 win.destroy()
             except Exception as exc:
                 messagebox.showerror("Помилка", str(exc), parent=win)
 
-        ttk.Button(win, text="Зберегти", command=save).grid(row=6, column=1, sticky="e", padx=8, pady=8)
+        ttk.Button(win, text="Зберегти", command=save).grid(row=8, column=1, sticky="e", padx=8, pady=8)
         self.wait_window(win)
         return saved["ok"]
 
