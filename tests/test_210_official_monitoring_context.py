@@ -32,9 +32,11 @@ def test_official_material_remains_eligible():
 
 
 def test_news_aggregator_without_official_source_is_rejected():
-    assert _monitoring_official_context_reject(item(
-        "У місті оголошено новий графік роботи пунктів підтримки", "ЗАПОРІЖЖЯ.INFO"
+    assert _monitoring_official_context_reject(SimpleNamespace(
+        raw_text="У місті оголошено новий графік роботи пунктів підтримки",
+        source_name="ЗАПОРІЖЖЯ.INFO", source_url="https://t.me/info_zp/168719"
     )) == "MONITORING_SOURCE_NOT_OFFICIAL"
-    assert _monitoring_official_context_reject(item(
-        "У районі тимчасово відсутнє світло, відновлення триває", "ЗаБор Запоріжжя"
+    assert _monitoring_official_context_reject(SimpleNamespace(
+        raw_text="У районі тимчасово відсутнє світло, відновлення триває",
+        source_name="ЗаБор Запоріжжя", source_url="https://t.me/zaborzp/153643"
     ))
