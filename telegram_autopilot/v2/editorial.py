@@ -207,7 +207,7 @@ _MONITORING_OFFICIAL_ORIGIN = re.compile(
 )
 
 
-def _monitoring_official_context_reject(article: Any) -> str:
+def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | None = None) -> str:
     raw = str(_v(article, "raw_text", "") or "").strip()
     source_name = str(_v(article, "source_name", "") or "").strip()
     title = str(_v(article, "title", "") or "").strip()
@@ -230,7 +230,12 @@ def _monitoring_official_context_reject(article: Any) -> str:
     # not aggregators reproducing eyewitness, subscriber, or reader messages.
     # Empty names in migrated records are handled by the other source gates.
     source_url = str(_v(article, "source_url", "") or "")
-    if source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
+    # This source-origin rule belongs to the channel configuration, not to the core.
+    source_policy = channel.policy.normalized_monitoring_source_policy() if channel is not None else "institutional"
+    if source_policy == "connected_original" and bool(_telegram_meta(article).get("forwarded")):
+        return "MONITORING_NOT_ORIGINAL_FORWARD"
+    require_institutional_name = source_policy == "institutional"
+    if require_institutional_name and source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
         r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
         r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
         r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
@@ -251,7 +256,7 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if channel.mode != ChannelMode.MONITORING:
         return ""
     source = _source_text(article).strip()
-    official_gate = _monitoring_official_context_reject(article)
+    official_gate = _monitoring_official_context_reject(article, channel)
     if official_gate:
         return official_gate
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
