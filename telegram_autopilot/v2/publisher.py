@@ -17,6 +17,7 @@ from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle, media_bundle_complete
+from .visual_media_dedupe import remove_visual_duplicates
 from .storage import V2Store, now_iso
 from .telegram_attribution import (
     build_attributed_post_text,
@@ -827,12 +828,14 @@ class Publisher:
         # Telegram never receives third-party URLs, eliminating WEBPAGE_CURL_FAILED
         # from CDN/hotlink restrictions and letting us dedupe exact binary clones.
         prepared, prepare_failures = prepare_telegram_media_list(bundle.encoded_items, timeout=35.0, heartbeat=heartbeat)
+        prepared, visual_duplicate_count = remove_visual_duplicates(prepared)
         duplicate_binary_count = max(0, bundle.count - len(prepared) - len(prepare_failures))
         event(
             "media", "media prepared for telegram upload", channel_id=channel_id, article_id=article_id,
             media_policy=policy, source_media_count=source_media_count, bundle_media_count=bundle.count,
             prepared_media_count=len(prepared), failed_media_count=len(prepare_failures),
-            binary_duplicates_removed=duplicate_binary_count, upload_mode="multipart_local",
+            binary_duplicates_removed=duplicate_binary_count - visual_duplicate_count,
+            visual_duplicates_removed=visual_duplicate_count, upload_mode="multipart_local",
             gallery_detected=bool(getattr(bundle,"gallery_detected",False)),
             gallery_items_found=int(getattr(bundle,"gallery_items_found",0) or 0),
             gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),
