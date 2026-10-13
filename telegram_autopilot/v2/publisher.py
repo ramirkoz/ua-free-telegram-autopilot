@@ -259,7 +259,22 @@ class Publisher:
             candidates = [value for value in candidates if valid_public_media(str(value))]
             if not candidates:
                 return article, current, "invalid_source_media"
-            self.store.update_article(int(article["id"]), media_json=json.dumps(candidates[:24], ensure_ascii=False), article_layout_json=refreshed.article_layout_json)
+            try:
+                existing_layout = json.loads(str(article["article_layout_json"] or "{}"))
+            except (TypeError, ValueError):
+                existing_layout = {}
+            if not isinstance(existing_layout, dict):
+                existing_layout = {}
+            # Retain immutable delivery and recovery metadata on READY articles.
+            # Import only source-owned media evidence from the refreshed page.
+            for key in ("featured", "featured_meta", "blocks", "video_links", "video_embed_count", "gallery_detected"):
+                if key in layout:
+                    existing_layout[key] = layout[key]
+            existing_layout["media_page_recovered"] = True
+            self.store.update_article(
+                int(article["id"]), media_json=json.dumps(candidates[:24], ensure_ascii=False),
+                article_layout_json=json.dumps(existing_layout, ensure_ascii=False),
+            )
             updated = self.store.get_article(int(article["id"]))
             if updated is None:
                 return article, current, "storage_missing"
