@@ -440,6 +440,38 @@ def event_fingerprint_same_event(
         len(left) >= 6 and len(right) >= 6 and left[:6] == right[:6]
         for left in a_words for right in b_words
     )
+    # Two publishers can headline the same incident by different scopes
+    # ("France" versus "Europe"). Permit a narrow factual exception to the
+    # headline-overlap precondition only when independently named actors,
+    # a matching quantitative fact, an action and substantive text all agree.
+    # This is a generic cross-source matcher, never a named-story/channel rule.
+    stats_early = _fingerprint_stats(current, candidate)
+    incident_entities = {
+        entity for entity in stats_early["shared_entities"]
+        if entity not in {"facebook", "twitter", "instagram", "youtube", "google",
+                          "telegram", "login", "register", "subscribe", "contact",
+                          "email", "advertising", "world", "media", "news"}
+    }
+    matched_numbers = {
+        round(float(a), 2) for a, b in stats_early["numeric_pairs"]
+        if float(a) >= 10 and abs(float(a) - float(b)) <= 0.01
+    }
+    cross_source_incident = (
+        int(_value(current, "source_id", 0) or 0) != int(_value(candidate, "source_id", 0) or 0)
+        and len(incident_entities) >= 2
+        and bool(matched_numbers)
+        and bool(stats_early["shared_actions"])
+        and len(stats_early["salient_shared"]) >= 5
+        and float(stats_early["salient_containment"]) >= 0.22
+        and len(stats_early["salient_long_shared"]) >= 3
+    )
+    if cross_source_incident:
+        return True, (
+            "cross-source incident actors+fact+action fingerprint "
+            f"actors={','.join(sorted(incident_entities))} "
+            f"numbers={','.join(map(str, sorted(matched_numbers)))} "
+            f"actions={','.join(sorted(stats_early['shared_actions']))}"
+        )
     if not same_exact and a_words and b_words and len(anchored) < 2 and not stem_anchor:
         return False, "insufficient independent headline event identity anchors"
     same, reason = semantic_same_event(current, candidate)
