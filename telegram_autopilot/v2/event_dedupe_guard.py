@@ -474,6 +474,29 @@ def event_fingerprint_same_event(
     shared_actions = stats["shared_actions"]
     shared_rare = stats["shared_rare"] if rare_terms else set()
 
+    # High-precision cross-publisher product/event lane. Large syndicated body
+    # boilerplate can drive whole-body containment down while two genuinely
+    # identical product stories share a named actor, an uncommon title object,
+    # and several independent source-owned facts. Never use a brand alone.
+    if commercial_profile and not same_source and shared_entities:
+        common_headline = left_title & right_title
+        named = {word.casefold() for word in shared_entities}
+        objects = {word for word in common_headline if len(word) >= 3 and word.casefold() not in named}
+        # Ignore generic commercial-story vocabulary, not the actor/object.
+        objects -= {"brand", "brands", "campaign", "marketing", "advertising", "launch", "launches", "news", "new", "makes", "drops"}
+        source_tokens = set(_concept_sequence(str(_value(current, "raw_text", "") or "")[:2200]))
+        candidate_tokens = set(_concept_sequence(str(_value(candidate, "raw_text", "") or "")[:2200]))
+        common_facts = (source_tokens & candidate_tokens) - {w.casefold() for w in common_headline} - named
+        if (
+            objects and len(common_facts) >= 4 and len(salient_shared) >= 6
+            and (len(salient_long_shared) >= 3 or len(common_facts) >= 7)
+        ):
+            return True, (
+                "cross-source actor+object+facts fingerprint "
+                f"entities={','.join(sorted(shared_entities))} "
+                f"objects={','.join(sorted(objects))} facts={len(common_facts)}"
+            )
+
     # Exact Latin binomials are high-information identifiers, but only channels that
     # explicitly enable the scientific-name fingerprint use this lane.
     if scientific_names and shared_scientific:
