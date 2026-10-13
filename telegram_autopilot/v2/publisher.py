@@ -228,6 +228,50 @@ class Publisher:
     def __init__(self, store: V2Store):
         self.store = store
 
+    def _recover_missing_source_media(self, channel: Any, article: Any, source_url: str, excluded_urls: set[str]) -> tuple[Any, Any, str]:
+        """One bounded source-page media refresh, without changing story identity.
+
+        This is a universal repair for editorial channels requiring media. Do not
+        use generic web image search or replace any user-authored content.
+        """
+        current = build_publication_media_bundle(channel, article, excluded_urls=excluded_urls)
+        if current.count or channel.policy.normalized_media_policy() != "required":
+            return article, current, "not_needed"
+        if channel.mode != ChannelMode.EDITORIAL or not source_url.startswith(("https://", "http://")):
+            return article, current, "not_eligible"
+        try:
+            from ..collector import hydrate_article_page, _article_title_identity
+            refreshed = hydrate_article_page(
+                source_url, title=str(article["title"] or ""),
+                raw_text=str(article["raw_text"] or ""), media_urls=[],
+            )
+            layout = json.loads(str(refreshed.article_layout_json or "{}"))
+            if not isinstance(layout, dict) or (layout.get("article_identity") or {}).get("status") == "MISMATCH":
+                return article, current, "identity_mismatch"
+            if not _article_title_identity(str(article["title"] or ""), str(refreshed.title or "")):
+                return article, current, "identity_mismatch"
+            # Only verified page-owned media is retained, not RSS ads or a new
+            # article's text. The existing source URL and final caption stay immutable.
+            candidates = list(refreshed.media_urls or [])
+            if not candidates:
+                return article, current, "no_source_media"
+            from ..media import valid_public_media
+            candidates = [value for value in candidates if valid_public_media(str(value))]
+            if not candidates:
+                return article, current, "invalid_source_media"
+            self.store.update_article(int(article["id"]), media_json=json.dumps(candidates[:24], ensure_ascii=False), article_layout_json=refreshed.article_layout_json)
+            updated = self.store.get_article(int(article["id"]))
+            if updated is None:
+                return article, current, "storage_missing"
+            recovered = build_publication_media_bundle(channel, updated, excluded_urls=excluded_urls)
+            if not recovered.count:
+                return updated, recovered, "filtered_by_media_policy"
+            return updated, recovered, "recovered"
+        except Exception as exc:
+            event("media", "source page recovery failed", level=30,
+                  channel_id=int(channel.id), article_id=int(article["id"]), detail=str(exc)[:250])
+            return article, current, "fetch_failed"
+
     def _media_recovery_plan(self, article: Any, bundle: Any, *, video_expected: bool = False) -> tuple[str, int | None, int]:
         """Classify missing required media as recoverable/probe/permanent."""
         article_id = int(article["id"] or 0)
@@ -624,6 +668,11 @@ class Publisher:
             bundle = build_publication_media_bundle(channel, article, excluded_urls=recurring)
         else:
             bundle = build_publication_media_bundle(channel, article)
+        if channel.policy.normalized_media_policy() == "required" and not bundle.count:
+            article, bundle, recovery_outcome = self._recover_missing_source_media(channel, article, source_url, recurring)
+            event("media", "source page media recovery", channel_id=channel_id,
+                  article_id=article_id, outcome=recovery_outcome,
+                  recovered_media_count=bundle.count)
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
