@@ -30,6 +30,7 @@ def _snapshot(*, ready_publishable=2, phase="publish", fresh=True, published=1):
 
 def _state(snapshot):
     supervisor = object.__new__(SupervisorService)
+    supervisor.store = SimpleNamespace(get_channel=lambda _cid: None)
     return supervisor._operational_states(snapshot, SupervisorConfig())["1"]["state"]
 
 
