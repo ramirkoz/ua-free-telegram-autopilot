@@ -527,11 +527,9 @@ def _trim_candidate_to_hard_limit(text: str, hard_max_chars: int, *, min_chars: 
     floor=max(80,int(min_chars)*2//3)
     if cut>=floor:
         return window[:cut+1].strip()
-    # Fallback to a word boundary rather than splitting a token.
-    cut=window.rfind(" ")
-    if cut>=floor:
-        return window[:cut].rstrip(" ,;:-")
-    return window[:limit].rstrip(" ,;:-")
+    # Never silently publish a word-boundary fragment such as "щоб вик".
+    # An incomplete candidate must go through generation retry/QA, not READY.
+    raise ValueError("Редакційний QA: немає завершеного речення в ліміті")
 
 
 def _rc111_prepare_candidate(
@@ -644,6 +642,13 @@ def validate_writer_output(
     invented = sorted(_number_tokens(value) - _number_tokens(source))
     if invented:
         raise ValueError("AI додав число, якого немає у джерелі: " + ", ".join(invented[:10]))
+    # 2.1.5: The operator's published Ledger article #47923 ended midway
+    # through "щоб вик". Never accept an unfinished generative fragment.
+    # The source footer is appended separately; body must end on a sentence.
+    if re.search(r"[А-Яа-яІіЇїЄєҐґA-Za-z0-9]$", value) and not re.search(
+        r"(?:https?://\\S+|[.!?…][\\)\\]»”'\"]*)$", value
+    ):
+        raise ValueError("Редакційний QA: незавершене речення або обірваний текст")
     if value.count("(") != value.count(")") or value.count("«") != value.count("»"):
         raise ValueError("Незакриті дужки/лапки")
     paragraphs = [" ".join(part.split()).strip() for part in re.split(r"\n+", value) if part.strip()]
