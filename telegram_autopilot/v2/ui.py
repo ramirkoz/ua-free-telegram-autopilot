@@ -68,6 +68,12 @@ ATTRIBUTION_MODE_LABELS = {
 }
 ATTRIBUTION_MODE_VALUES = {label: mode for mode, label in ATTRIBUTION_MODE_LABELS.items()}
 
+MONITORING_SOURCE_POLICY_LABELS = {
+    "institutional": "Лише інституційні/офіційні Telegram-джерела (як раніше)",
+    "connected_original": "Оригінали всіх підключених джерел; репости та чутки виключаються",
+}
+MONITORING_SOURCE_POLICY_VALUES = {label: mode for mode, label in MONITORING_SOURCE_POLICY_LABELS.items()}
+
 BODY_ATTRIBUTION_LABELS = {
     SourceBodyAttributionMode.FOOTER_ONLY: "Тільки футер: у тексті джерело не згадувати",
     SourceBodyAttributionMode.ALWAYS: "Дозволяти атрибуцію джерела в тексті",
@@ -228,6 +234,10 @@ class ChannelDialog(tk.Toplevel):
         self._text(p, 2, "Що включати", q.selection_rules, 7)
         self._text(p, 3, "Що виключати", q.rejection_rules, 7)
         self._text(p, 4, "Додатковий prompt selector", q.selector_extra_prompt, 4)
+        self._combo(p, 5, "Політика походження моніторингових джерел",
+            MONITORING_SOURCE_POLICY_LABELS.get(q.normalized_monitoring_source_policy(), MONITORING_SOURCE_POLICY_LABELS["institutional"]),
+            list(MONITORING_SOURCE_POLICY_VALUES))
+        ttk.Label(p, text="Діє лише для моніторингу. Оригінали підключених каналів не скасовують відхилення чуток, репостів та небезпечних оперативних повідомлень.", wraplength=760, foreground="#444").grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=8)
 
     def _build_editorial(self, p, cfg):
         q = cfg.policy
@@ -328,6 +338,7 @@ class ChannelDialog(tk.Toplevel):
                 writer_extra_prompt=self._get("Додатковий prompt writer"),
                 source_body_attribution_mode=BODY_ATTRIBUTION_VALUES.get(self._get("Атрибуція джерела в тексті"), SourceBodyAttributionMode.FOOTER_ONLY),
                 source_body_attribution_marker=self._get("Маркер у назві джерела для атрибуції"),
+                monitoring_source_policy=MONITORING_SOURCE_POLICY_VALUES.get(self._get("Політика походження моніторингових джерел"), "institutional"),
                 media_policy=self._get("Політика медіа"),
                 target_min_chars=int(self._get("Мін. символів")),
                 target_max_chars=int(self._get("Макс. символів")),
