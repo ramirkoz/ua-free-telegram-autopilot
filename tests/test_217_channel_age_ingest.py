@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
-from telegram_autopilot.v2.ingest import _stale_at_ingest, IngestService, CollectedArticle
+from telegram_autopilot.v2.ingest import _stale_at_ingest
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=timezone.utc)
 
@@ -30,3 +29,8 @@ def test_historical_dated_news_filtered():
 
 def test_future_dated_items_are_not_discarded_as_old():
     assert not _stale_at_ingest((NOW + timedelta(minutes=15)).isoformat(), 24, now=NOW)
+
+
+def test_rss_rfc2822_dates_are_filtered():
+    assert _stale_at_ingest("Wed, 26 Aug 2026 23:08:00 GMT", 24, now=NOW)
+    assert not _stale_at_ingest("Tue, 13 Oct 2026 09:30:00 +0000", 24, now=NOW)
