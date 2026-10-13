@@ -231,7 +231,11 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     # Empty names in migrated records are handled by the other source gates.
     source_url = str(_v(article, "source_url", "") or "")
     # This source-origin rule belongs to the channel configuration, not to the core.
-    source_policy = channel.policy.normalized_monitoring_source_policy() if channel is not None else "institutional"
+    # Legacy/injected policies may not expose the new domain method.
+    # Unknown modes retain the strict institutional behavior.
+    source_policy = str(getattr(getattr(channel, "policy", None), "monitoring_source_policy", "institutional") or "institutional").strip().casefold()
+    if source_policy not in {"institutional", "connected_original"}:
+        source_policy = "institutional"
     if source_policy == "connected_original" and bool(_telegram_meta(article).get("forwarded")):
         return "MONITORING_NOT_ORIGINAL_FORWARD"
     require_institutional_name = source_policy == "institutional"
