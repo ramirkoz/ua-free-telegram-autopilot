@@ -459,9 +459,20 @@ class SupervisorService:
             hb = self._parse_iso(str(state.get("heartbeat_at") or ""))
             fresh_heartbeat = hb is not None and now - hb <= cfg.worker_stale_seconds
             startup_grace = runtime_age < max(600.0, float(cfg.queue_stall_seconds))
+            # A full, publishable READY buffer intentionally pauses preparation
+            # during MIN_INTERVAL. A live publishing worker is not a stalled queue.
+            # Keep the warning for a blocked READY item or a dead/stale worker.
+            buffered_for_interval = bool(
+                fresh_heartbeat
+                and str(state.get("phase") or "") in {"publish", "idle"}
+                and int(stats.get("ready_publishable") or 0) >= 2
+                and int(stats.get("ready_permanent_blocked") or 0) == 0
+                and int(stats.get("published_60m") or 0) > 0
+            )
             true_stall = bool(
                 due > 0 and not startup_grace and last_job is not None
                 and now - last_job >= cfg.queue_stall_seconds
+                and not buffered_for_interval
             )
             if true_stall:
                 result[str(cid)] = {"state": "STALLED", "reasons": [f"no job activity for {int(now-last_job)}s"]}
