@@ -99,8 +99,14 @@ class ChannelPolicy:
     source_body_attribution_mode: SourceBodyAttributionMode = SourceBodyAttributionMode.FOOTER_ONLY
     source_body_attribution_marker: str = ""
     media_policy: str = "optional"
+    monitoring_source_policy: str = "institutional"
     target_min_chars: int = 300
     target_max_chars: int = 750
+
+    def normalized_monitoring_source_policy(self) -> str:
+        """Explicit per-channel monitoring source trust rule."""
+        value = str(self.monitoring_source_policy or "institutional").strip().casefold()
+        return value if value in {"institutional", "connected_original"} else "institutional"
 
     def normalized_media_policy(self) -> str:
         # RC112 same-version hotfix: operator configuration is authoritative.
