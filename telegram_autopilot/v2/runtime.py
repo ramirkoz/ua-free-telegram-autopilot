@@ -51,6 +51,7 @@ class ChannelRuntimeState:
     heartbeat_at: str = ""
     phase: str = "idle"
     phase_started_at: str = ""
+    last_ready_pause_notice_monotonic: float = 0.0
 
 
 
@@ -235,10 +236,15 @@ class RuntimeEngine:
                 can_publish, publish_reason = self.publisher.can_publish_now(channel_id)
                 if ready_count >= ready_buffer and not can_publish:
                     self._touch(state, "idle")
-                    event(
-                        "worker", "AI preparation paused by READY buffer",
-                        channel_id=channel_id, ready=ready_count, buffer=ready_buffer, reason=publish_reason,
-                    )
+                    # The same intentional pause may last several minutes.
+                    # Emit a heartbeat state every loop but keep event telemetry bounded.
+                    notice_now = time.monotonic()
+                    if notice_now - state.last_ready_pause_notice_monotonic >= 60.0:
+                        state.last_ready_pause_notice_monotonic = notice_now
+                        event(
+                            "worker", "AI preparation paused by READY buffer",
+                            channel_id=channel_id, ready=ready_count, buffer=ready_buffer, reason=publish_reason,
+                        )
                     self.stop_event.wait(1.0)
                     continue
 
