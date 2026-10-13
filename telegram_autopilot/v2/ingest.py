@@ -385,10 +385,31 @@ def collect(source: Source) -> list[CollectedArticle]:
 _GLOBAL_SOURCE_FETCH_LIMIT = threading.BoundedSemaphore(6)
 
 
+def _stale_at_ingest(published_at: str | None, max_age_hours: int, *, now: datetime | None = None) -> bool:
+    """Skip demonstrably old source items before database/AI work.
+
+    Unknown or malformed timestamps are *not* treated as old. Existing article
+    identity refresh and source-specific cutover checks remain authoritative.
+    The age window comes from this channel's persisted max_age_hours setting.
+    """
+    if not str(published_at or "").strip():
+        return False
+    try:
+        published = datetime.fromisoformat(str(published_at).strip().replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            return False  # An ambiguous local timestamp is not proof of staleness.
+        current = now or datetime.now(timezone.utc)
+        return (current - published.astimezone(timezone.utc)).total_seconds() > max(1, int(max_age_hours)) * 3600
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 class IngestService:
     def __init__(self,store: V2Store): self.store=store
     def collect_channel(self,channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str,int]:
-        added=seen=errors=skipped=0
+        added=seen=errors=skipped=stale_filtered=0
+        channel = self.store.get_channel(channel_id)
+        max_age_hours = int(channel.max_age_hours) if channel is not None else 24
 
         def beat() -> None:
             if heartbeat is not None:
@@ -422,6 +443,10 @@ class IngestService:
                     items,duration_ms=future.result(); seen+=len(items)
                     source_added=0
                     for item in items:
+                        if _stale_at_ingest(item.published_at, max_age_hours):
+                            # Avoid growing the DB and queue with expired RSS / Telegram history.
+                            stale_filtered += 1
+                            continue
                         media_json=json.dumps(list(item.media_urls or []),ensure_ascii=False,separators=(",",":"))
                         before=self._existing(channel_id,source.id,item.external_id,item.url)
                         self.store.insert_collected(channel_id=channel_id,source_id=source.id,external_id=item.external_id,title=item.title,source_url=item.url,raw_text=item.raw_text,content_hash=content_hash(item.title,item.raw_text),source_published_at=str(item.published_at or ""),media_json=media_json,article_layout_json=str(item.article_layout_json or "{}"))
@@ -450,7 +475,9 @@ class IngestService:
                     event("ingest","source collection failed",level=40,channel_id=channel_id,source_id=source.id,source=source.name,detail=str(exc)[:600],duration_ms=duration_ms,consecutive_failures=failures,cooldown_until=cooldown)
                 finally:
                     beat()
-        return {"seen":seen,"added":added,"errors":errors,"skipped_cooldown":skipped}
+        if stale_filtered:
+            event("ingest", "stale source items filtered", channel_id=channel_id, count=stale_filtered, max_age_hours=max_age_hours)
+        return {"seen":seen,"added":added,"errors":errors,"skipped_cooldown":skipped,"stale_filtered":stale_filtered}
     def _existing_reason(self,channel_id: int,source_id: int,external_id: str,url: str) -> str:
         with self.store.connect() as con:
             if con.execute("SELECT 1 FROM articles WHERE source_id=? AND external_id=?",(int(source_id),str(external_id))).fetchone() is not None:
