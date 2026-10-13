@@ -30,7 +30,7 @@ def row():
                                                                   "media_recovery": {"attempts": 3}}))
 
 
-def bundle(article, **kwargs):
+def bundle(channel, article, **kwargs):
     media = json.loads(article.get("media_json", "[]"))
     return SimpleNamespace(count=len(media))
 
