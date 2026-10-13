@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, Callable
 
@@ -395,12 +396,16 @@ def _stale_at_ingest(published_at: str | None, max_age_hours: int, *, now: datet
     if not str(published_at or "").strip():
         return False
     try:
-        published = datetime.fromisoformat(str(published_at).strip().replace("Z", "+00:00"))
+        raw = str(published_at).strip()
+        try:
+            published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            published = parsedate_to_datetime(raw)
         if published.tzinfo is None:
             return False  # An ambiguous local timestamp is not proof of staleness.
         current = now or datetime.now(timezone.utc)
         return (current - published.astimezone(timezone.utc)).total_seconds() > max(1, int(max_age_hours)) * 3600
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError, IndexError):
         return False
 
 
@@ -443,8 +448,9 @@ class IngestService:
                     items,duration_ms=future.result(); seen+=len(items)
                     source_added=0
                     for item in items:
-                        if _stale_at_ingest(item.published_at, max_age_hours):
-                            # Avoid growing the DB and queue with expired RSS / Telegram history.
+                        if _stale_at_ingest(item.published_at, max_age_hours) and not self._existing(channel_id, source.id, item.external_id, item.url):
+                            # Existing articles can still receive repaired media/layout.
+                            # Only newly discovered historical items are discarded.
                             stale_filtered += 1
                             continue
                         media_json=json.dumps(list(item.media_urls or []),ensure_ascii=False,separators=(",",":"))
