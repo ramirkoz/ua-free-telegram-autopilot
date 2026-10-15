@@ -295,10 +295,21 @@ def _denied_original_monitoring_source(channel: ChannelConfig, article: Any) -> 
     # Reposted/quoted original with explicit source link in payload.
     forwarded = bool(meta.get("forwarded") or meta.get("is_forwarded"))
     source_text = str(_v(article, "raw_text", "") or "")
-    if forwarded and any(match(url) for url in re.findall(
+    linked_origins = [(m.group(0), m.start()) for m in re.finditer(
         r"https?://(?:t\.me|telegram\.me)/[^\s<>]+", source_text, flags=re.I
-    )):
-        return True
+    ) if match(m.group(0))]
+    if linked_origins:
+        if forwarded:
+            return True
+        # Native Telegram "copy with attribution" can lose the forward flag.
+        # An original's link as the opening attribution (with only a few
+        # introductory glyphs) is evidence of a repost, not a local story.
+        if any(position <= 18 for _, position in linked_origins):
+            return True
+        # Text explicitly credited to the denied original by source link
+        # is also a copy, when it contains no independent local event detail.
+        if re.search(r"(?iu)(?:^|[—–,:])\s*(?:https?://t\.me/\S+\s*)?(?:зеленськ\w*|zelenskiy)", source_text):
+            return True
     return False
 
 
