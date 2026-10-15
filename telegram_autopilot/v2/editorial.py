@@ -249,6 +249,71 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     return ""
 
 
+def _denied_original_monitoring_source(channel: ChannelConfig, article: Any) -> bool:
+    """Block configured source origins, including forwarded posts, not incidental mentions.
+
+    A plain link inside a legitimate locally written news item is not by itself
+    proof that the entire item was forwarded. Only canonical publication origin,
+    Telegram forward metadata, or an explicit attribution repost are sufficient.
+    """
+    from urllib.parse import urlparse
+    if channel.mode != ChannelMode.MONITORING:
+        return False
+    raw = str(getattr(channel.policy, "monitoring_denied_origins", "") or "")
+    denied = {part.casefold().lstrip("@") for token in re.split(r"[,;\s]+", raw)
+              if (part := token.strip().strip("/").split("/")[-1])}
+    if not denied:
+        return False
+
+    def match(value: object) -> bool:
+        candidate = str(value or "").strip().lower()
+        if not candidate:
+            return False
+        if candidate.startswith("@"):
+            return candidate[1:] in denied
+        if candidate.startswith(("https://", "http://")):
+            parsed = urlparse(candidate)
+            if parsed.hostname not in {"t.me", "telegram.me", "www.t.me", "www.telegram.me"}:
+                return False
+            parts = [x for x in parsed.path.split("/") if x]
+            return bool(parts and parts[0].casefold() in denied)
+        return candidate.strip("@/") in denied
+
+    # Article source itself is the excluded original channel.
+    for key in ("source_url", "canonical_source_url"):
+        if match(_v(article, key, "")):
+            return True
+    meta = _telegram_meta(article)
+    # The collector may expose any of these provenance fields across formats.
+    for key in ("forward_from", "forward_from_chat", "forward_source_url",
+                "forward_origin", "forwarded_from", "origin_url", "original_source_url"):
+        value = meta.get(key)
+        if isinstance(value, dict):
+            value = value.get("username") or value.get("url") or value.get("source_url")
+        if match(value):
+            return True
+    # Reposted/quoted original with explicit source link in payload.
+    forwarded = bool(meta.get("forwarded") or meta.get("is_forwarded"))
+    source_text = str(_v(article, "raw_text", "") or "")
+    linked_origins = [(m.group(0), m.start()) for m in re.finditer(
+        r"https?://(?:t\.me|telegram\.me)/[^\s<>]+", source_text, flags=re.I
+    ) if match(m.group(0))]
+    if linked_origins:
+        if forwarded:
+            return True
+        # Native Telegram "copy with attribution" can lose the forward flag.
+        # An original's link as the opening attribution (with only a few
+        # introductory glyphs) is evidence of a repost, not a local story.
+        if any(position <= 18 for _, position in linked_origins):
+            return True
+        # Text explicitly credited to the denied original by source link
+        # is also a copy, when it contains no independent local event detail.
+        if any(re.search(r"(?u)[,:—–-]\s*$", source_text[max(0, position-12):position])
+               for _, position in linked_origins):
+            return True
+    return False
+
+
 def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") -> str:
     """Reasons for irreversible, non-AI publication rejection.
 
@@ -259,6 +324,8 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return "EDITORIAL_META_LEAK"
     if channel.mode != ChannelMode.MONITORING:
         return ""
+    if _denied_original_monitoring_source(channel, article):
+        return "MONITORING_REPOST_DENYLIST_SOURCE"
     source = _source_text(article).strip()
     official_gate = _monitoring_official_context_reject(article, channel)
     if official_gate:

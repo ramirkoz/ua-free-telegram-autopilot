@@ -1,0 +1,6 @@
+# Autopilot 2.1.13 — Monitoring original-source exclusions
+
+- Introduces a per-monitoring-channel configurable and persisted `monitoring_denied_origins` list, editable in channel policy settings. Existing monitoring channels with no custom list receive the operator-requested default `V_Zelenskiy_official` once on migration. Editorial channels and customized monitoring lists are untouched. No channel IDs or names hard-coded into the engine.
+- Denies the original Telegram source (direct post) or forwarded source when provenance metadata identifies a denied original, returning the exact reason `MONITORING_REPOST_DENYLIST_SOURCE` before editorial AI. URLs in an independently reported local news article are *not* by themselves treated as proof of a repost. Text copied without provenance may require a separate attribution/near-duplicate classifier.
+- Tests include direct channel post, metadata-identified forwards, forwarded source links, independent local post mentioning the source, and DB/UI persistence.
+- This update does not promise fixed all English leakage, text-image relevance, or crop-based duplicate images; those remain separate quality tasks. Previously published posts are never deleted or reposted. Normal Codex-independent startup and 30-minute monitoring from 2.1.12 remain.
