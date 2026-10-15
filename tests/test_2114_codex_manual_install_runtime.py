@@ -20,7 +20,6 @@ def test_manual_install_uses_bundled_runtime_not_gui(tmp_path):
         raise RuntimeError("Test intercepted pip")
 
     with patch.object(codex_engine.sys, "executable", str(gui)), \
-         patch.object(codex_engine.os, "name", "nt"), \
          patch.object(codex_engine, "_runtime_root", return_value=tmp_path), \
          patch.object(codex_engine.subprocess, "run", side_effect=run):
         with pytest.raises(RuntimeError, match="intercepted"):
