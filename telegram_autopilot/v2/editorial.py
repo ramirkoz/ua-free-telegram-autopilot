@@ -493,8 +493,8 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     # simultaneous facts. Ask editor to keep the current settled status only.
     low_output = text.casefold()
     opposite_phases = (
-        (r"\\b(?:перекрит\\w*|закрит\\w*)", r"\\b(?:відновлен\\w*|відкрит\\w*|рух\\s+відновлено)"),
-        (r"\\b(?:скасован\\w*|скасували)", r"\\b(?:триває|діє|запроваджено)"),
+        (r"\b(?:перекрит\w*|закрит\w*)", r"\b(?:відновлен\w*|відкрит\w*|рух\s+відновлено)"),
+        (r"\b(?:скасован\w*|скасували)", r"\b(?:триває|діє|запроваджено)"),
     )
     if any(re.search(old, low_output, re.I) and re.search(new, low_output, re.I)
            for old, new in opposite_phases):
