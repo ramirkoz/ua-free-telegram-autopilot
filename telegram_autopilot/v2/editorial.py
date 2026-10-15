@@ -260,7 +260,7 @@ def _denied_original_monitoring_source(channel: ChannelConfig, article: Any) -> 
     if channel.mode != ChannelMode.MONITORING:
         return False
     raw = str(getattr(channel.policy, "monitoring_denied_origins", "") or "")
-    denied = {part.casefold().lstrip("@") for token in re.split(r"[,;\\s]+", raw)
+    denied = {part.casefold().lstrip("@") for token in re.split(r"[,;\s]+", raw)
               if (part := token.strip().strip("/").split("/")[-1])}
     if not denied:
         return False
@@ -296,7 +296,7 @@ def _denied_original_monitoring_source(channel: ChannelConfig, article: Any) -> 
     forwarded = bool(meta.get("forwarded") or meta.get("is_forwarded"))
     source_text = str(_v(article, "raw_text", "") or "")
     if forwarded and any(match(url) for url in re.findall(
-        r"https?://(?:t\\.me|telegram\\.me)/[^\\s<>]+", source_text, flags=re.I
+        r"https?://(?:t\.me|telegram\.me)/[^\s<>]+", source_text, flags=re.I
     )):
         return True
     return False
