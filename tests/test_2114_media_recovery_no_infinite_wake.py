@@ -7,7 +7,7 @@ def test_identical_media_snapshot_does_not_wake_permanent_ready(tmp_path):
     store = V2Store(tmp_path / "autopilot.sqlite3")
     with store.connect() as con:
         con.execute("INSERT INTO channels(id,name,telegram_chat_id,channel_mode,created_at,updated_at) VALUES(2,'Editor','@target','editorial','now','now')")
-        con.execute("INSERT INTO sources(id,channel_id,name,url,created_at,updated_at) VALUES(131,2,'Test Source','https://example.test/feed','now','now')")
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url) VALUES(131,2,'rss','Test Source','https://example.test/feed')")
     kw = dict(channel_id=2, source_id=131, external_id="item-7", title="Test",
               source_url="https://example.test/story-7", raw_text="Text", media_json=json.dumps(["https://example.test/img7.jpg"]),
               article_layout_json="{}")
@@ -24,7 +24,7 @@ def test_new_media_snapshot_wakes_permanent_ready(tmp_path):
     store = V2Store(tmp_path / "autopilot.sqlite3")
     with store.connect() as con:
         con.execute("INSERT INTO channels(id,name,telegram_chat_id,channel_mode,created_at,updated_at) VALUES(2,'Editor','@target','editorial','now','now')")
-        con.execute("INSERT INTO sources(id,channel_id,name,url,created_at,updated_at) VALUES(131,2,'Test Source','https://example.test/feed','now','now')")
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url) VALUES(131,2,'rss','Test Source','https://example.test/feed')")
     kw = dict(channel_id=2, source_id=131, external_id="item-7", title="Test",
               source_url="https://example.test/story-7", raw_text="Text",
               media_json=json.dumps(["https://example.test/img7.jpg"]), article_layout_json="{}")
