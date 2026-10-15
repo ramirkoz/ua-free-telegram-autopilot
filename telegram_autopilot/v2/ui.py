@@ -238,6 +238,7 @@ class ChannelDialog(tk.Toplevel):
             MONITORING_SOURCE_POLICY_LABELS.get(q.normalized_monitoring_source_policy(), MONITORING_SOURCE_POLICY_LABELS["institutional"]),
             list(MONITORING_SOURCE_POLICY_VALUES))
         ttk.Label(p, text="Діє лише для моніторингу. Оригінали підключених каналів не скасовують відхилення чуток, репостів та небезпечних оперативних повідомлень.", wraplength=760, foreground="#444").grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=8)
+        self._text(p, 7, "Заборонені оригінальні Telegram-джерела (username або URL)", q.monitoring_denied_origins, 3)
 
     def _build_editorial(self, p, cfg):
         q = cfg.policy
@@ -339,6 +340,7 @@ class ChannelDialog(tk.Toplevel):
                 source_body_attribution_mode=BODY_ATTRIBUTION_VALUES.get(self._get("Атрибуція джерела в тексті"), SourceBodyAttributionMode.FOOTER_ONLY),
                 source_body_attribution_marker=self._get("Маркер у назві джерела для атрибуції"),
                 monitoring_source_policy=MONITORING_SOURCE_POLICY_VALUES.get(self._get("Політика походження моніторингових джерел"), "institutional"),
+                monitoring_denied_origins=self._get("Заборонені оригінальні Telegram-джерела (username або URL)"),
                 media_policy=self._get("Політика медіа"),
                 target_min_chars=int(self._get("Мін. символів")),
                 target_max_chars=int(self._get("Макс. символів")),
