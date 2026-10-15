@@ -1972,13 +1972,17 @@ class V2Store:
                             refreshed_media = _clean_media_json(str(media_json or "[]")) if is_telegram_snapshot else _merge_media_json(str(row["media_json"] or "[]"), str(media_json or "[]"))
                             refreshed_layout = _refresh_layout(str(row["article_layout_json"] or "{}"), str(article_layout_json or "{}"))
                             media_ready = _media_json_count(refreshed_media) > 0
+                            # A refreshed feed must bring NEW media evidence to wake a permanently
+                            # blocked READY article. Identical candidates failed the final gate
+                            # already; blindly waking them caused 100+ infinite retry loops.
+                            genuinely_new_media = media_ready and refreshed_media != str(row["media_json"] or "[]")
                             clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
                             prior_error = str(row["last_error_code"] or "")
                             refreshed_video_ok = _telegram_video_recovery(refreshed_layout) in {"direct_video", "exact_post_video"} and _media_json_has_video(refreshed_media)
                             clear_media_block = (
                                 (prior_error == "TELEGRAM_MEDIA_REFRESH_REQUIRED" and clean_telegram_snapshot)
                                 or (prior_error == "TELEGRAM_VIDEO_PENDING" and refreshed_video_ok)
-                                or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and media_ready)
+                                or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and genuinely_new_media)
                             )
                             clear_flag = 1 if clear_media_block else 0
                             if stage == str(Stage.READY):
