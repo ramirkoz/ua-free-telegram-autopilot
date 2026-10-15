@@ -345,15 +345,15 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     # 2.1.16: bare threat-level bulletins are live alerts, not news.
     # Preserve separate factual reports about consequences and official actions.
     danger_level = re.search(
-        r"(?iu)(?:рівень\\s+(?:небезпек\\w*|загроз\\w*)|"
-        r"(?:небезпек\\w*|загроз\\w*)\\s+рівень)"
-        r"[^.!?\\n]{0,90}?(?:підвищ\\w*|зниж\\w*|червон\\w*|помаранчев\\w*|жовт\\w*)"
-        r"|(?:підвищ\\w*|зниж\\w*)[^.!?\\n]{0,55}рівень\\s+(?:небезпек\\w*|загроз\\w*)",
+        r"(?iu)(?:рівень\s+(?:небезпек\w*|загроз\w*)|"
+        r"(?:небезпек\w*|загроз\w*)\s+рівень)"
+        r"[^.!?\n]{0,90}?(?:підвищ\w*|зниж\w*|червон\w*|помаранчев\w*|жовт\w*)"
+        r"|(?:підвищ\w*|зниж\w*)[^.!?\n]{0,55}рівень\s+(?:небезпек\w*|загроз\w*)",
         clean,
     )
     if danger_level and not _RESULT_FACT_RE.search(clean) and not re.search(
-        r"(?iu)\\b(?:евакуац\\w*|відкри\\w*\\s+укритт\\w*|перекри\\w*\\s+дорог\\w*|"
-        r"запровад\\w*\\s+(?:обмеженн\\w*|заход\\w*)|пошкоджен\\w*|поранен\\w*)\\b",
+        r"(?iu)\b(?:евакуац\w*|відкри\w*\s+укритт\w*|перекри\w*\s+дорог\w*|"
+        r"запровад\w*\s+(?:обмеженн\w*|заход\w*)|пошкоджен\w*|поранен\w*)\b",
         clean,
     ):
         return "MONITORING_LIVE_DANGER_LEVEL"
@@ -987,10 +987,10 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         # while the returned explanation explicitly ordered rejection.
         # Fail closed for explicit English/Ukrainian reject instructions only.
         rationale_reject = bool(re.search(
-            r"(?iu)(?:\\bshould\\s+be\\s+rejected\\b|\\bmust\\s+be\\s+rejected\\b|"
-            r"\\bshould\\s+not\\s+be\\s+published\\b|\\bmust\\s+not\\s+be\\s+published\\b|"
-            r"\\b(?:слід|треба|необхідно)\\s+відхилити\\b|"
-            r"\\bне\\s+(?:можна|слід|варто)\\s+публікувати\\b)",
+            r"(?iu)(?:\bshould\s+be\s+rejected\b|\bmust\s+be\s+rejected\b|"
+            r"\bshould\s+not\s+be\s+published\b|\bmust\s+not\s+be\s+published\b|"
+            r"\b(?:слід|треба|необхідно)\s+відхилити\b|"
+            r"\bне\s+(?:можна|слід|варто)\s+публікувати\b)",
             reason,
         ))
         rejected = excluded or (bool(inclusion) and not included) or rationale_reject
