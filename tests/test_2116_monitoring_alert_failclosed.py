@@ -53,3 +53,41 @@ def test_text_album_not_touched_by_alert_policy():
     result = stitch_adjacent_telegram_media("community", rows)
     assert len(result) == 1
     assert len(result[0].media_urls) == 1
+
+
+def test_ai_selector_reason_reject_overrides_structured_publish():
+    from types import SimpleNamespace
+    from telegram_autopilot.v2.domain import Decision
+
+    class FakeGateway:
+        def run(self, prompt, **kwargs):
+            return SimpleNamespace(
+                text='{"included": true, "excluded": false, "reason": "This is an ongoing air alert and should be rejected."}',
+                provider="openrouter", model="mistralai/mistral-nemo",
+            )
+
+    engine = object.__new__(EditorialEngine)
+    engine.gateway = FakeGateway()
+    row = _article("У громаді сьогодні відкрили новий центр підтримки.")
+    outcome = engine._select_monitoring(_channel(), row)
+    assert outcome.decision == Decision.REJECT
+    assert outcome.fit_score == 0
+
+
+def test_clean_ai_selector_publish_remains_allowed():
+    from types import SimpleNamespace
+    from telegram_autopilot.v2.domain import Decision
+
+    class FakeGateway:
+        def run(self, prompt, **kwargs):
+            return SimpleNamespace(
+                text='{"included": true, "excluded": false, "reason": "Confirmed public opening with factual details."}',
+                provider="openrouter", model="mistralai/mistral-nemo",
+            )
+
+    engine = object.__new__(EditorialEngine)
+    engine.gateway = FakeGateway()
+    outcome = engine._select_monitoring(
+        _channel(), _article("У громаді відкрили центр підтримки жителів.")
+    )
+    assert outcome.decision == Decision.PUBLISH
