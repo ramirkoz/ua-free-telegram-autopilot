@@ -49,8 +49,8 @@ def test_policy_persists_and_one_time_migration(tmp_path):
     with db.connect() as con:
         con.execute("INSERT INTO channels(id,name,telegram_chat_id,channel_mode,created_at,updated_at) VALUES(123,'Monitor','@test','monitoring','now','now')")
         con.execute("INSERT INTO channels(id,name,telegram_chat_id,channel_mode,created_at,updated_at) VALUES(124,'Editor','@test2','editorial','now','now')")
-        con.execute("INSERT INTO channel_policies(channel_id) VALUES(123)")
-        con.execute("INSERT INTO channel_policies(channel_id) VALUES(124)")
+        con.execute("INSERT INTO channel_policies(channel_id,updated_at) VALUES(123,'now')")
+        con.execute("INSERT INTO channel_policies(channel_id,updated_at) VALUES(124,'now')")
         con.execute("DELETE FROM meta WHERE key='v2113_monitor_denied_origins_default_v1'")
         V2Store._ensure_v2113_monitoring_denied_origins(con)
         assert con.execute("SELECT monitoring_denied_origins FROM channel_policies WHERE channel_id=123").fetchone()[0] == "V_Zelenskiy_official"
