@@ -45,7 +45,7 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
                 j += 1
             if j < len(ordered):
                 primary = ordered[j]
-                if str(primary.text or "").strip() and not primary.media and base._adjacent(run[-1], primary):
+                if str(primary.text or "").strip() and base._adjacent(run[-1], primary):
                     attached = list(run)
                     k = j + 1
                     previous = primary
