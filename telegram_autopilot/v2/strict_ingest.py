@@ -253,6 +253,8 @@ class StrictTelegramParser(base.TelegramParser):
         ignorable_outer_avatar = {
             "tgme_widget_message_user_photo", "tgme_widget_message_author_photo",
             "tgme_widget_message_owner_photo", "tgme_widget_message_from_photo",
+            "user_photo", "author_photo", "owner_photo", "sender_photo",
+            "message_author_photo",
         }
         non_avatar_hard = hard_markers - ignorable_outer_avatar
         if hard_on_element or self._contains_marker(candidate_classes, non_avatar_hard) or (
