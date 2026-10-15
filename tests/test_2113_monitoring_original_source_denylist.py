@@ -33,6 +33,15 @@ def test_forwarded_link_attribution():
     assert hard_editorial_reject(channel(), item) == "MONITORING_REPOST_DENYLIST_SOURCE"
 
 
+def test_real_copy_with_attribution_without_forward_flag():
+    # An imported original-channel link can be the entire repost context even
+    # when the Telegram collector reports forwarded=false (observed Data case).
+    item = article("https://t.me/community_admin/24610",
+        text="https://t.me/V_Zelenskiy_official/21370 Цінуємо всю допомогу Сполученого Королівства.",
+        metadata={"source_username": "community_admin", "forwarded": False, "forwarded_from": ""})
+    assert hard_editorial_reject(channel(), item) == "MONITORING_REPOST_DENYLIST_SOURCE"
+
+
 def test_source_mention_in_local_original_not_automatically_denied():
     item = article("https://t.me/community_official/999",
                    text="Міська рада повідомила про місцевий захід. Канал https://t.me/V_Zelenskiy_official згадано лише як посилання.")
