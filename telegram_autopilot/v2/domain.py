@@ -100,6 +100,7 @@ class ChannelPolicy:
     source_body_attribution_marker: str = ""
     media_policy: str = "optional"
     monitoring_source_policy: str = "institutional"
+    monitoring_denied_origins: str = ""
     target_min_chars: int = 300
     target_max_chars: int = 750
 
