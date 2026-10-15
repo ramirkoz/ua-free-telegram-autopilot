@@ -110,9 +110,22 @@ class StrictTelegramParser(base.TelegramParser):
         values = {str(k).casefold(): str(v or "") for k, v in attrs}
         local = self._classes(values)
         path_local = set(local)
-        for _, ancestor_classes in self.stack[-1:]:
-            path_local.update(ancestor_classes)
+        # A content image can be nested more than one element below its
+        # photo/group wrapper.  Walk inward-out so a known media wrapper is
+        # not lost, while keeping outer channel avatars out of the candidate.
+        for _, ancestor_classes in reversed(self.stack):
+            classes_here = set(ancestor_classes)
+            path_local.update(classes_here)
+            if self._contains_marker(classes_here, self._DIRECT_CONTENT_MEDIA_MARKERS):
+                break
+            # Stop at message root or surrounding chrome: never grant an
+            # ordinary avatar the media proof of a distant sibling.
+            if "tgme_widget_message" in classes_here:
+                break
+            if self._contains_marker(classes_here, self._NON_CONTENT_MEDIA_MARKERS - self._SOFT_PREVIEW_MARKERS):
+                break
         self._strict_candidate_classes = path_local
+        self._strict_element_classes = local
 
         # Current Telegram HTML sometimes lazy-loads video URLs outside ``src``.
         # Capture direct media attributes while the candidate still belongs to this
@@ -154,6 +167,7 @@ class StrictTelegramParser(base.TelegramParser):
             super()._handle_start(tag, attrs, self_closing=self_closing)
         finally:
             self._strict_candidate_classes = set()
+            self._strict_element_classes = set()
 
     def _remember_preview_fallback(self, kind: str, url: str) -> None:
         """Keep one exact-post preview candidate as a last-resort image.
@@ -226,14 +240,28 @@ class StrictTelegramParser(base.TelegramParser):
             return
 
         hard_markers = set(self._NON_CONTENT_MEDIA_MARKERS) - set(self._SOFT_PREVIEW_MARKERS)
-        if self._contains_marker(candidate_classes, hard_markers):
-            self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
-            return
-
+        element_classes = set(getattr(self, "_strict_element_classes", set()) or set())
         direct_content = (
             self._contains_marker(candidate_classes, self._DIRECT_CONTENT_MEDIA_MARKERS)
             or self._generic_direct_content(candidate_classes)
         )
+        # Telegram can place a real photo wrapper inside the channel's
+        # user-photo wrapper. The latter is an ancestor, not proof that the
+        # candidate itself is an avatar. Still reject the avatar element and
+        # true reply/reaction/logo chrome even if media is near it.
+        hard_on_element = self._contains_marker(element_classes, hard_markers)
+        ignorable_outer_avatar = {
+            "tgme_widget_message_user_photo", "tgme_widget_message_author_photo",
+            "tgme_widget_message_owner_photo", "tgme_widget_message_from_photo",
+            "user_photo", "author_photo", "owner_photo", "sender_photo",
+            "message_author_photo",
+        }
+        non_avatar_hard = hard_markers - ignorable_outer_avatar
+        if hard_on_element or self._contains_marker(candidate_classes, non_avatar_hard) or (
+            self._contains_marker(candidate_classes, ignorable_outer_avatar) and not direct_content
+        ):
+            self.current["discarded_non_content"] = int(self.current.get("discarded_non_content") or 0) + 1
+            return
         soft_preview = self._contains_marker(candidate_classes, self._SOFT_PREVIEW_MARKERS)
         if not direct_content and soft_preview:
             self._remember_preview_fallback(kind, url)
