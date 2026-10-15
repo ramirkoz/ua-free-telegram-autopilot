@@ -15,6 +15,20 @@ from . import ingest as base
 from . import strict_ingest
 
 
+
+def _safe_bundle_adjacent(left: base.TelegramEntry, right: base.TelegramEntry) -> bool:
+    """Require source timestamps before borrowing media from a neighbouring post.
+
+    A consecutive Telegram ID alone does not establish that two messages belong
+    to one editorial package. Missing/malformed dates previously bypassed the
+    five-minute limit in base._adjacent and could associate an unrelated photo.
+    Exact-post media remains unaffected.
+    """
+    if base._entry_dt(left) is None or base._entry_dt(right) is None:
+        return False
+    return base._adjacent(left, right)
+
+
 def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
     ordered = sorted(
         entries,
@@ -40,16 +54,16 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
         if media_only(current):
             run = [current]
             j = i + 1
-            while j < len(ordered) and media_only(ordered[j]) and base._adjacent(run[-1], ordered[j]):
+            while j < len(ordered) and media_only(ordered[j]) and _safe_bundle_adjacent(run[-1], ordered[j]):
                 run.append(ordered[j])
                 j += 1
             if j < len(ordered):
                 primary = ordered[j]
-                if str(primary.text or "").strip() and not primary.media and base._adjacent(run[-1], primary):
+                if str(primary.text or "").strip() and not primary.media and _safe_bundle_adjacent(run[-1], primary):
                     attached = list(run)
                     k = j + 1
                     previous = primary
-                    while k < len(ordered) and media_only(ordered[k]) and base._adjacent(previous, ordered[k]):
+                    while k < len(ordered) and media_only(ordered[k]) and _safe_bundle_adjacent(previous, ordered[k]):
                         attached.append(ordered[k])
                         previous = ordered[k]
                         k += 1
@@ -64,7 +78,7 @@ def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEnt
             attached: list[base.TelegramEntry] = []
             j = i + 1
             previous = current
-            while j < len(ordered) and media_only(ordered[j]) and base._adjacent(previous, ordered[j]):
+            while j < len(ordered) and media_only(ordered[j]) and _safe_bundle_adjacent(previous, ordered[j]):
                 attached.append(ordered[j])
                 previous = ordered[j]
                 j += 1
