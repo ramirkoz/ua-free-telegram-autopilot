@@ -292,7 +292,7 @@ def install_codex() -> str:
     # In frozen/portable builds sys.executable is the GUI launcher, not Python.
     # Calling it with -m pip relaunches Autopilot and trips the singleton guard.
     executable = Path(sys.executable)
-    if os.name == "nt" and executable.name.casefold() == "ua_free_telegram_autopilot.exe":
+    if executable.name.casefold() == "ua_free_telegram_autopilot.exe":
         runtime_python = executable.with_name("_runtime_console.exe")
         if not runtime_python.is_file():
             raise CodexEngineError("Не знайдено вбудований Python runtime (_runtime_console.exe). Встановлення Codex неможливе.")
