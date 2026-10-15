@@ -25,3 +25,13 @@ def test_monitoring_cadence_migration_changes_only_old_default(tmp_path):
         assert [(v[0], v[1]) for v in got] == [(1,30),(2,15),(3,45)]
         V2Store._ensure_v2112_monitoring_poll_interval(con)
         assert con.execute("SELECT poll_interval_minutes FROM channels WHERE id=1").fetchone()[0] == 30
+
+
+def test_monitoring_edit_rejects_simultaneously_closed_and_restored_road():
+    from telegram_autopilot.v2.editorial import _monitoring_grounding_blockers
+    article = {"title": "Дорожні роботи", "raw_text": "О 14:00 проїзд перекрили. О 15:00 рух відновили."}
+    bad = "Бульвар тимчасово перекритий. Рух уже відновлено."
+    issues = _monitoring_grounding_blockers(article, bad)
+    assert any("фази події" in issue for issue in issues)
+    good = "Рух бульваром відновлено."
+    assert not any("фази події" in issue for issue in _monitoring_grounding_blockers(article, good))
