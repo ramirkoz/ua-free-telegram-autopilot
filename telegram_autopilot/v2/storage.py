@@ -381,6 +381,7 @@ class V2Store:
                 self._ensure_rc115_ai_usage_columns(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
+                self._ensure_v2112_monitoring_poll_interval(con)
                 con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(V2_SCHEMA_VERSION),))
 
     @staticmethod
@@ -480,6 +481,23 @@ class V2Store:
             "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, "1"),
         )
+
+    @staticmethod
+    def _ensure_v2112_monitoring_poll_interval(con: sqlite3.Connection) -> None:
+        """One-time operator-requested 30-minute monitoring cadence.
+
+        Only monitoring channels at the previous 15-minute baseline change.
+        Explicitly customized channel intervals remain untouched.
+        """
+        key = "v2112_monitoring_30m_v1"
+        if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
+            return
+        con.execute(
+            "UPDATE channels SET poll_interval_minutes=30,updated_at=? "
+            "WHERE channel_mode='monitoring' AND poll_interval_minutes=15",
+            (now_iso(),),
+        )
+        con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, "1"))
 
     @staticmethod
     def _ensure_source_attribution_mode(con: sqlite3.Connection) -> None:
