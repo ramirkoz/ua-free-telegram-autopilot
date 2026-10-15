@@ -489,6 +489,16 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     source = _source_text(article).casefold()
     text = str(value or "")
     issues: list[str] = list(_source_grounding_night_issues(article, text))
+    # Do not summarize different phases of a rapidly changing situation as
+    # simultaneous facts. Ask editor to keep the current settled status only.
+    low_output = text.casefold()
+    opposite_phases = (
+        (r"\b(?:перекрит\w*|закрит\w*)", r"\b(?:відновлен\w*|відкрит\w*|рух\s+відновлено)"),
+        (r"\b(?:скасован\w*|скасували)", r"\b(?:триває|діє|запроваджено)"),
+    )
+    if any(re.search(old, low_output, re.I) and re.search(new, low_output, re.I)
+           for old, new in opposite_phases):
+        issues.append("змішано завершену та поточну фази події; потрібен лише останній підтверджений стан")
     for match in _ABSENCE_FILLER_RE.finditer(text):
         fragment = " ".join(match.group(0).split()).casefold()
         if fragment not in source and not any(token in source for token in ("не надан", "відсутн", "невідом")):

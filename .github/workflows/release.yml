@@ -230,7 +230,12 @@ jobs:
                   return False
 
           if os.path.basename(sys.executable).casefold() == 'ua_free_telegram_autopilot.exe':
-              _first_run_setup()
+              # Optional Codex provisioning must NEVER gate UI/import/runtime.
+              # Explicit bootstrap-only mode remains available to release QA;
+              # operator may configure Codex later without delaying startup.
+              if os.environ.get('UA_FREE_CODEX_BOOTSTRAP_ONLY', '') == '1':
+                  _first_run_setup()
+                  os._exit(0)
               from telegram_autopilot.v2.main import main
               os._exit(int(main() or 0))
           '@ | Set-Content (Join-Path $stage 'sitecustomize.py') -Encoding utf8
