@@ -308,7 +308,8 @@ def _denied_original_monitoring_source(channel: ChannelConfig, article: Any) -> 
             return True
         # Text explicitly credited to the denied original by source link
         # is also a copy, when it contains no independent local event detail.
-        if re.search(r"(?iu)(?:^|[—–,:])\s*(?:https?://t\.me/\S+\s*)?(?:зеленськ\w*|zelenskiy)", source_text):
+        if any(re.search(r"(?u)[,—–:]\\s*$", source_text[max(0, position-12):position])
+               for _, position in linked_origins):
             return True
     return False
 
