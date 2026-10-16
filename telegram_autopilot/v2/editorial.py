@@ -215,16 +215,16 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     # The disallowed material is unverified citizen-submitted reporting,
     # NOT reporting created by an independent local newsroom.
     citizen_claim = bool(_MONITORING_READER_RUMOR.search(raw) or re.search(
-        r"(?iu)(?:\\b(?:місцеві|жителі|мешканці|люди)\\s+"
-        r"(?:пишуть|повідомляють|кажуть|стверджують|розповідають)\\b|"
-        r"\\b(?:за\\s+словами|зі\\s+слів)\\s+"
-        r"(?:місцевих|мешканців|жителів|очевидців)\\b)",
+        r"(?iu)(?:\b(?:місцеві|жителі|мешканці|люди)\s+"
+        r"(?:пишуть|повідомляють|кажуть|стверджують|розповідають)\b|"
+        r"\b(?:за\s+словами|зі\s+слів)\s+"
+        r"(?:місцевих|мешканців|жителів|очевидців)\b)",
         raw,
     ))
     confirmed_independently = bool(re.search(
-        r"(?iu)(?:(?:офіційно\\s+)?підтвердил\\w*|"
-        r"(?:поліція|ДСНС|ОВА|МВА|міська\\s+рада|обласна\\s+адміністрація)"
-        r"[^.!?\\n]{0,95}?(?:повідомил\\w*|підтвердил\\w*))",
+        r"(?iu)(?:(?:офіційно\s+)?підтвердил\w*|"
+        r"(?:поліція|ДСНС|ОВА|МВА|міська\s+рада|обласна\s+адміністрація)"
+        r"[^.!?\n]{0,95}?(?:повідомил\w*|підтвердил\w*))",
         raw,
     ))
     if citizen_claim and not confirmed_independently:
