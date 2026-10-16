@@ -1929,6 +1929,27 @@ class V2Store:
             'pricing_snapshot':'rc109-2026-10-06-reference',
         }
 
+    def archive_permanent_missing_media(self, article_id: int, *, detail: str) -> None:
+        """Terminal fail-closed publication outcome.
+
+        Do not leave an unpublishable READY article eligible for repeated
+        reactivation by refreshed RSS gallery candidates. No text-only fallback
+        is permitted when the channel requires source-owned media.
+        """
+        with self.connect() as con:
+            con.execute(
+                """UPDATE articles
+                   SET stage='ARCHIVED', decision='REJECT', blocked_by='MEDIA',
+                       reject_reason=?, last_error_code='MEDIA_REQUIRED_PERMANENT',
+                       last_error_detail=?, next_retry_at=''
+                   WHERE id=? AND stage='READY' AND decision='PUBLISH'""",
+                (
+                    "Не знайдено придатного медіа джерела після обмежених повторних спроб.",
+                    str(detail)[:2000],
+                    int(article_id),
+                ),
+            )
+
     def publication_backoff(
         self,
         article_id: int,
