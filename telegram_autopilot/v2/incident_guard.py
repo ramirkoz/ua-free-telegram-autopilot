@@ -21,7 +21,7 @@ def _is_strike_injury(text: str) -> bool:
 
 def _region(text: str) -> str:
     low = str(text or "").casefold()
-    if "запоріж" in low:
+    if "запорі" in low:
         return "zaporizhzhia"
     return ""
 
