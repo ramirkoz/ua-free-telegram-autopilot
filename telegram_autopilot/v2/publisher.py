@@ -782,7 +782,10 @@ class Publisher:
         if policy == "required" and not bundle.count:
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
             detail = f"Політика каналу вимагає валідне медіа; media_recovery={classification}; attempt={media_attempt}"
-            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_REQUIRED", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
+            if classification == "permanent":
+                self.store.archive_permanent_missing_media(article_id, detail=detail)
+            else:
+                self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_REQUIRED", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
             event(
                 "media", "required media missing at final publication gate", level=30, channel_id=channel_id, article_id=article_id,
                 source_media_count=source_media_count, bundle_media_count=0, media_recovery=classification,
@@ -792,7 +795,10 @@ class Publisher:
         if policy == "required" and not media_bundle_complete(bundle):
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
             detail = f"Джерело має {source_media_count} медіа, але до publication bundle дійшло {bundle.count}; media_recovery={classification}; attempt={media_attempt}."
-            self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_INCOMPLETE", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
+            if classification == "permanent":
+                self.store.archive_permanent_missing_media(article_id, detail=detail)
+            else:
+                self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code="MEDIA_INCOMPLETE", detail=detail, retry_seconds=retry_seconds, count_attempt=False)
             event(
                 "media", "required media bundle incomplete", level=40, channel_id=channel_id, article_id=article_id,
                 source_media_count=source_media_count, bundle_media_count=bundle.count, media_recovery=classification,
