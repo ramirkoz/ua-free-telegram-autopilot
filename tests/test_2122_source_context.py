@@ -12,3 +12,6 @@ def test_banter_has_no_reportable_event():
 
 def test_newsroom_factual_report_remains_eligible():
     assert not _check("У Запоріжжі відкрили новий центр соціальної підтримки для місцевих родин.")
+
+def test_current_attack_message_has_no_verified_outcome():
+    assert _check('РСЗВ криють Комишуваху/Юр’ївку') == 'MONITORING_ACTIVE_ATTACK_WARNING'
