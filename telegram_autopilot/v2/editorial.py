@@ -931,6 +931,31 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
     return value + suffix
 
 
+# 2.1.23: Monitoring posts must not send truncated source/AI fragments.
+# Examine sentence endings rather than banning legitimate short traffic reports.
+_DANGLING_MONITORING_TAIL_RE = re.compile(
+    r"(?iu)(?:^|\s)(?:і|й|та|або|але|бо|що|щоб|на|у|в|до|від|по|про|для|із|зі|"
+    r"цей|ця|це|ці|тих|цих|того|такого|тех|який|яка|яке|які)\s*[.!?…]*$"
+)
+
+
+def monitoring_fragment_quality_issues(text: str) -> tuple[str, ...]:
+    """Conservative final-only check for broken sentences, not stylistic rewriting."""
+    value = str(text or "").strip()
+    if not value:
+        return ()
+    # Telegram posts may contain emoji, multiple paragraphs and a source footer.
+    body = re.split(r"(?im)^\s*(?:читати\s+у|джерело\s*:|https?://)", value, maxsplit=1)[0]
+    sentences = re.split(r"(?<=[.!?…])\s+|\n+", body)
+    for sentence in sentences:
+        sentence = sentence.strip(" \t\r\n•🚨🔴⚠️")
+        if not sentence:
+            continue
+        if _DANGLING_MONITORING_TAIL_RE.search(sentence):
+            return ("MONITORING_BROKEN_SENTENCE_TAIL",)
+    return ()
+
+
 def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -> tuple[str, ...]:
     """Final deterministic gate at the publication boundary.
 
@@ -951,6 +976,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     source_policy = _source_body_policy_issues(channel, article, value)
     issues.extend(source_policy)
     if channel.mode == ChannelMode.MONITORING:
+        issues.extend(monitoring_fragment_quality_issues(value))
         issues.extend(_monitoring_grounding_blockers(article, value))
     try:
         body_hard_max = source_body_hard_limit(channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX)
