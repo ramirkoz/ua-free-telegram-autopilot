@@ -642,6 +642,24 @@ class Publisher:
                 article_id=article_id, reason=critical,
             )
             return critical
+        # LIVE 58853/58855: short newsroom summaries of the same reported
+        # local strike must not both appear as independent channel posts.
+        # Compare only previously committed posts from this exact monitoring
+        # channel, within a short window, before any Telegram API call.
+        if channel.mode == ChannelMode.MONITORING:
+            from .incident_guard import recent_community_incident_duplicate
+            incident_duplicate = recent_community_incident_duplicate(
+                self.store, channel_id, article_id, article
+            )
+            if incident_duplicate:
+                self.store.mark_duplicate(
+                    article_id, incident_duplicate,
+                    f"Previously published matching local incident #{incident_duplicate}",
+                )
+                event("publish", "monitoring incident duplicate blocked",
+                      channel_id=channel_id, article_id=article_id,
+                      duplicate_of=incident_duplicate)
+                return "DUPLICATE_PUBLISHED"
         qa_issues = prepublish_quality_issues(channel, article, current_text)
         if qa_issues:
             detail = "; ".join(qa_issues[:6])
