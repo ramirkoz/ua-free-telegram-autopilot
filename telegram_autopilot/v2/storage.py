@@ -368,6 +368,7 @@ class V2Store:
                 self._ensure_monitoring_source_policy(con)
                 self._ensure_v2113_monitoring_denied_origins(con)
                 self._ensure_v2118_community_news_sources(con)
+                self._ensure_v2120_archive_stale_permanent_media(con)
                 self._ensure_facebook_channel_settings(con)
                 self._ensure_channel_dedupe_settings(con)
                 self._ensure_rc59_channel_runtime_settings(con)
@@ -1928,6 +1929,56 @@ class V2Store:
             'by_purpose':purposes,
             'pricing_snapshot':'rc109-2026-10-06-reference',
         }
+
+    @staticmethod
+    def _ensure_v2120_archive_stale_permanent_media(con: sqlite3.Connection) -> None:
+        """Migrate legacy unpublishable READY rows, do not wake bogus galleries."""
+        key = "v2120_archive_permanent_media_v1"
+        if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
+            return
+        rows = con.execute(
+            """SELECT id,article_layout_json FROM articles
+               WHERE stage='READY' AND decision='PUBLISH'
+                 AND last_error_code IN ('MEDIA_REQUIRED','MEDIA_INCOMPLETE')
+                 AND blocked_by='MEDIA'"""
+        ).fetchall()
+        for row in rows:
+            try:
+                recovery = json.loads(str(row["article_layout_json"] or "{}")).get("media_recovery", {})
+                permanent = (str(recovery.get("classification") or "") == "permanent"
+                             or int(recovery.get("attempts") or 0) > 4)
+            except (ValueError, TypeError, AttributeError):
+                permanent = False
+            if not permanent:
+                continue
+            con.execute(
+                """UPDATE articles SET stage='ARCHIVED',decision='REJECT',
+                   blocked_by='MEDIA',reject_reason='No publishable source-owned media',
+                   last_error_code='MEDIA_REQUIRED_PERMANENT',next_retry_at=''
+                   WHERE id=? AND stage='READY'""", (int(row["id"]),),
+            )
+        con.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (key,"1"))
+
+    def archive_permanent_missing_media(self, article_id: int, *, detail: str) -> None:
+        """Terminal fail-closed publication outcome.
+
+        Do not leave an unpublishable READY article eligible for repeated
+        reactivation by refreshed RSS gallery candidates. No text-only fallback
+        is permitted when the channel requires source-owned media.
+        """
+        with self.connect() as con:
+            con.execute(
+                """UPDATE articles
+                   SET stage='ARCHIVED', decision='REJECT', blocked_by='MEDIA',
+                       reject_reason=?, last_error_code='MEDIA_REQUIRED_PERMANENT',
+                       last_error_detail=?, next_retry_at=''
+                   WHERE id=? AND stage='READY' AND decision='PUBLISH'""",
+                (
+                    "Не знайдено придатного медіа джерела після обмежених повторних спроб.",
+                    str(detail)[:2000],
+                    int(article_id),
+                ),
+            )
 
     def publication_backoff(
         self,
