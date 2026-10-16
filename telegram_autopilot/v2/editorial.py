@@ -934,8 +934,8 @@ def restore_practical_literals(article: Any, text: str, *, hard_max_chars: int) 
 # 2.1.23: Monitoring posts must not send truncated source/AI fragments.
 # Examine sentence endings rather than banning legitimate short traffic reports.
 _DANGLING_MONITORING_TAIL_RE = re.compile(
-    r"(?iu)(?:^|\\s)(?:і|й|та|або|але|бо|що|щоб|на|у|в|до|від|по|про|для|із|зі|"
-    r"цей|ця|це|ці|тих|цих|того|такого|тех|який|яка|яке|які)\\s*[.!?…]*$"
+    r"(?iu)(?:^|\s)(?:і|й|та|або|але|бо|що|щоб|на|у|в|до|від|по|про|для|із|зі|"
+    r"цей|ця|це|ці|тих|цих|того|такого|тех|який|яка|яке|які)\s*[.!?…]*$"
 )
 
 
@@ -945,10 +945,10 @@ def monitoring_fragment_quality_issues(text: str) -> tuple[str, ...]:
     if not value:
         return ()
     # Telegram posts may contain emoji, multiple paragraphs and a source footer.
-    body = re.split(r"(?im)^\\s*(?:читати\\s+у|джерело\\s*:|https?://)", value, maxsplit=1)[0]
-    sentences = re.split(r"(?<=[.!?…])\\s+|\\n+", body)
+    body = re.split(r"(?im)^\s*(?:читати\s+у|джерело\s*:|https?://)", value, maxsplit=1)[0]
+    sentences = re.split(r"(?<=[.!?…])\s+|\n+", body)
     for sentence in sentences:
-        sentence = sentence.strip(" \\t\\r\\n•🚨🔴⚠️")
+        sentence = sentence.strip(" \t\r\n•🚨🔴⚠️")
         if not sentence:
             continue
         if _DANGLING_MONITORING_TAIL_RE.search(sentence):
