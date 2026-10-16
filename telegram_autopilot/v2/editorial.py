@@ -346,6 +346,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if official_gate:
         return official_gate
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
+    if re.search(r"(?iu)\b(?:рсзв|окупанти)\b.{0,70}\b(?:криють|гатять|обстрілюють)\b", clean) and not _RESULT_FACT_RE.search(clean):
+        return "MONITORING_ACTIVE_ATTACK_WARNING"
+    if len(clean) < 90 and re.search(r"(?iu)розважа\w*[,! ]{0,8}як\s+можемо", clean):
+        return "MONITORING_BANTER_NOT_NEWS"
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
         return "MONITORING_CONTEXT_MISSING"
     # A photo/video caption cannot stand in for reading the video. When it
