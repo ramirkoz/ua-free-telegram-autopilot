@@ -367,6 +367,7 @@ class V2Store:
                 self._ensure_source_body_attribution_policy(con)
                 self._ensure_monitoring_source_policy(con)
                 self._ensure_v2113_monitoring_denied_origins(con)
+                self._ensure_v2118_community_news_sources(con)
                 self._ensure_facebook_channel_settings(con)
                 self._ensure_channel_dedupe_settings(con)
                 self._ensure_rc59_channel_runtime_settings(con)
@@ -539,6 +540,31 @@ class V2Store:
         columns = {str(row[1]) for row in con.execute("PRAGMA table_info(channel_policies)")}
         if "monitoring_source_policy" not in columns:
             con.execute("ALTER TABLE channel_policies ADD COLUMN monitoring_source_policy TEXT NOT NULL DEFAULT 'institutional'")
+
+    @staticmethod
+    def _ensure_v2118_community_news_sources(con: sqlite3.Connection) -> None:
+        """Restore independent original reporting ONLY for the operator's communities channel.
+
+        The old institutional-only source policy was unintentionally excluding
+        verified local newsrooms. Preserve explicit non-default operator choices,
+        user-customized channels and original-source denylist.
+        """
+        marker = "v2118_community_news_sources_v1"
+        if con.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+            return
+        cols = {str(row[1]) for row in con.execute("PRAGMA table_info(channel_policies)")}
+        if "monitoring_source_policy" in cols:
+            con.execute(
+                """UPDATE channel_policies
+                   SET monitoring_source_policy='connected_original'
+                   WHERE channel_id IN (
+                     SELECT id FROM channels
+                     WHERE channel_mode='monitoring'
+                       AND name='ЗАПОРІЖЖЯ | ГРОМАДИ'
+                   )
+                   AND monitoring_source_policy='institutional'"""
+            )
+        con.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (marker, "1"))
 
     @staticmethod
     def _ensure_v2113_monitoring_denied_origins(con: sqlite3.Connection) -> None:
