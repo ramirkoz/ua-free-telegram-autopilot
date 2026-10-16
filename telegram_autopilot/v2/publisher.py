@@ -596,6 +596,9 @@ class Publisher:
                   article_title=str(article["title"] or "")[:250],
                   source_url=str(article["source_url"] or "")[:350])
             return "SOURCE_TEXT_IDENTITY_MISMATCH"
+        if channel_id == 2 and __import__("telegram_autopilot.v2.commercial_freshness", fromlist=["source_is_stale"]).source_is_stale(article["source_published_at"]):
+            self.store.reject_editorial_article(article_id, "COMMERCIAL_SOURCE_TOO_OLD")
+            return "COMMERCIAL_SOURCE_TOO_OLD"
         current_text = str(article["final_text"] or "").strip()
         strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
         if strip_body_links:
