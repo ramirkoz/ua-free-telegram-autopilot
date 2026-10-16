@@ -599,6 +599,12 @@ class Publisher:
         if channel_id == 2 and __import__("telegram_autopilot.v2.commercial_freshness", fromlist=["source_is_stale"]).source_is_stale(article["source_published_at"]):
             self.store.reject_editorial_article(article_id, "COMMERCIAL_SOURCE_TOO_OLD")
             return "COMMERCIAL_SOURCE_TOO_OLD"
+        if channel_id == 2:
+            from .commercial_campaign_guard import prior_published_campaign
+            previous_campaign = prior_published_campaign(self.store, channel_id, article_id, article)
+            if previous_campaign:
+                self.store.mark_duplicate(article_id, previous_campaign, "COMMERCIAL_CAMPAIGN_ALREADY_PUBLISHED")
+                return "DUPLICATE_PUBLISHED"
         current_text = str(article["final_text"] or "").strip()
         strip_body_links = self.store.source_strip_body_links(int(article["source_id"]))
         if strip_body_links:
