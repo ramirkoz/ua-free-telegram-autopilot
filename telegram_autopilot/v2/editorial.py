@@ -372,6 +372,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         clean,
     ):
         return "MONITORING_LIVE_DANGER_LEVEL"
+    # Reject bare current air-strike destination warnings; never turn them
+    # into invented confirmed incidents.
+    if re.search(r"(?iu)\bКАБ(?:и|ів)?\b\s+(?:на|по|у|в|біля)\s+\S+", clean) and not _RESULT_FACT_RE.search(clean):
+        return "MONITORING_LIVE_AIRSTRIKE_WARNING"
+    if text and "місцеві жителі повідомляють" in text.casefold() and "місцеві жителі повідомляють" not in source.casefold():
+        return "MONITORING_UNGROUNDED_WITNESS"
     # Unresolved active threats must not become normal news posts.
     # Official confirmed end-of-event notices remain eligible separately.
     if _LIVE_THREAT_RE.search(clean):
