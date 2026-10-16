@@ -1,6 +1,6 @@
 """Conservative final-stage published-incident dedupe for short local news rewrites.
 
-Only block thin Zaporizhzhia strike injury summaries within a 45-minute
+Only block thin Zaporizhzhia strike injury summaries within a 20-minute
 window of a previously committed injury/strike post. Full official updates
 with additional distinct facts are not reclassified as duplicates by this
 guard; the normal detailed event dedupe still applies.
@@ -55,7 +55,7 @@ def recent_community_incident_duplicate(store, channel_id: int, article_id: int,
             other_at = datetime.fromisoformat(str(item["published_at"]).replace("Z", "+00:00"))
             if not other_at.tzinfo:
                 continue
-            if not timedelta(0) <= (now - other_at.astimezone(now.tzinfo)) <= timedelta(minutes=45):
+            if not timedelta(0) <= (now - other_at.astimezone(now.tzinfo)) <= timedelta(minutes=20):
                 continue
             other = " ".join((str(item["title"] or ""), str(item["raw_text"] or ""), str(item["final_text"] or "")))
             if not _is_strike_injury(other) or _region(other) != current_region:
