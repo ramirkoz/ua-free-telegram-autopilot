@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -142,6 +143,16 @@ class StrictTelegramParser(base.TelegramParser):
             poster = str(values.get("poster") or "").strip()
             if poster.startswith(("http://", "https://")):
                 self._remember_video_poster(poster)
+
+        # An explicit same-channel reply link is ownership evidence. Mere
+        # adjacent message numbers or timestamps are not.
+        if self.current is not None and low_tag == "a":
+            href_value = str(values.get("href") or "")
+            reply_markup = any("tgme_widget_message_reply" in c for c in path_local)
+            if reply_markup:
+                target = re.search(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#]|$)", href_value)
+                if target and target.group(1).casefold() == self.username.casefold():
+                    self.current["reply_to_post"] = f"{self.username}/{target.group(2)}"
 
         # Telegram frequently renders operational links as ``<a href=...>посиланням</a>``.
         # The base parser keeps only visible text, which silently destroys the target.
@@ -354,6 +365,25 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
         # Metadata only. Never merge this into article.media_urls.
         tg["video_poster_url"] = posters[0]
 
+    # 2.2: Preserve the exact public Telegram widget provenance separately
+    # from mutable editorial copy. Never infer ownership from adjacency alone.
+    tg["source_message_records_v1"] = [
+        {
+            "message_id": str(base._post_number(entry.post)),
+            "post": str(entry.post),
+            "published_at": str(entry.published or ""),
+            "text": str(entry.text or "")[:10000],
+            "media": list(entry.media)[:24],
+            "media_count": len(entry.media),
+            "video_attachment_seen": bool(getattr(entry, "video_attachment_seen", False)),
+            "video_recovery": str(getattr(entry, "video_recovery", "") or ""),
+            "reply_to_post": str(getattr(entry, "reply_to_post", "") or ""),
+        }
+        for entry in group
+    ]
+    tg["source_boundary_provenance"] = "exact_telegram_widget"
+    tg["source_provenance_complete"] = bool(group) and len(group) == len(mids)
+
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article
 
@@ -401,13 +431,43 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
         if (post_id := base._post_number(entry.post)) is not None
     }
 
+    # An attachment can have only one explicit editorial owner.
+    # Conflicting reply links must not duplicate a media file across stories.
+    media_owners: dict[str, set[str]] = {}
+    for media_entry in ordered:
+        if str(media_entry.text or "").strip() or not _strict_media_bearing(media_entry):
+            continue
+        owners = set()
+        for text_entry in ordered:
+            if not str(text_entry.text or "").strip():
+                continue
+            if (
+                str(getattr(media_entry, "reply_to_post", "") or "") == text_entry.post
+                or str(getattr(text_entry, "reply_to_post", "") or "") == media_entry.post
+            ):
+                owners.add(text_entry.post)
+        media_owners[media_entry.post] = owners
+
     articles: list[CollectedArticle] = []
     for entry in ordered:
         if not str(entry.text or "").strip():
             # A media-only neighbour is never borrowed by another post. It can be
             # reconsidered on a later exact-post fetch if Telegram exposes text.
             continue
-        article = base._to_article(username, entry, [])
+        # Bind media-only messages only with an explicit reply edge within
+        # the same source. No timestamp adjacency guesswork.
+        linked = [
+            candidate for candidate in ordered
+            if candidate is not entry
+            and not str(candidate.text or "").strip()
+            and _strict_media_bearing(candidate)
+            and media_owners.get(candidate.post) == {entry.post}
+            and (
+                str(getattr(candidate, "reply_to_post", "") or "") == entry.post
+                or str(getattr(entry, "reply_to_post", "") or "") == candidate.post
+            )
+        ]
+        article = base._to_article(username, entry, linked)
         articles.append(article)
 
     return [_upgrade_strict_article(username, article, entry_by_id) for article in articles]

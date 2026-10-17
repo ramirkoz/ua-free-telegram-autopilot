@@ -24,6 +24,7 @@ from .loghub import event
 from .learning import LearningEngine
 from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
+from .evidence_first import assess_monitoring_source, assess_monitoring_media
 
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -348,6 +349,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
     if re.search(r"(?iu)\b(?:рсзв|окупанти)\b.{0,70}\b(?:криють|гатять|обстрілюють)\b", clean) and not _RESULT_FACT_RE.search(clean):
         return "MONITORING_ACTIVE_ATTACK_WARNING"
+    evidence = assess_monitoring_source(article, final_text=text)
+    if not evidence.allowed:
+        return evidence.reasons[0]
     if len(clean) < 90 and re.search(r"(?iu)розважа\w*[,! ]{0,8}як\s+можемо", clean):
         return "MONITORING_BANTER_NOT_NEWS"
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
@@ -976,6 +980,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     source_policy = _source_body_policy_issues(channel, article, value)
     issues.extend(source_policy)
     if channel.mode == ChannelMode.MONITORING:
+        issues.extend(assess_monitoring_media(article, final_text=value).reasons)
         issues.extend(monitoring_fragment_quality_issues(value))
         issues.extend(_monitoring_grounding_blockers(article, value))
     try:

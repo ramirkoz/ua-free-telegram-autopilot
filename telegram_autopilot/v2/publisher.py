@@ -17,6 +17,7 @@ from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle, media_bundle_complete
+from .evidence_first import video_required_by_copy
 from .visual_media_dedupe import remove_visual_duplicates
 from .storage import V2Store, now_iso
 from .telegram_attribution import (
@@ -891,6 +892,27 @@ class Publisher:
                 retryable=retryable, next_retry_at=retry_at,
             )
             return "MEDIA_DOWNLOAD_RETRY" if retryable else "MEDIA_DOWNLOAD_FAILED"
+
+        if not prepared and channel.mode == ChannelMode.MONITORING and video_required_by_copy(
+            str(article["raw_text"] or ""), post_text
+        ):
+            # A news report promising source video cannot silently become bare
+            # text merely because all transfers failed. Require manual review
+            # rather than an unbounded media retry storm.
+            detail = "Відео є необхідною частиною джерела, але завантаження не вдалося"
+            self.store.publication_backoff(
+                article_id, blocked_by=BlockedBy.MEDIA,
+                error_code="MONITORING_VIDEO_DELIVERY_INCOMPLETE",
+                detail=detail, retry_seconds=None,
+            )
+            event(
+                "media", "monitoring video integrity fail-closed",
+                level=40, channel_id=channel_id, article_id=article_id,
+                source_media_count=source_media_count,
+                bundle_media_count=bundle.count,
+                failed_media_count=len(prepare_failures),
+            )
+            return "MONITORING_VIDEO_DELIVERY_INCOMPLETE"
 
         if not prepared:
             # Preferred/optional may intentionally degrade to text when media cannot
