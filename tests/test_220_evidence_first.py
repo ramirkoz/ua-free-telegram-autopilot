@@ -62,7 +62,7 @@ def test_valid_telegram_news_and_attached_video_not_suppressed():
                 "Участь взяли представники місцевої адміністрації.")
     assert assess_monitoring_source(a).allowed
     assert assess_monitoring_media(a).allowed
-    b = article("Дивіться відео зі святкування.", media='[{"url": "https://t.me/video"}]')
+    b = article("Дивіться відео зі святкування.", media='["video|https://example.org/video.mp4"]')
     assert assess_monitoring_media(b).allowed
 
 
