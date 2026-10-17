@@ -24,6 +24,7 @@ from .loghub import event
 from .learning import LearningEngine
 from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
+from .evidence_first import assess_monitoring_source, assess_monitoring_media
 
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -339,6 +340,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return "EDITORIAL_META_LEAK"
     if channel.mode != ChannelMode.MONITORING:
         return ""
+    evidence = assess_monitoring_source(article, final_text=text)
+    if not evidence.allowed:
+        return evidence.reasons[0]
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
     source = _source_text(article).strip()
@@ -976,6 +980,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     source_policy = _source_body_policy_issues(channel, article, value)
     issues.extend(source_policy)
     if channel.mode == ChannelMode.MONITORING:
+        issues.extend(assess_monitoring_media(article, final_text=value).reasons)
         issues.extend(monitoring_fragment_quality_issues(value))
         issues.extend(_monitoring_grounding_blockers(article, value))
     try:
