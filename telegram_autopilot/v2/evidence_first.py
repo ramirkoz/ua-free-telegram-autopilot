@@ -90,14 +90,26 @@ def assess_monitoring_media(article: Any, *, final_text: str = "") -> EvidenceDe
         return EvidenceDecision(())
     layout = _metadata(article)
     media = str(_get(article, "media_json") or "").strip()
-    has_declared_media = bool(media and media not in {"[]", "{}", "null"})
+    from ..media import decode_media
+    try:
+        decoded = json.loads(media) if media else []
+    except (TypeError, ValueError):
+        decoded = []
+    if not isinstance(decoded, list):
+        decoded = []
+    has_video = any(
+        decode_media(str(encoded))[0] == "video"
+        for encoded in decoded if isinstance(encoded, str)
+    )
     tg = layout.get("telegram", {})
     if not isinstance(tg, dict):
         tg = {}
-    explicit_count = max(
-        int(layout.get("media_count", 0) or 0),
-        int(tg.get("media_count", 0) or 0),
-    )
-    if has_declared_media or explicit_count:
+    if has_video:
         return EvidenceDecision(())
-    return EvidenceDecision(("MONITORING_VIDEO_ATTACHMENT_UNBOUND",), ("video_cue_without_media",))
+    # A source may explicitly signal a video placeholder with no download URL.
+    # Images and posters do not satisfy the video requirement.
+    if bool(tg.get("video_attachment_seen")):
+        return EvidenceDecision(
+            ("MONITORING_VIDEO_PENDING",), ("source_video_not_downloadable",)
+        )
+    return EvidenceDecision(("MONITORING_VIDEO_ATTACHMENT_UNBOUND",), ("video_cue_without_video",))
