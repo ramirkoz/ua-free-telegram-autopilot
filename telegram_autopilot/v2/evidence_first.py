@@ -70,6 +70,11 @@ def assess_monitoring_source(article: Any, *, final_text: str = "") -> EvidenceD
     return EvidenceDecision(tuple(dict.fromkeys(reasons)), tuple(evidence))
 
 
+def video_required_by_copy(source: str, final_text: str = "") -> bool:
+    """True when publication text refers to essential video evidence."""
+    return bool(_VIDEO_CUE.search(str(source or "")) or _VIDEO_CUE.search(str(final_text or "")))
+
+
 def assess_monitoring_media(article: Any, *, final_text: str = "") -> EvidenceDecision:
     """Fail closed for a Telegram video-dependent item with no bound media.
 
@@ -81,7 +86,7 @@ def assess_monitoring_media(article: Any, *, final_text: str = "") -> EvidenceDe
         return EvidenceDecision(())
     source = str(_get(article, "raw_text"))
     final = str(final_text or "")
-    if not (_VIDEO_CUE.search(source) or _VIDEO_CUE.search(final)):
+    if not video_required_by_copy(source, final):
         return EvidenceDecision(())
     layout = _metadata(article)
     media = str(_get(article, "media_json") or "").strip()
