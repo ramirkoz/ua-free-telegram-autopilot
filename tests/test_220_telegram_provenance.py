@@ -64,3 +64,20 @@ def test_parser_retains_reply_link_only_inside_telegram_reply_markup():
     parser.feed(page)
     parser.close()
     assert parser.entries[0].reply_to_post == "community/400"
+
+
+def test_ambiguous_media_claims_not_attached_to_two_news_stories():
+    entries = [
+        TelegramEntry(post="community/500", text="Подія одна.",
+                      reply_to_post="community/502"),
+        TelegramEntry(post="community/501", text="Подія друга.",
+                      reply_to_post="community/502"),
+        TelegramEntry(post="community/502", text="",
+                      media=["video|https://example.org/unresolved.mp4"]),
+    ]
+    out = strict_stitch_telegram("community", entries)
+    assert len(out) == 2
+    for item in out:
+        metadata = json.loads(item.article_layout_json)["telegram"]
+        assert metadata["media_count"] == 0
+        assert "502" not in metadata["message_ids"]
