@@ -32,3 +32,10 @@
 ## Release gate
 
 No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
+
+## Phase 1b: ownership / video invariant
+
+- Media-only replies are attached only when an explicit same-channel reply relation exists and has exactly one editorial owner; conflicting claims remain unbound.
+- Telegram video-dependent posts require a real `video|URL` media entry. A still image or video poster cannot stand in for the source video.
+- Regression cases cover conflicting reply claims, missing video and photo-only placeholders.
+- These checks prevent false attachment or text-only publication but do not yet reconstruct videos from Telegram albums without explicit public provenance. Full 2.2.0 release is still blocked.
