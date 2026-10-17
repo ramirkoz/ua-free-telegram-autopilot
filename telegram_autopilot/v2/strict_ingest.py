@@ -431,6 +431,23 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
         if (post_id := base._post_number(entry.post)) is not None
     }
 
+    # An attachment can have only one explicit editorial owner.
+    # Conflicting reply links must not duplicate a media file across stories.
+    media_owners: dict[str, set[str]] = {}
+    for media_entry in ordered:
+        if str(media_entry.text or "").strip() or not _strict_media_bearing(media_entry):
+            continue
+        owners = set()
+        for text_entry in ordered:
+            if not str(text_entry.text or "").strip():
+                continue
+            if (
+                str(getattr(media_entry, "reply_to_post", "") or "") == text_entry.post
+                or str(getattr(text_entry, "reply_to_post", "") or "") == media_entry.post
+            ):
+                owners.add(text_entry.post)
+        media_owners[media_entry.post] = owners
+
     articles: list[CollectedArticle] = []
     for entry in ordered:
         if not str(entry.text or "").strip():
@@ -444,6 +461,7 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             if candidate is not entry
             and not str(candidate.text or "").strip()
             and _strict_media_bearing(candidate)
+            and media_owners.get(candidate.post) == {entry.post}
             and (
                 str(getattr(candidate, "reply_to_post", "") or "") == entry.post
                 or str(getattr(entry, "reply_to_post", "") or "") == candidate.post
