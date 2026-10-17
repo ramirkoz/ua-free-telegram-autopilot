@@ -68,11 +68,11 @@ def test_parser_retains_reply_link_only_inside_telegram_reply_markup():
 
 def test_ambiguous_media_claims_not_attached_to_two_news_stories():
     entries = [
-        TelegramEntry(post="community/500", text="Подія одна.",
+        TelegramEntry(post="community/500", text="Подія одна.", published=None,
                       reply_to_post="community/502"),
-        TelegramEntry(post="community/501", text="Подія друга.",
+        TelegramEntry(post="community/501", text="Подія друга.", published=None,
                       reply_to_post="community/502"),
-        TelegramEntry(post="community/502", text="",
+        TelegramEntry(post="community/502", text="", published=None,
                       media=["video|https://example.org/unresolved.mp4"]),
     ]
     out = strict_stitch_telegram("community", entries)
