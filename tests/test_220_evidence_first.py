@@ -69,3 +69,12 @@ def test_valid_telegram_news_and_attached_video_not_suppressed():
 def test_confirmed_aftermath_with_damage_is_not_live_one_liner():
     a = article("Після обстрілу рятувальники підтвердили пошкодження трьох будинків.")
     assert assess_monitoring_source(a).allowed
+
+
+def test_photo_or_video_poster_cannot_replace_required_video():
+    image = article("Дивіться відео із заходу.",
+                    media='["https://example.org/preview.jpg"]')
+    assert "MONITORING_VIDEO_ATTACHMENT_UNBOUND" in assess_monitoring_media(image).reasons
+    pending = article("Дивіться відео із заходу.", media="[]",
+                      layout={"telegram": {"video_attachment_seen": True}})
+    assert assess_monitoring_media(pending).reasons == ("MONITORING_VIDEO_PENDING",)
