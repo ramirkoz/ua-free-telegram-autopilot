@@ -340,9 +340,6 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return "EDITORIAL_META_LEAK"
     if channel.mode != ChannelMode.MONITORING:
         return ""
-    evidence = assess_monitoring_source(article, final_text=text)
-    if not evidence.allowed:
-        return evidence.reasons[0]
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
     source = _source_text(article).strip()
@@ -352,6 +349,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
     if re.search(r"(?iu)\b(?:рсзв|окупанти)\b.{0,70}\b(?:криють|гатять|обстрілюють)\b", clean) and not _RESULT_FACT_RE.search(clean):
         return "MONITORING_ACTIVE_ATTACK_WARNING"
+    evidence = assess_monitoring_source(article, final_text=text)
+    if not evidence.allowed:
+        return evidence.reasons[0]
     if len(clean) < 90 and re.search(r"(?iu)розважа\w*[,! ]{0,8}як\s+можемо", clean):
         return "MONITORING_BANTER_NOT_NEWS"
     if len(clean) < 18 or _BARE_ALERT_RE.fullmatch(clean):
