@@ -354,6 +354,24 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
         # Metadata only. Never merge this into article.media_urls.
         tg["video_poster_url"] = posters[0]
 
+    # 2.2: Preserve the exact public Telegram widget provenance separately
+    # from mutable editorial copy. Never infer ownership from adjacency alone.
+    tg["source_message_records_v1"] = [
+        {
+            "message_id": str(base._post_number(entry.post)),
+            "post": str(entry.post),
+            "published_at": str(entry.published or ""),
+            "text": str(entry.text or "")[:10000],
+            "media": list(entry.media)[:24],
+            "media_count": len(entry.media),
+            "video_attachment_seen": bool(getattr(entry, "video_attachment_seen", False)),
+            "video_recovery": str(getattr(entry, "video_recovery", "") or ""),
+        }
+        for entry in group
+    ]
+    tg["source_boundary_provenance"] = "exact_telegram_widget"
+    tg["source_provenance_complete"] = bool(group) and len(group) == len(mids)
+
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article
 
