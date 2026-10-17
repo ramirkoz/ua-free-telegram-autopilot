@@ -34,6 +34,7 @@ class TelegramEntry:
     video_recovery: str=""
     video_attachment_seen: bool=False
     video_poster_url: str=""
+    reply_to_post: str=""
 
 
 class TelegramParser(HTMLParser):
@@ -229,6 +230,7 @@ class TelegramParser(HTMLParser):
                 discarded_video_thumb=int(self.current.get("discarded_video_thumb") or 0),
                 discarded_duplicate=int(self.current.get("discarded_duplicate") or 0),
                 video_recovery=str(self.current.get("video_recovery") or ""),
+                reply_to_post=str(self.current.get("reply_to_post") or ""),
                 video_attachment_seen=bool(self.current.get("video_attachment_seen")),
                 video_poster_url=str((self.current.get("video_poster_candidates") or [""])[0] if isinstance(self.current.get("video_poster_candidates"), list) and self.current.get("video_poster_candidates") else ""),
             ))
