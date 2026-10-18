@@ -1,0 +1,70 @@
+{
+  "schema": "operator_monitoring_replay_v1",
+  "notes": "Sanitized, operator-observed regression cases. These are deliberately NOT complete Telegram message exports and do not certify original video recovery.",
+  "cases": [
+    {
+      "id": "VB_is_Ukraine/14790",
+      "kind": "source_video_unbound",
+      "raw": "Після зустрічі гостей розпочалася урочиста частина свята. Дивіться друге відео серії.",
+      "media": [],
+      "layout": {
+        "telegram": {
+          "message_ids": [
+            "14790"
+          ],
+          "media_count": 0
+        }
+      },
+      "final": "У громаді провели святковий захід. Дивіться друге відео серії.",
+      "expected": "MONITORING_VIDEO_ATTACHMENT_UNBOUND"
+    },
+    {
+      "id": "vasgromada/10013",
+      "kind": "source_video_unbound",
+      "raw": "У громаді провели арттерапевтичну зустріч. Перегляньте відео події.",
+      "media": [],
+      "layout": {
+        "telegram": {
+          "message_ids": [
+            "10013"
+          ],
+          "media_count": 0
+        }
+      },
+      "final": "Для учасників провели арттерапевтичну зустріч. Перегляньте відео події.",
+      "expected": "MONITORING_VIDEO_ATTACHMENT_UNBOUND"
+    },
+    {
+      "id": "info_zp/169493",
+      "kind": "unrelated_topics",
+      "raw": "На вулиці Романтичній приблудився хаскі. На вулиці Василя Сергієнка загубили папку з документами. Його шукають.",
+      "media": [],
+      "layout": {
+        "telegram": {
+          "message_ids": [
+            "169493"
+          ],
+          "media_count": 0
+        }
+      },
+      "final": "У Запоріжжі шукають хаскі, а також папку з документами.",
+      "expected": "MONITORING_MULTIPLE_UNRELATED_NOTICES"
+    },
+    {
+      "id": "zaborzp/154499",
+      "kind": "unverified_attack",
+      "raw": "РСЗВ вдарило по Юр'ївці.",
+      "media": [],
+      "layout": {
+        "telegram": {
+          "message_ids": [
+            "154499"
+          ],
+          "media_count": 0
+        }
+      },
+      "final": "РСЗВ вдарило по Юр'ївці. Інформація про наслідки наразі не надходила.",
+      "expected": "MONITORING_UNVERIFIED_ATTACK_OUTCOME"
+    }
+  ]
+}
