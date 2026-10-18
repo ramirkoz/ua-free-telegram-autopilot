@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from typing import TypeVar
-from .crop_dedupe import same_cropped_image
+from .crop_dedupe import prepare_pixels, same_prepared
 
 T = TypeVar("T")
 
@@ -59,29 +59,49 @@ def _same_image(a, b) -> bool:
     return (distance <= 4 and color_distance <= 125) or (distance <= 2 and color_distance <= 220) or (distance <= 3 and color_distance <= 410 and abs(ratio_a-ratio_b) <= 0.18)
 
 
+def _pixel_area(data: bytes) -> int:
+    try:
+        from PIL import Image
+        with Image.open(BytesIO(data)) as image:
+            return int(image.width * image.height)
+    except Exception:
+        return 0
+
+
 def remove_visual_duplicates(items: list[T]) -> tuple[list[T], int]:
-    """Retain the highest-resolution copy at the first occurrence's position."""
+    """Retain the highest-resolution copy at the first occurrence's position.
+
+    2.2.3: the pixel crop/rendition check runs for every image pair. Before, it
+    only ran when the earlier image had a dHash fingerprint, and low-contrast
+    photos (e.g. a jet against clear sky) never get one, so their responsive
+    renditions all reached Telegram.
+    """
     result: list[T] = []
-    signatures = []
+    entries: list[tuple[object, object, int] | None] = []   # (fingerprint, pixels, area)
     removed = 0
     for item in items:
         if getattr(item, "kind", "") != "image":
             result.append(item)
-            signatures.append(None)
+            entries.append(None)
             continue
-        sig = _fingerprint(getattr(item, "data", b""))
-        match = next((index for index, other in enumerate(signatures) if _same_image(sig, other) or (other is not None and same_cropped_image(getattr(item, 'data', b''), getattr(result[index], 'data', b'')))), None)
+        data = getattr(item, "data", b"")
+        sig = _fingerprint(data)
+        pixels = prepare_pixels(data)
+        area = _pixel_area(data)
+        match = next(
+            (
+                index for index, other in enumerate(entries)
+                if other is not None and (_same_image(sig, other[0]) or same_prepared(pixels, other[1]))
+            ),
+            None,
+        )
         if match is None:
             result.append(item)
-            signatures.append(sig)
-        else:
-            removed += 1
-            previous = result[match]
-            previous_sig = signatures[match]
-            if sig is not None and previous_sig is not None:
-                old_size = previous_sig[2][0] * previous_sig[2][1]
-                new_size = sig[2][0] * sig[2][1]
-                if new_size > old_size:
-                    result[match] = item
-                    signatures[match] = sig
+            entries.append((sig, pixels, area))
+            continue
+        removed += 1
+        previous = entries[match]
+        if previous is not None and area > previous[2]:
+            result[match] = item
+            entries[match] = (sig, pixels, area)
     return result, removed

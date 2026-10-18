@@ -44,6 +44,8 @@ class MediaBundle:
     extracted_media_count: int = 0
     filtered_media_count: int = 0
     media_validation_error: str = ""
+    # 2.2.3: typed reasons for discarded source candidates, e.g. (("http_403", 11),).
+    drop_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def count(self) -> int:
@@ -174,6 +176,7 @@ def build_publication_media_bundle(
     gallery_items_found = int(raw.gallery_items_found or 0)
     video_embed_count = int(raw.video_embed_count or 0)
     validation_error = ""
+    drop_reasons: tuple[tuple[str, int], ...] = ()
     try:
         from ..media_pipeline import prepare_article_media
         try:
@@ -191,6 +194,7 @@ def build_publication_media_bundle(
             excluded_urls=excluded_urls,
         )
         video_link = str(getattr(prepared, "video_link", "") or "")
+        drop_reasons = tuple(sorted(dict(getattr(prepared, "drop_reasons", {}) or {}).items()))
 
         # Preserve source order for body/gallery media. Iframe embeds are links, not
         # uploadable Telegram media; their preview is appended separately.
@@ -247,7 +251,29 @@ def build_publication_media_bundle(
         extracted_media_count=raw.count,
         filtered_media_count=max(0, raw.count - len(chosen)),
         media_validation_error=validation_error,
+        drop_reasons=drop_reasons,
     )
+
+def media_asset_keys(values: Any) -> set[str]:
+    """Canonical asset keys (one per uploaded image/video) for media values.
+
+    Accepts a media_json string or an iterable of encoded media values. Used to
+    remember which source assets a READY article already tried, so a re-poll of
+    the same assets cannot reset publication backoff (2.2.3).
+    """
+    from ..media import canonical_asset_key, decode_media
+    if isinstance(values, str):
+        try:
+            values = json.loads(values or "[]")
+        except Exception:
+            values = []
+    keys: set[str] = set()
+    for value in values if isinstance(values, (list, tuple, set)) else []:
+        parsed = valid_public_media(str(value or ""))
+        if parsed:
+            keys.add(canonical_asset_key(parsed[1]))
+    return keys
+
 
 def media_required(channel: ChannelConfig) -> bool:
     return channel.policy.normalized_media_policy() == "required"

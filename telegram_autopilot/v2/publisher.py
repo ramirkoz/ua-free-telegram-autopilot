@@ -16,7 +16,7 @@ from ..telegram import (
 from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
-from .media_pipeline import build_publication_media_bundle, media_bundle_complete
+from .media_pipeline import build_publication_media_bundle, media_asset_keys, media_bundle_complete
 from .evidence_first import video_required_by_copy
 from .visual_media_dedupe import remove_visual_duplicates
 from .storage import V2Store, now_iso
@@ -316,7 +316,15 @@ class Publisher:
         else:
             classification = "permanent"
             retry_seconds = None
+        # 2.2.3: remember which source assets were already tried. Re-collecting the
+        # same assets must not clear this backoff (see ReadyBacklogStore).
+        tried = set(str(x) for x in (recovery.get("tried_assets") or []) if str(x))
+        try:
+            tried |= media_asset_keys(str(article["media_json"] or "[]"))
+        except (KeyError, IndexError, TypeError):
+            pass
         recovery.update({
+            "tried_assets": sorted(tried)[:64],
             "attempts": attempts,
             "classification": classification,
             "last_attempt_at": now_iso(),
@@ -716,7 +724,8 @@ class Publisher:
             article, bundle, recovery_outcome = self._recover_missing_source_media(channel, article, source_url, recurring)
             event("media", "source page media recovery", channel_id=channel_id,
                   article_id=article_id, outcome=recovery_outcome,
-                  recovered_media_count=bundle.count)
+                  recovered_media_count=bundle.count,
+                  media_drop_reasons=dict(getattr(bundle, "drop_reasons", ()) or ()))
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
@@ -788,6 +797,7 @@ class Publisher:
             extracted_media_count=int(getattr(bundle,"extracted_media_count",0) or 0),
             filtered_media_count=int(getattr(bundle,"filtered_media_count",0) or 0),
             media_validation_error=str(getattr(bundle,"media_validation_error","") or ""),
+            media_drop_reasons=dict(getattr(bundle, "drop_reasons", ()) or ()),
         )
         if policy == "required" and not bundle.count:
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))

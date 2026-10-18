@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from . import V2_SCHEMA_VERSION
-from ..media import encode_media, media_identity, valid_public_media
+from ..media import canonical_asset_key, encode_media, media_identity, valid_public_media
 from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, DedupeProfile, EditorialRuntimeProfile, ProviderHealth, ProviderState, SourceAttributionMode, SourceBodyAttributionMode, Stage
 from .urlnorm import normalize_url
 
@@ -153,7 +153,37 @@ def _refresh_layout(old_value: str, new_value: str) -> str:
     delivery = old.get("telegram_delivery")
     if isinstance(delivery, dict) and delivery:
         new["telegram_delivery"] = delivery
+    # 2.2.3: media recovery memory (attempt count, already-tried assets) is
+    # restart-safe state too. Dropping it on every re-poll reset the bounded
+    # recovery and let identical source assets look "new".
+    recovery = old.get("media_recovery")
+    if isinstance(recovery, dict) and recovery and "media_recovery" not in new:
+        new["media_recovery"] = recovery
     return json.dumps(new, ensure_ascii=False, separators=(",", ":"))
+
+
+def _media_json_asset_keys(value: str) -> set[str]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except Exception:
+        parsed = []
+    keys: set[str] = set()
+    for item in parsed if isinstance(parsed, list) else []:
+        media = valid_public_media(str(item or ""))
+        if media:
+            keys.add(canonical_asset_key(media[1]))
+    return keys
+
+
+def _tried_media_assets(layout_value: str) -> set[str]:
+    try:
+        layout = json.loads(str(layout_value or "{}"))
+    except Exception:
+        return set()
+    recovery = layout.get("media_recovery") if isinstance(layout, dict) else None
+    if not isinstance(recovery, dict):
+        return set()
+    return {str(x) for x in (recovery.get("tried_assets") or []) if str(x)}
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -2052,7 +2082,10 @@ class V2Store:
                             # A refreshed feed must bring NEW media evidence to wake a permanently
                             # blocked READY article. Identical candidates failed the final gate
                             # already; blindly waking them caused 100+ infinite retry loops.
-                            genuinely_new_media = media_ready and refreshed_media != str(row["media_json"] or "[]")
+                            # 2.2.3: compare uploaded assets, not JSON strings. Renditions,
+                            # reordering and publisher-side recovery rewrites are not new media.
+                            known_assets = _media_json_asset_keys(str(row["media_json"] or "[]")) | _tried_media_assets(str(row["article_layout_json"] or "{}"))
+                            genuinely_new_media = media_ready and bool(_media_json_asset_keys(refreshed_media) - known_assets)
                             clean_telegram_snapshot = is_telegram_snapshot and _telegram_media_filter_version(refreshed_layout) >= 2
                             prior_error = str(row["last_error_code"] or "")
                             refreshed_video_ok = _telegram_video_recovery(refreshed_layout) in {"direct_video", "exact_post_video"} and _media_json_has_video(refreshed_media)

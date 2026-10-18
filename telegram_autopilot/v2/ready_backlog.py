@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,7 +9,7 @@ from .editorial_state import ensure_editorial_state_schema
 from .guarded_runtime import GuardedRuntimeEngine
 from .local_supervisor import LocalOnlyProductionSupervisorService
 from .loghub import event
-from .media_pipeline import build_media_bundle, media_bundle_complete
+from .media_pipeline import build_media_bundle, media_asset_keys, media_bundle_complete
 from .media_recovery import MediaRecoveryStore
 from .storage import _clean_media_json, _media_json_count, _normalize_datetime_value, _parse_datetime_value, now_iso
 
@@ -196,10 +197,10 @@ class ReadyBacklogStore(MediaRecoveryStore):
         # Never clear a media blocker merely because the source was polled again.
         # Recovery requires a genuinely fresh valid media item in this exact ingest.
         if _media_json_count(fresh_media) > 0:
-            self._recover_ready_media_blocker(article_id)
+            self._recover_ready_media_blocker(article_id, fresh_media=fresh_media)
         return article_id
 
-    def _recover_ready_media_blocker(self, article_id: int) -> bool:
+    def _recover_ready_media_blocker(self, article_id: int, *, fresh_media: str = "") -> bool:
         row = self.get_article(int(article_id))
         if row is None:
             return False
@@ -213,6 +214,19 @@ class ReadyBacklogStore(MediaRecoveryStore):
 
         bundle = build_media_bundle(row)
         if bundle.count <= 0 or not media_bundle_complete(bundle):
+            return False
+        # 2.2.3: the publisher already tried these exact source assets and the final
+        # media gate rejected them (403, too small, not story media...). Re-polling
+        # the same assets is not fresh media; clearing the blocker here reset the
+        # backoff and burned all recovery attempts within about a minute.
+        try:
+            layout = json.loads(str(row["article_layout_json"] or "{}"))
+        except (TypeError, ValueError):
+            layout = {}
+        recovery = layout.get("media_recovery") if isinstance(layout, dict) else None
+        tried = set(str(x) for x in ((recovery or {}).get("tried_assets") or [])) if isinstance(recovery, dict) else set()
+        offered = media_asset_keys(fresh_media) if fresh_media else media_asset_keys(bundle.encoded_items)
+        if tried and not (offered - tried):
             return False
 
         self.update_article(

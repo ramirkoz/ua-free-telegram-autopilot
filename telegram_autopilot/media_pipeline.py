@@ -4,11 +4,12 @@ import hashlib
 import json
 import re
 import struct
+import threading
 from io import BytesIO
-from dataclasses import dataclass
-from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
+from dataclasses import dataclass, field
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from .media import valid_public_media
+from .media import canonical_asset_key, valid_public_media
 from .network import NetworkError, fetch_url
 
 _MEDIA_HEADERS = {
@@ -25,6 +26,7 @@ _HARD_REJECT = (
     "click to follow", "follow us", "follow on google", "google news", "follow tom's hardware",
 )
 _MARKETING_CONTEXT_RELAX = {"advertisement", "advertising", "promo", "promotion", "commercial"}
+_LEAD_POSITION = 0.35
 _LOGO_WORDS = ("logo", "wordmark", "brandmark", "app-icon", "site-icon", "badge")
 _STOP = {
     "this", "that", "with", "from", "have", "will", "into", "about", "after", "before", "their", "there",
@@ -53,6 +55,9 @@ class PreparedMedia:
     gallery: bool = False
     perceptual_hash: str = ""
     schema_verified: bool = False
+    # 2.2.3: lead body image whose asset the page declares as the article image
+    # (og:image / twitter:image / schema.org Article.image).
+    page_declared: bool = False
 
     @property
     def filename(self) -> str:
@@ -68,6 +73,8 @@ class PreparedArticleMedia:
     featured: PreparedMedia | None
     body: list[PreparedMedia]
     video_preview: PreparedMedia | None = None
+    # 2.2.3: why each source candidate was not used, e.g. {"http_403": 11}.
+    drop_reasons: dict[str, int] = field(default_factory=dict)
 
     @property
     def primary_video(self) -> PreparedMedia | None:
@@ -236,14 +243,9 @@ def _perceptual_hash(data: bytes) -> str:
 
 
 def _media_identity(url: str) -> str:
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url.casefold()
-    path = parts.path.casefold()
-    path = re.sub(r"-(?:\d{2,5})x(?:\d{2,5})(?=\.[a-z0-9]{2,5}$)", "", path)
-    path = re.sub(r"[_-](?:w|width)[_-]?\d{2,5}(?=\.[a-z0-9]{2,5}$)", "", path)
-    return urlunsplit((parts.scheme.casefold(), (parts.hostname or "").casefold(), path, "", ""))
+    # 2.2.3: one key for all renditions of an uploaded asset (CDN transform
+    # segments, width/quality suffixes, opaque upload IDs). See media.canonical_asset_key.
+    return canonical_asset_key(url)
 
 
 def _text_tokens(value: str) -> set[str]:
@@ -256,13 +258,25 @@ def _candidate_text(item: PreparedMedia) -> str:
     return " ".join((item.caption, item.alt, item.context, path))
 
 
+def _evidence_text(item: PreparedMedia) -> str:
+    """Text that actually describes the image: caption, alt and file name.
+
+    2.2.3: ``context`` is mostly the surrounding element's CSS classes/ids
+    (``widget membership slider news-page``). It is still used for noise
+    detection, but it is not evidence that an image belongs to the story; a
+    site-wide promo carousel otherwise "matched" articles via class names.
+    """
+    path = unquote(urlsplit(item.url).path.rsplit("/", 1)[-1])
+    return " ".join((item.caption, item.alt, path))
+
+
 def _semantic_media_evidence(item: PreparedMedia, *, title: str, article_text: str) -> tuple[int, int, int]:
     """Return (title_overlap, article_overlap, candidate_token_count).
 
     Media must describe the same story, not merely occur near it on the source page.
     Position/size are ranking signals only; they are never semantic evidence.
     """
-    candidate = _text_tokens(_candidate_text(item))
+    candidate = _text_tokens(_evidence_text(item))
     title_tokens = _text_tokens(title)
     # The opening part of an article carries the event anchors and avoids giving
     # recommendation/footer vocabulary undue influence.
@@ -292,7 +306,7 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.schema_verified:
+    if item.schema_verified or item.page_declared:
         return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
@@ -340,7 +354,7 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
         score = 10.0 if item.featured else 16.0
     if item.context == "verified_article_hero" and item.featured:
         score += 30.0
-    if item.schema_verified:
+    if item.schema_verified or item.page_declared:
         score += 20.0
     if item.caption:
         score += 10.0
@@ -357,7 +371,7 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
             score -= 5.0
     reference = _text_tokens((title or "") + " " + (article_text or "")[:5000])
     title_tokens = _text_tokens(title)
-    candidate = _text_tokens(_candidate_text(item))
+    candidate = _text_tokens(_evidence_text(item))
     title_overlap = len(candidate & title_tokens)
     body_overlap = len(candidate & reference)
     score += min(28.0, title_overlap * 8.0)
@@ -376,24 +390,42 @@ def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_cont
     return score
 
 
+_probe_state = threading.local()
+
+
+def _probe_reject(reason: str) -> None:
+    _probe_state.reason = reason
+    return None
+
+
+def _take_probe_reason() -> str:
+    reason = str(getattr(_probe_state, "reason", "") or "probe_rejected")
+    _probe_state.reason = ""
+    return reason
+
+
 def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> PreparedMedia | None:
+    _probe_state.reason = ""
     if _hard_reject(item, marketing_context=marketing_context):
-        return None
+        return _probe_reject("hard_reject")
     try:
         response = fetch_url(item.url, headers=_MEDIA_HEADERS, max_bytes=12 * 1024 * 1024, timeout=20, max_redirects=5, allow_http_errors=True)
     except NetworkError:
-        return None
+        return _probe_reject("network_error")
     mime = response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
-    if response.status >= 400 or not mime.startswith("image/") or not response.body:
-        return None
+    if response.status >= 400:
+        # 401/403/429 from image CDNs are access/bot-protection decisions, not bad media.
+        return _probe_reject(f"http_{int(response.status)}")
+    if not mime.startswith("image/") or not response.body:
+        return _probe_reject("not_image")
     width, height = _image_dimensions(response.body, mime)
     if width and height:
         if width < 300 or height < 180:
-            return None
+            return _probe_reject("too_small")
         if width / max(height, 1) >= 4.0:
-            return None
+            return _probe_reject("banner_ratio")
     elif len(response.body) < 12_000:
-        return None
+        return _probe_reject("too_small")
     item.mime_type = mime
     item.width, item.height = width, height
     item.digest = hashlib.sha256(response.body).hexdigest()
@@ -429,6 +461,7 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
             if parsed_video:
                 video_kind, video_url = parsed_video
                 body.append(PreparedMedia(0, video_kind, video_url, position=0.0, featured=True, context="featured video"))
+        declared_assets = {str(x) for x in (layout.get("page_image_assets") or []) if str(x)}
         blocks = layout.get("blocks")
         if isinstance(blocks, list):
             for block in blocks:
@@ -453,6 +486,10 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     position=max(0.0, min(1.0, position)), width=width, height=height,
                     gallery=bool(block.get("gallery")),
                     schema_verified=bool(block.get("schema_verified")),
+                    page_declared=bool(
+                        kind == "image" and max(0.0, min(1.0, position)) <= _LEAD_POSITION
+                        and canonical_asset_key(url) in declared_assets
+                    ),
                 ))
     # Keep source-owned fallback images even when HTML already exposed a media
     # block (including an iframe or unrelated thumbnail). Fallback candidates
@@ -477,6 +514,31 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
     return featured, body
 
 
+_RECOMMENDATION_CONTEXT = (
+    "related", "recommend", "more-stories", "more_stories", "read-next", "read_next",
+    "trending", "popular", "you-may-like", "also-like", "outbrain", "taboola",
+)
+
+
+def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> bool:
+    """Whether a gallery block may use the commercial weak-alt relaxation.
+
+    RC112 relaxes lexical evidence for gallery items because real campaign
+    galleries often have EMPTY alt text. 2.2.3 keeps that, but a gallery card
+    whose own caption/alt describes a different story (recommendation rails such
+    as "Top 90 Interactive Trends in September") or that sits in a
+    related/recommended container is not part of this story's gallery.
+    """
+    context = (item.context or "").casefold()
+    if any(marker in context for marker in _RECOMMENDATION_CONTEXT):
+        return False
+    described = _text_tokens(" ".join((item.caption, item.alt)))
+    if not described:
+        return True
+    title_overlap, article_overlap, _count = _semantic_media_evidence(item, title=title, article_text=article_text)
+    return title_overlap >= 1 or article_overlap >= 1
+
+
 def prepare_article_media(
     layout_json: str,
     fallback_urls: list[str],
@@ -493,12 +555,20 @@ def prepare_article_media(
     or logo/avatar safety rules.
     """
     featured, body = _layout_items(layout_json, fallback_urls)
+    drop_reasons: dict[str, int] = {}
+
+    def dropped(reason: str) -> None:
+        drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
+
     excluded_identities = {_media_identity(url) for url in (excluded_urls or set())}
     if featured and _media_identity(featured.url) in excluded_identities:
         featured = None
+        dropped("already_published")
     if featured and featured.kind == "image":
         featured.classification = _classify(featured)
         featured = _probe_image(featured, marketing_context=marketing_context)
+        if featured is None:
+            dropped(_take_probe_reason())
         if featured:
             featured.relevance_score = _score(
                 featured, title=title, article_text=article_text, marketing_context=marketing_context
@@ -512,6 +582,7 @@ def prepare_article_media(
             # sponsor/related-story images are otherwise marked valid.
             if featured.relevance_score < 35 or not semantic_ok:
                 featured = None
+                dropped("featured_not_story_media")
 
     prepared: list[PreparedMedia] = []
     seen_hashes: set[str] = set()
@@ -529,22 +600,33 @@ def prepare_article_media(
         seen_identities.add(_media_identity(featured.url))
     for item in body:
         identity = _media_identity(item.url)
-        if identity in excluded_identities or identity in seen_identities or _hard_reject(item, marketing_context=marketing_context):
+        if identity in excluded_identities:
+            dropped("already_published")
+            continue
+        if identity in seen_identities:
+            dropped("same_asset_rendition")
+            continue
+        if _hard_reject(item, marketing_context=marketing_context):
+            dropped("hard_reject")
             continue
         item.classification = _classify(item)
         if item.kind == "image":
             resolved = _probe_image(item, marketing_context=marketing_context)
             if not resolved:
+                dropped(_take_probe_reason())
                 continue
             if resolved.digest and resolved.digest in seen_hashes:
+                dropped("binary_duplicate")
                 continue
             if resolved.perceptual_hash:
                 ratio = resolved.width / max(1, resolved.height)
                 if any(abs(ratio - prev_ratio) <= 0.1 and
                        (int(resolved.perceptual_hash, 16) ^ int(prev_hash, 16)).bit_count() <= 3
                        for prev_hash, prev_ratio in seen_visual):
+                    dropped("visual_duplicate")
                     continue
             if resolved.url in seen_urls:
+                dropped("binary_duplicate")
                 continue
             resolved.relevance_score = _score(
                 resolved, title=title, article_text=article_text, marketing_context=marketing_context
@@ -553,7 +635,7 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and resolved.gallery:
+            if marketing_context and not semantic_ok and resolved.gallery and _in_story_gallery(resolved, title=title, article_text=article_text):
                 # Commercial/editorial source media is already structurally scoped to the
                 # story by article_extractor. Explicit gallery items and ordinary body
                 # images may have weak/empty alt text, so lexical overlap is not a safe
@@ -561,8 +643,10 @@ def prepare_article_media(
                 resolved.relevance_score = max(40.0, resolved.relevance_score)
                 semantic_ok = True
             if not semantic_ok:
+                dropped("not_story_media")
                 continue
             if resolved.relevance_score < 38:
+                dropped("low_relevance")
                 continue
             if resolved.digest:
                 seen_hashes.add(resolved.digest)
@@ -576,14 +660,17 @@ def prepare_article_media(
             )
             video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
             semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
-            if marketing_context and item.gallery:
+            if marketing_context and item.gallery and _in_story_gallery(item, title=title, article_text=article_text):
                 semantic_ok = True
                 item.relevance_score = max(40.0, item.relevance_score)
             if not video_story and not semantic_ok:
+                dropped("not_story_media")
                 continue
             if item.relevance_score < 38:
+                dropped("low_relevance")
                 continue
             if item.url in seen_urls:
+                dropped("binary_duplicate")
                 continue
             seen_urls.add(item.url)
             prepared.append(item)
@@ -591,7 +678,7 @@ def prepare_article_media(
         if len(prepared) >= 24:
             break
     prepared.sort(key=lambda item: (item.position, -item.relevance_score))
-    result = PreparedArticleMedia(featured, prepared)
+    result = PreparedArticleMedia(featured, prepared, drop_reasons=drop_reasons)
     primary_video = result.primary_video
     if primary_video is not None and primary_video.kind == "iframe":
         result.video_preview = _youtube_preview(primary_video)
