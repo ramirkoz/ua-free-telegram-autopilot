@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from ..media import encode_media, media_identity
 from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
+from .evidence_ledger import extract_source_evidence
+from .unresolved_media import observe_nearby_unowned_media
 
 
 class StrictTelegramParser(base.TelegramParser):
@@ -143,6 +146,16 @@ class StrictTelegramParser(base.TelegramParser):
             if poster.startswith(("http://", "https://")):
                 self._remember_video_poster(poster)
 
+        # An explicit same-channel reply link is ownership evidence. Mere
+        # adjacent message numbers or timestamps are not.
+        if self.current is not None and low_tag == "a":
+            href_value = str(values.get("href") or "")
+            reply_markup = any("tgme_widget_message_reply" in c for c in path_local)
+            if reply_markup:
+                target = re.search(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#]|$)", href_value)
+                if target and target.group(1).casefold() == self.username.casefold():
+                    self.current["reply_to_post"] = f"{self.username}/{target.group(2)}"
+
         # Telegram frequently renders operational links as ``<a href=...>посиланням</a>``.
         # The base parser keeps only visible text, which silently destroys the target.
         # Preserve the exact href inline while we are inside the real message text.
@@ -165,6 +178,19 @@ class StrictTelegramParser(base.TelegramParser):
 
         try:
             super()._handle_start(tag, attrs, self_closing=self_closing)
+            # Honour only an explicit album identifier on this exact message
+            # root. Never infer a group from nearby timestamps or post IDs.
+            if (
+                self.current is not None and low_tag == "div"
+                and "tgme_widget_message" in local and values.get("data-post")
+            ):
+                explicit_group = next(
+                    (str(values[k]).strip() for k in (
+                        "data-grouped-id", "data-media-group-id", "data-album-id"
+                    ) if values.get(k)), ""
+                )
+                if re.fullmatch(r"[A-Za-z0-9_:.-]{1,80}", explicit_group):
+                    self.current["grouped_id"] = explicit_group
         finally:
             self._strict_candidate_classes = set()
             self._strict_element_classes = set()
@@ -354,6 +380,38 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
         # Metadata only. Never merge this into article.media_urls.
         tg["video_poster_url"] = posters[0]
 
+    # 2.2: Preserve the exact public Telegram widget provenance separately
+    # from mutable editorial copy. Never infer ownership from adjacency alone.
+    tg["source_message_records_v1"] = [
+        {
+            "message_id": str(base._post_number(entry.post)),
+            "post": str(entry.post),
+            "published_at": str(entry.published or ""),
+            "text": str(entry.text or "")[:10000],
+            "media": list(entry.media)[:24],
+            "media_count": len(entry.media),
+            "video_attachment_seen": bool(getattr(entry, "video_attachment_seen", False)),
+            "video_recovery": str(getattr(entry, "video_recovery", "") or ""),
+            "reply_to_post": str(getattr(entry, "reply_to_post", "") or ""),
+            "grouped_id": str(getattr(entry, "grouped_id", "") or ""),
+        }
+        for entry in group
+    ]
+    evidence = extract_source_evidence(str(article.raw_text or ""), str(article.external_id or article.url))
+    tg["source_evidence_v1"] = [
+        {
+            "source_id": item.source_id,
+            "start": item.start,
+            "end": item.end,
+            "quote": item.quote,
+            "uncertain": item.uncertainty,
+            "current_time_reference": item.current_time_reference,
+        }
+        for item in evidence.entries
+    ]
+    tg["source_boundary_provenance"] = "exact_telegram_widget"
+    tg["source_provenance_complete"] = bool(group) and len(group) == len(mids)
+
     article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
     return article
 
@@ -379,6 +437,15 @@ def _strict_media_bearing(entry: base.TelegramEntry) -> bool:
     }
 
 
+def _explicit_same_channel_video_links(username: str, text: str) -> set[str]:
+    """Extract source-asserted video targets, never infer neighbour ownership."""
+    value = str(text or "")
+    if not re.search(r"(?iu)\b(?:відео|відеозапис|відеоролик|відеосюжет)\b", value):
+        return set()
+    links = re.findall(r"https?://t\.me/([A-Za-z0-9_]+)/([0-9]+)(?:[?#][^\s]*)?", value)
+    return {f"{username}/{number}" for channel, number in links if channel.casefold() == username.casefold()}
+
+
 def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
     """Build articles only from the exact Telegram post that owns the text/media.
 
@@ -401,16 +468,92 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
         if (post_id := base._post_number(entry.post)) is not None
     }
 
+    # An attachment can have only one explicit editorial owner.
+    # Conflicting reply links must not duplicate a media file across stories.
+    media_owners: dict[str, set[str]] = {}
+    for media_entry in ordered:
+        if str(media_entry.text or "").strip() or not _strict_media_bearing(media_entry):
+            continue
+        owners = set()
+        for text_entry in ordered:
+            if not str(text_entry.text or "").strip():
+                continue
+            if (
+                media_entry.post in _explicit_same_channel_video_links(username, text_entry.text)
+                and _entry_has_video(media_entry)
+            ):
+                owners.add(text_entry.post)
+            if (
+                (
+                    bool(getattr(media_entry, "grouped_id", ""))
+                    and str(getattr(media_entry, "grouped_id", "")) == str(getattr(text_entry, "grouped_id", ""))
+                )
+                or str(getattr(media_entry, "reply_to_post", "") or "") == text_entry.post
+                or str(getattr(text_entry, "reply_to_post", "") or "") == media_entry.post
+            ):
+                owners.add(text_entry.post)
+        media_owners[media_entry.post] = owners
+
     articles: list[CollectedArticle] = []
     for entry in ordered:
         if not str(entry.text or "").strip():
             # A media-only neighbour is never borrowed by another post. It can be
             # reconsidered on a later exact-post fetch if Telegram exposes text.
             continue
-        article = base._to_article(username, entry, [])
+        # Bind media-only messages only with an explicit reply edge within
+        # the same source. No timestamp adjacency guesswork.
+        linked = [
+            candidate for candidate in ordered
+            if candidate is not entry
+            and not str(candidate.text or "").strip()
+            and _strict_media_bearing(candidate)
+            and media_owners.get(candidate.post) == {entry.post}
+            and (
+                (
+                    candidate.post in _explicit_same_channel_video_links(username, entry.text)
+                    and _entry_has_video(candidate)
+                )
+                or (
+                    bool(getattr(candidate, "grouped_id", ""))
+                    and str(getattr(candidate, "grouped_id", "")) == str(getattr(entry, "grouped_id", ""))
+                )
+                or str(getattr(candidate, "reply_to_post", "") or "") == entry.post
+                or str(getattr(entry, "reply_to_post", "") or "") == candidate.post
+            )
+        ]
+        article = base._to_article(username, entry, linked)
         articles.append(article)
 
-    return [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
+    upgraded = [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
+    for article in upgraded:
+        try:
+            layout = json.loads(article.article_layout_json or "{}")
+            tg = layout.get("telegram", {})
+            ids = tg.get("message_ids", [])
+            entry = entry_by_id.get(int(ids[0])) if ids and str(ids[0]).isdigit() else None
+            if entry is None:
+                continue
+            linked_posts = {str(x.get("post") or "") for x in tg.get("source_message_records_v1", [])}
+            observations = tuple(
+                candidate for candidate in observe_nearby_unowned_media(entry, ordered)
+                if candidate.post not in linked_posts
+            )
+            if observations:
+                tg["unresolved_nearby_media_v1"] = [
+                    {
+                        "post": item.post,
+                        "media_count": item.media_count,
+                        "video_seen": item.video_seen,
+                        "seconds_apart": item.seconds_apart,
+                        "reason": item.reason,
+                    }
+                    for item in observations
+                ]
+                tg["media_ownership_unresolved"] = True
+                article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+        except (ValueError, TypeError, KeyError):
+            continue
+    return upgraded
 
 def _entry_has_video(entry: base.TelegramEntry) -> bool:
     from ..media import decode_media
@@ -446,7 +589,7 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
         )
         return entry
 
-    if int(getattr(entry, "discarded_video_thumb", 0) or 0) <= 0:
+    if not (bool(getattr(entry, "video_attachment_seen", False)) or int(getattr(entry, "discarded_video_thumb", 0) or 0) > 0):
         return entry
 
     try:
@@ -460,11 +603,13 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
         parser.feed(response.body.decode("utf-8", errors="replace"))
         parser.close()
         exact = next((x for x in parser.entries if base._post_number(x.post) == post_id), None)
-        if exact is None and len(parser.entries) == 1:
-            exact = parser.entries[0]
+        # No fallback to a differently identified single entry: the embed
+        # can return a related/forwarded widget instead of the requested post.
         if exact is not None and _entry_has_video(exact):
             if not exact.text:
                 exact.text = entry.text
+            exact.reply_to_post = entry.reply_to_post or exact.reply_to_post
+            exact.grouped_id = entry.grouped_id or exact.grouped_id
             if not exact.published:
                 exact.published = entry.published
             exact.video_recovery = "exact_post_video"
@@ -512,6 +657,27 @@ def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
     entries = [_hydrate_exact_video_post(username, entry) for entry in parser.entries]
+    # Recover up to two explicitly linked same-channel video posts absent
+    # from the public /s listing. Every embed result must match the exact ID.
+    available = {entry.post for entry in entries}
+    missing_links = sorted({
+        linked
+        for entry in entries if str(entry.text or "").strip()
+        for linked in _explicit_same_channel_video_links(username, entry.text)
+        if linked not in available
+    })[:2]
+    for linked in missing_links:
+        candidate = base.TelegramEntry(
+            post=linked, text="", published=None, video_attachment_seen=True,
+        )
+        recovered = _hydrate_exact_video_post(username, candidate)
+        if recovered.post == linked and _entry_has_video(recovered):
+            entries.append(recovered)
+            event(
+                "ingest", "linked video recovered by exact post",
+                source=username, post_id=base._post_number(linked),
+                media_count=len(recovered.media),
+            )
     items = strict_stitch_telegram(username, entries)
     if not items:
         raise collector.CollectorError("Не вдалося прочитати Telegram-канал")
