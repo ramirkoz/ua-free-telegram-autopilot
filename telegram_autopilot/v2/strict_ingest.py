@@ -440,9 +440,9 @@ def _strict_media_bearing(entry: base.TelegramEntry) -> bool:
 def _explicit_same_channel_video_links(username: str, text: str) -> set[str]:
     """Extract source-asserted video targets, never infer neighbour ownership."""
     value = str(text or "")
-    if not re.search(r"(?iu)\\b(?:відео|відеозапис|відеоролик|відеосюжет)\\b", value):
+    if not re.search(r"(?iu)\b(?:відео|відеозапис|відеоролик|відеосюжет)\b", value):
         return set()
-    links = re.findall(r"https?://t\\.me/([A-Za-z0-9_]+)/([0-9]+)(?:[?#][^\\s]*)?", value)
+    links = re.findall(r"https?://t\.me/([A-Za-z0-9_]+)/([0-9]+)(?:[?#][^\s]*)?", value)
     return {f"{username}/{number}" for channel, number in links if channel.casefold() == username.casefold()}
 
 
