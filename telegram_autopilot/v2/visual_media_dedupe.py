@@ -55,7 +55,7 @@ def _same_image(a, b) -> bool:
     # A strict, cross-crop dHash plus RGB color agreement.
     distance = min((x ^ y).bit_count() for x in ha for y in hb)
     color_distance = sum(sum(abs(x - y) for x, y in zip(pa, pb)) for pa, pb in zip(ca, cb))
-    return (distance <= 4 and color_distance <= 125) or (distance <= 2 and color_distance <= 220)
+    return (distance <= 4 and color_distance <= 125) or (distance <= 2 and color_distance <= 220) or (distance <= 3 and color_distance <= 410 and abs(ratio_a-ratio_b) <= 0.18)
 
 
 def remove_visual_duplicates(items: list[T]) -> tuple[list[T], int]:
