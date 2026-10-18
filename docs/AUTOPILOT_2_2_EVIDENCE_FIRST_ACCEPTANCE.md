@@ -39,3 +39,10 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Telegram video-dependent posts require a real `video|URL` media entry. A still image or video poster cannot stand in for the source video.
 - Regression cases cover conflicting reply claims, missing video and photo-only placeholders.
 - These checks prevent false attachment or text-only publication but do not yet reconstruct videos from Telegram albums without explicit public provenance. Full 2.2.0 release is still blocked.
+
+## Phase 1d: qualification preservation
+
+- `claim_verifier.py` compares output assertions against exactly sourced, explicitly uncertain sentence evidence and blocks a high-confidence omission of its uncertainty qualifier.
+- Wired into monitoring `prepublish_quality_issues()`; source evidence and original uncertainty remain authoritative, AI must not silently promote an unverified statement into a confirmed one.
+- Unit tests cover qualifier removal, qualifier preservation, unrelated facts, and actual prepublish wiring.
+- This is not general semantic verification. Full claim-level entailment and operator replay remain release blockers.
