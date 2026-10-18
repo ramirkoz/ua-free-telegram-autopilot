@@ -67,3 +67,11 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Media explicitly linked by a verified album ID or reply relation is excluded from unresolved candidates.
 - No proximity-based stitching. A missing linkage must be resolved by authoritative source access or operator inspection; this stage improves observability, not automatic video recovery.
 - Regression tests cover adjacent unowned video, explicitly linked video and cross-channel/time-boundary isolation.
+
+## Phase 1i: exact-post video rehydration safety
+
+- Exact post embed hydration now retries when source HTML signals `video_attachment_seen`, even without a discarded poster thumbnail.
+- Rejects mismatched embed message IDs: a single unrelated widget is not source ownership proof.
+- Carries verified original `reply_to_post` and `grouped_id` across exact-post hydration, preserving later media attribution.
+- Tests: missing-thumbnail recovery, wrong post refusal, reply/group provenance preservation.
+- This is a bounded exact-post recovery path, **not** ownership inference between separate unlinked text/video posts. Source access and golden operator replay remain release blockers.
