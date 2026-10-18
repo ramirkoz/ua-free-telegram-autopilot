@@ -88,3 +88,8 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - `tests/fixtures/monitoring_operator_replay_220.json` stores **sanitized, operator-derived** cases corresponding to missing video (VB_is_Ukraine/14790, vasgromada/10013), unrelated animal/documents (info_zp/169493) and an unverified short RSZV strike (zaborzp/154499).
 - `tests/test_220_operator_replay.py` tests all four sources both at deterministic source/media assessment and at the production `prepublish_quality_issues` boundary. The expected behavior is blocking malformed or unsupported output.
 - This is **not** raw Telegram replay or proof that video was recovered. Private raw-source exports and successful live-media ownership reconstruction are still required for editorial release acceptance.
+
+## Phase 1l: positive media acceptance replay
+
+- `tests/test_220_positive_media_acceptance.py` checks both sides of the editorial boundary: correctly associated `reply`-video and explicitly grouped video survive ingest into `media_urls` and pass `assess_monitoring_media`; a nearby unrelated photo is not borrowed and fails a video-required story.
+- This is a positive **ingest + media-gate** check, not Telegram Bot API delivery verification, real-source end-to-end replay, or a full semantic authoring QA guarantee. Live editorial/operator acceptance remains blocked.
