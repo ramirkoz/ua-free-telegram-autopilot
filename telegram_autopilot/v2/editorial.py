@@ -25,6 +25,7 @@ from .learning import LearningEngine
 from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
+from .claim_verifier import verify_qualified_claims
 
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
@@ -981,6 +982,10 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues.extend(source_policy)
     if channel.mode == ChannelMode.MONITORING:
         issues.extend(assess_monitoring_media(article, final_text=value).reasons)
+        issues.extend(v.code for v in verify_qualified_claims(
+            str(_v(article, "raw_text", "") or ""), value,
+            source_id=str(_v(article, "source_url", "") or _v(article, "id", "") or "unknown"),
+        ))
         issues.extend(monitoring_fragment_quality_issues(value))
         issues.extend(_monitoring_grounding_blockers(article, value))
     try:
