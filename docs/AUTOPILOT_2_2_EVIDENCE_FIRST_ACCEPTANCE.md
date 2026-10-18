@@ -75,3 +75,10 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Carries verified original `reply_to_post` and `grouped_id` across exact-post hydration, preserving later media attribution.
 - Tests: missing-thumbnail recovery, wrong post refusal, reply/group provenance preservation.
 - This is a bounded exact-post recovery path, **not** ownership inference between separate unlinked text/video posts. Source access and golden operator replay remain release blockers.
+
+## Phase 1j: explicit same-channel in-text video link recovery
+
+- A source text that explicitly refers to a same-channel `https://t.me/<channel>/<id>` video post may bind its video-only widget if the ID resolves to a real video and has a single, unambiguous owner. Generic adjacency and images never grant video ownership.
+- If explicitly linked target is missing from the current public channel listing, ingestor makes at most two exact embed retrievals per collection and accepts results only when returned channel/post ID matches. No URL from untrusted text is fetched directly: exact URLs are assembled from the known channel and numeric post ID.
+- Tests cover same-channel explicit video, external channel/image rejection, conflict ownership, off-page exact retrieval, mismatched embed ID.
+- Operator cases `VB_is_Ukraine/14790` and `vasgromada/10013` could not be independently fetched through the available web viewer. No claim of successful recovery for those real posts until authoritative end-to-end replay.
