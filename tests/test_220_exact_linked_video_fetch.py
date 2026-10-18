@@ -21,7 +21,7 @@ def test_linked_video_missing_from_listing_recovered_from_exact_post(monkeypatch
     monkeypatch.setattr(strict_ingest.collector, "_source_fetch", fetch)
     source = Source(
         id=1, channel_id=3, kind="telegram", name="Громада",
-        url="https://t.me/community", enabled=True, initialized=True,
+        url="https://t.me/community", enabled=True, initialized=True, last_checked_at=None, last_error=None,
     )
     articles = strict_ingest.collect_telegram_strict(source)
     assert len(articles) == 1
@@ -46,7 +46,7 @@ def test_mismatched_embed_cannot_recover_linked_video(monkeypatch):
     monkeypatch.setattr(strict_ingest.collector, "_source_fetch", fetch)
     source = Source(
         id=1, channel_id=3, kind="telegram", name="Громада",
-        url="https://t.me/community", enabled=True, initialized=True,
+        url="https://t.me/community", enabled=True, initialized=True, last_checked_at=None, last_error=None,
     )
     articles = strict_ingest.collect_telegram_strict(source)
     import json
