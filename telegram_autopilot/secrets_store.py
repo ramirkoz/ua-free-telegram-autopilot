@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import tempfile
+import time
+from pathlib import Path
 from dataclasses import asdict, dataclass, field
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -109,6 +112,47 @@ class SecretConfig:
         )
 
 
+def _atomic_secret_write(target: Path, payload: bytes) -> None:
+    """Preserve the last valid encrypted file if Windows briefly locks it.
+
+    A unique temp name avoids collisions between settings dialogs/workers.
+    Never remove or weaken an existing target to work around permission errors.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix=f".{target.name}.", suffix=".tmp",
+            dir=target.parent, delete=False,
+        ) as handle:
+            temp_name = handle.name
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(temp_name, 0o600)
+        except OSError:
+            pass
+        for attempt in range(6):
+            try:
+                os.replace(temp_name, target)
+                temp_name = None
+                return
+            except PermissionError as exc:
+                # On Windows, anti-virus scanning and a competing read can
+                # temporarily deny replacement. Never retry permanent ACL errors
+                # forever or fall back to non-atomic truncate/write.
+                if os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 5:
+                    raise
+                time.sleep(0.08 * (attempt + 1))
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+
+
 def _load_or_create_key() -> bytes:
     path = secret_key_path()
     if path.exists():
@@ -164,10 +208,4 @@ def save_secrets(value: SecretConfig) -> None:
     nonce = secrets.token_bytes(12)
     encrypted = AESGCM(_load_or_create_key()).encrypt(nonce, plain, _AAD)
     target = secrets_path()
-    temp = target.with_suffix(".tmp")
-    temp.write_bytes(_HEADER + nonce + encrypted)
-    try:
-        os.chmod(temp, 0o600)
-    except OSError:
-        pass
-    temp.replace(target)
+    _atomic_secret_write(target, _HEADER + nonce + encrypted)
