@@ -53,3 +53,10 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Monitoring prepublish QA emits `monitoring claims unresolved in source trace` with counts. Shadow only, no automatic blocking on lexical mismatch.
 - Regression tests cover exact spans, a fabricated absence-of-aftermath sentence, legitimate reordered paraphrase and unrelated topic.
 - Promote UNRESOLVED to a publish blocker only after measured operator-corpus precision/recall and semantic verification. The existing hard guards still block narrow proven violations.
+
+## Phase 1g: explicit Telegram album identity
+
+- `TelegramEntry.grouped_id` is read only from explicit `data-grouped-id`, `data-media-group-id`, or `data-album-id` on the exact Telegram message widget.
+- Strict stitching joins a media-only message to a text story when an unambiguous same-source album/group ID or reply edge proves its owner. A group with multiple independent text owners remains unbound rather than duplicating the media.
+- Source provenance records include grouped_id; tests cover exact group ownership, conflicting ownership and parser extraction.
+- Public Telegram HTML often omits these attributes: actual operator-post reconstruction still needs calibrated source-level retrieval and replay and is NOT complete.
