@@ -571,7 +571,7 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
         )
         return entry
 
-    if int(getattr(entry, "discarded_video_thumb", 0) or 0) <= 0:
+    if not (bool(getattr(entry, "video_attachment_seen", False)) or int(getattr(entry, "discarded_video_thumb", 0) or 0) > 0):
         return entry
 
     try:
@@ -585,11 +585,13 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
         parser.feed(response.body.decode("utf-8", errors="replace"))
         parser.close()
         exact = next((x for x in parser.entries if base._post_number(x.post) == post_id), None)
-        if exact is None and len(parser.entries) == 1:
-            exact = parser.entries[0]
+        # No fallback to a differently identified single entry: the embed
+        # can return a related/forwarded widget instead of the requested post.
         if exact is not None and _entry_has_video(exact):
             if not exact.text:
                 exact.text = entry.text
+            exact.reply_to_post = entry.reply_to_post or exact.reply_to_post
+            exact.grouped_id = entry.grouped_id or exact.grouped_id
             if not exact.published:
                 exact.published = entry.published
             exact.video_recovery = "exact_post_video"
