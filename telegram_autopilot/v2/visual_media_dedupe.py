@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from typing import TypeVar
+from .crop_dedupe import same_cropped_image
 
 T = TypeVar("T")
 
@@ -55,7 +56,7 @@ def _same_image(a, b) -> bool:
     # A strict, cross-crop dHash plus RGB color agreement.
     distance = min((x ^ y).bit_count() for x in ha for y in hb)
     color_distance = sum(sum(abs(x - y) for x, y in zip(pa, pb)) for pa, pb in zip(ca, cb))
-    return (distance <= 4 and color_distance <= 125) or (distance <= 2 and color_distance <= 220)
+    return (distance <= 4 and color_distance <= 125) or (distance <= 2 and color_distance <= 220) or (distance <= 3 and color_distance <= 410 and abs(ratio_a-ratio_b) <= 0.18)
 
 
 def remove_visual_duplicates(items: list[T]) -> tuple[list[T], int]:
@@ -69,7 +70,7 @@ def remove_visual_duplicates(items: list[T]) -> tuple[list[T], int]:
             signatures.append(None)
             continue
         sig = _fingerprint(getattr(item, "data", b""))
-        match = next((index for index, other in enumerate(signatures) if _same_image(sig, other)), None)
+        match = next((index for index, other in enumerate(signatures) if _same_image(sig, other) or (other is not None and same_cropped_image(getattr(item, 'data', b''), getattr(result[index], 'data', b'')))), None)
         if match is None:
             result.append(item)
             signatures.append(sig)
