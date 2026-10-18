@@ -46,3 +46,10 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Wired into monitoring `prepublish_quality_issues()`; source evidence and original uncertainty remain authoritative, AI must not silently promote an unverified statement into a confirmed one.
 - Unit tests cover qualifier removal, qualifier preservation, unrelated facts, and actual prepublish wiring.
 - This is not general semantic verification. Full claim-level entailment and operator replay remain release blockers.
+
+## Phase 1f: shadow statement provenance
+
+- `claim_trace.py` traces individual output statements to exact source spans, recording EXACT, ALIGNED or UNRESOLVED with score and source quote.
+- Monitoring prepublish QA emits `monitoring claims unresolved in source trace` with counts. Shadow only, no automatic blocking on lexical mismatch.
+- Regression tests cover exact spans, a fabricated absence-of-aftermath sentence, legitimate reordered paraphrase and unrelated topic.
+- Promote UNRESOLVED to a publish blocker only after measured operator-corpus precision/recall and semantic verification. The existing hard guards still block narrow proven violations.
