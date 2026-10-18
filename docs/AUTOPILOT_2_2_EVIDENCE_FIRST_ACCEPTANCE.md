@@ -60,3 +60,10 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - Strict stitching joins a media-only message to a text story when an unambiguous same-source album/group ID or reply edge proves its owner. A group with multiple independent text owners remains unbound rather than duplicating the media.
 - Source provenance records include grouped_id; tests cover exact group ownership, conflicting ownership and parser extraction.
 - Public Telegram HTML often omits these attributes: actual operator-post reconstruction still needs calibrated source-level retrieval and replay and is NOT complete.
+
+## Phase 1h: unresolved public-Telegram media observations
+
+- Exact-post ingestor stores nearby media-only public Telegram widgets in `telegram.unresolved_nearby_media_v1` when an actual ownership relation is unavailable. Entries include source post, bounded time distance, media count, video presence and explicit unresolved reason; they **never** add the media to the news article.
+- Media explicitly linked by a verified album ID or reply relation is excluded from unresolved candidates.
+- No proximity-based stitching. A missing linkage must be resolved by authoritative source access or operator inspection; this stage improves observability, not automatic video recovery.
+- Regression tests cover adjacent unowned video, explicitly linked video and cross-channel/time-boundary isolation.
