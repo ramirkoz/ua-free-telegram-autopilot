@@ -657,6 +657,27 @@ def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
     entries = [_hydrate_exact_video_post(username, entry) for entry in parser.entries]
+    # Recover up to two explicitly linked same-channel video posts absent
+    # from the public /s listing. Every embed result must match the exact ID.
+    available = {entry.post for entry in entries}
+    missing_links = sorted({
+        linked
+        for entry in entries if str(entry.text or "").strip()
+        for linked in _explicit_same_channel_video_links(username, entry.text)
+        if linked not in available
+    })[:2]
+    for linked in missing_links:
+        candidate = base.TelegramEntry(
+            post=linked, text="", published=None, video_attachment_seen=True,
+        )
+        recovered = _hydrate_exact_video_post(username, candidate)
+        if recovered.post == linked and _entry_has_video(recovered):
+            entries.append(recovered)
+            event(
+                "ingest", "linked video recovered by exact post",
+                source=username, post_id=base._post_number(linked),
+                media_count=len(recovered.media),
+            )
     items = strict_stitch_telegram(username, entries)
     if not items:
         raise collector.CollectorError("Не вдалося прочитати Telegram-канал")
