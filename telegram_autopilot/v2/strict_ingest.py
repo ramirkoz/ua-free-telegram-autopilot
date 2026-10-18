@@ -14,6 +14,7 @@ from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
 from .evidence_ledger import extract_source_evidence
+from .unresolved_media import observe_nearby_unowned_media
 
 
 class StrictTelegramParser(base.TelegramParser):
@@ -505,7 +506,36 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
         article = base._to_article(username, entry, linked)
         articles.append(article)
 
-    return [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
+    upgraded = [_upgrade_strict_article(username, article, entry_by_id) for article in articles]
+    for article in upgraded:
+        try:
+            layout = json.loads(article.article_layout_json or "{}")
+            tg = layout.get("telegram", {})
+            ids = tg.get("message_ids", [])
+            entry = entry_by_id.get(int(ids[0])) if ids and str(ids[0]).isdigit() else None
+            if entry is None:
+                continue
+            linked_posts = {str(x.get("post") or "") for x in tg.get("source_message_records_v1", [])}
+            observations = tuple(
+                candidate for candidate in observe_nearby_unowned_media(entry, ordered)
+                if candidate.post not in linked_posts
+            )
+            if observations:
+                tg["unresolved_nearby_media_v1"] = [
+                    {
+                        "post": item.post,
+                        "media_count": item.media_count,
+                        "video_seen": item.video_seen,
+                        "seconds_apart": item.seconds_apart,
+                        "reason": item.reason,
+                    }
+                    for item in observations
+                ]
+                tg["media_ownership_unresolved"] = True
+                article.article_layout_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+        except (ValueError, TypeError, KeyError):
+            continue
+    return upgraded
 
 def _entry_has_video(entry: base.TelegramEntry) -> bool:
     from ..media import decode_media
