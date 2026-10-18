@@ -13,6 +13,7 @@ from ..media import encode_media, media_identity
 from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
+from .evidence_ledger import extract_source_evidence
 
 
 class StrictTelegramParser(base.TelegramParser):
@@ -380,6 +381,18 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
             "reply_to_post": str(getattr(entry, "reply_to_post", "") or ""),
         }
         for entry in group
+    ]
+    evidence = extract_source_evidence(str(article.raw_text or ""), str(article.external_id or article.url))
+    tg["source_evidence_v1"] = [
+        {
+            "source_id": item.source_id,
+            "start": item.start,
+            "end": item.end,
+            "quote": item.quote,
+            "uncertain": item.uncertainty,
+            "current_time_reference": item.current_time_reference,
+        }
+        for item in evidence.entries
     ]
     tg["source_boundary_provenance"] = "exact_telegram_widget"
     tg["source_provenance_complete"] = bool(group) and len(group) == len(mids)
