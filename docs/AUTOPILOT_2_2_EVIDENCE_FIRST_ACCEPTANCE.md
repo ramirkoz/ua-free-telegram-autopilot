@@ -82,3 +82,9 @@ No merge/tag/release while any blocker remains. `main` stays on 2.1.23.
 - If explicitly linked target is missing from the current public channel listing, ingestor makes at most two exact embed retrievals per collection and accepts results only when returned channel/post ID matches. No URL from untrusted text is fetched directly: exact URLs are assembled from the known channel and numeric post ID.
 - Tests cover same-channel explicit video, external channel/image rejection, conflict ownership, off-page exact retrieval, mismatched embed ID.
 - Operator cases `VB_is_Ukraine/14790` and `vasgromada/10013` could not be independently fetched through the available web viewer. No claim of successful recovery for those real posts until authoritative end-to-end replay.
+
+## Phase 1k: operator-derived prepublish replay corpus
+
+- `tests/fixtures/monitoring_operator_replay_220.json` stores **sanitized, operator-derived** cases corresponding to missing video (VB_is_Ukraine/14790, vasgromada/10013), unrelated animal/documents (info_zp/169493) and an unverified short RSZV strike (zaborzp/154499).
+- `tests/test_220_operator_replay.py` tests all four sources both at deterministic source/media assessment and at the production `prepublish_quality_issues` boundary. The expected behavior is blocking malformed or unsupported output.
+- This is **not** raw Telegram replay or proof that video was recovered. Private raw-source exports and successful live-media ownership reconstruction are still required for editorial release acceptance.
