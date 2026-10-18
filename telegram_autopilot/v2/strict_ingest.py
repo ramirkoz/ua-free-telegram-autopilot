@@ -177,6 +177,19 @@ class StrictTelegramParser(base.TelegramParser):
 
         try:
             super()._handle_start(tag, attrs, self_closing=self_closing)
+            # Honour only an explicit album identifier on this exact message
+            # root. Never infer a group from nearby timestamps or post IDs.
+            if (
+                self.current is not None and low_tag == "div"
+                and "tgme_widget_message" in local and values.get("data-post")
+            ):
+                explicit_group = next(
+                    (str(values[k]).strip() for k in (
+                        "data-grouped-id", "data-media-group-id", "data-album-id"
+                    ) if values.get(k)), ""
+                )
+                if re.fullmatch(r"[A-Za-z0-9_:.-]{1,80}", explicit_group):
+                    self.current["grouped_id"] = explicit_group
         finally:
             self._strict_candidate_classes = set()
             self._strict_element_classes = set()
@@ -379,6 +392,7 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
             "video_attachment_seen": bool(getattr(entry, "video_attachment_seen", False)),
             "video_recovery": str(getattr(entry, "video_recovery", "") or ""),
             "reply_to_post": str(getattr(entry, "reply_to_post", "") or ""),
+            "grouped_id": str(getattr(entry, "grouped_id", "") or ""),
         }
         for entry in group
     ]
@@ -455,7 +469,11 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             if not str(text_entry.text or "").strip():
                 continue
             if (
-                str(getattr(media_entry, "reply_to_post", "") or "") == text_entry.post
+                (
+                    bool(getattr(media_entry, "grouped_id", ""))
+                    and str(getattr(media_entry, "grouped_id", "")) == str(getattr(text_entry, "grouped_id", ""))
+                )
+                or str(getattr(media_entry, "reply_to_post", "") or "") == text_entry.post
                 or str(getattr(text_entry, "reply_to_post", "") or "") == media_entry.post
             ):
                 owners.add(text_entry.post)
@@ -476,7 +494,11 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             and _strict_media_bearing(candidate)
             and media_owners.get(candidate.post) == {entry.post}
             and (
-                str(getattr(candidate, "reply_to_post", "") or "") == entry.post
+                (
+                    bool(getattr(candidate, "grouped_id", ""))
+                    and str(getattr(candidate, "grouped_id", "")) == str(getattr(entry, "grouped_id", ""))
+                )
+                or str(getattr(candidate, "reply_to_post", "") or "") == entry.post
                 or str(getattr(entry, "reply_to_post", "") or "") == candidate.post
             )
         ]
