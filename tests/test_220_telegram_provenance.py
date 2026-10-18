@@ -15,6 +15,8 @@ def test_exact_widget_provenance_remains_bound_to_its_message():
     meta = json.loads(out[0].article_layout_json)["telegram"]
     assert meta["source_boundary_provenance"] == "exact_telegram_widget"
     assert meta["source_provenance_complete"] is True
+    assert meta["source_evidence_v1"][0]["quote"] == "У громаді відбулося свято."
+    assert meta["source_evidence_v1"][0]["source_id"] == "community/100"
     assert [x["message_id"] for x in meta["source_message_records_v1"]] == ["100"]
     assert meta["source_message_records_v1"][0]["media_count"] == 0
     # Adjacent unrelated media cannot be falsely claimed as part of 100.
