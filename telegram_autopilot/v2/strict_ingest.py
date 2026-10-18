@@ -437,6 +437,15 @@ def _strict_media_bearing(entry: base.TelegramEntry) -> bool:
     }
 
 
+def _explicit_same_channel_video_links(username: str, text: str) -> set[str]:
+    """Extract source-asserted video targets, never infer neighbour ownership."""
+    value = str(text or "")
+    if not re.search(r"(?iu)\\b(?:відео|відеозапис|відеоролик|відеосюжет)\\b", value):
+        return set()
+    links = re.findall(r"https?://t\\.me/([A-Za-z0-9_]+)/([0-9]+)(?:[?#][^\\s]*)?", value)
+    return {f"{username}/{number}" for channel, number in links if channel.casefold() == username.casefold()}
+
+
 def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
     """Build articles only from the exact Telegram post that owns the text/media.
 
@@ -470,6 +479,11 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             if not str(text_entry.text or "").strip():
                 continue
             if (
+                media_entry.post in _explicit_same_channel_video_links(username, text_entry.text)
+                and _entry_has_video(media_entry)
+            ):
+                owners.add(text_entry.post)
+            if (
                 (
                     bool(getattr(media_entry, "grouped_id", ""))
                     and str(getattr(media_entry, "grouped_id", "")) == str(getattr(text_entry, "grouped_id", ""))
@@ -496,6 +510,10 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             and media_owners.get(candidate.post) == {entry.post}
             and (
                 (
+                    candidate.post in _explicit_same_channel_video_links(username, entry.text)
+                    and _entry_has_video(candidate)
+                )
+                or (
                     bool(getattr(candidate, "grouped_id", ""))
                     and str(getattr(candidate, "grouped_id", "")) == str(getattr(entry, "grouped_id", ""))
                 )
