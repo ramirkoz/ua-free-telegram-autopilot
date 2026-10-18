@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from typing import TypeVar
+from .crop_dedupe import same_cropped_image
 
 T = TypeVar("T")
 
@@ -69,7 +70,7 @@ def remove_visual_duplicates(items: list[T]) -> tuple[list[T], int]:
             signatures.append(None)
             continue
         sig = _fingerprint(getattr(item, "data", b""))
-        match = next((index for index, other in enumerate(signatures) if _same_image(sig, other)), None)
+        match = next((index for index, other in enumerate(signatures) if _same_image(sig, other) or (other is not None and same_cropped_image(getattr(item, 'data', b''), getattr(result[index], 'data', b'')))), None)
         if match is None:
             result.append(item)
             signatures.append(sig)
