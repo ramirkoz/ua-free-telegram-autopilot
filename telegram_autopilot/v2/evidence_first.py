@@ -9,6 +9,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping
+from .event_boundaries import classify_event_boundaries
 
 _TRAFFIC = re.compile(r"(?iu)\b(?:дтп|аварі[яї]|зіткненн|рух\s+ускладнен)\b")
 _LOST_ANIMAL = re.compile(r"(?iu)\b(?:хаскі|собак\w*|пес|цуцен\w*|тварин\w*)\b")
@@ -56,9 +57,10 @@ def assess_monitoring_source(article: Any, *, final_text: str = "") -> EvidenceD
     final = str(final_text or "")
     reasons: list[str] = []
     evidence: list[str] = []
-    if _LOST_ANIMAL.search(raw) and _LOST_PROPERTY.search(raw):
+    boundaries = classify_event_boundaries(raw)
+    if boundaries.ambiguous or (_LOST_ANIMAL.search(raw) and _LOST_PROPERTY.search(raw)):
         reasons.append("MONITORING_MULTIPLE_UNRELATED_NOTICES")
-        evidence.append("lost_animal+lost_property")
+        evidence.extend(f"{span.category}:{span.start}-{span.end}" for span in boundaries.spans)
     if _ACTIVE_ATTACK.search(source) and not _VERIFIED_OUTCOME.search(source):
         # A short source cannot be promoted to a completed incident merely by
         # a writer adding 'today' or 'no information about consequences'.
