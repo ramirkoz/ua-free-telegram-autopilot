@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .dedupe import DedupeResult
+from .initiative_dedupe import find_initiative_duplicate
 from .domain import Decision, DedupeProfile, Stage
 from .loghub import event
 from .storage import now_iso
@@ -811,6 +812,11 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
             raise KeyError(article_id)
         channel_id = int(current["channel_id"])
         channel = self.store.get_channel(channel_id)
+        if channel is not None:
+            # 2.2.4: one post per named initiative per channel window (channel setting).
+            initiative = find_initiative_duplicate(self.store, current, channel)
+            if initiative is not None:
+                return DedupeResult("DUPLICATE", initiative[0], initiative[1])
         configured_hours = int(channel.dedupe_window_hours if channel else 72)
         published_hours = int(channel.published_dedupe_window_hours if channel else 168)
         hours = max(1, published_hours if published_only else configured_hours)

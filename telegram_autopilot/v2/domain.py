@@ -81,6 +81,23 @@ class ProviderState(StrEnum):
     CONFIG_ERROR = "CONFIG_ERROR"
 
 
+# 2.2.4: what kind of item a monitoring source post is. The AI selector names
+# the type; channel settings decide which types are blocked.
+MONITORING_EVENT_TYPES: dict[str, str] = {
+    "alert_threat": "тривога / загроза / рух цілей",
+    "attack_in_progress": "атака або обстріл без підсумку",
+    "attack_summary": "підсумок атаки з конкретним результатом",
+    "private_ad": "приватне оголошення (загубили/знайшли/шукають/віддам)",
+    "missing_person": "пошук зниклої людини",
+    "initiative": "програма, конкурс, кампанія, набір",
+    "local_news": "місцева новина, рішення, послуги, події",
+    "repost": "простий репост чужого каналу",
+    "ritual": "хвилина мовчання, привітання, побажання",
+    "other": "інше",
+}
+DEFAULT_MONITORING_BLOCKED_EVENT_TYPES = "alert_threat,attack_in_progress,private_ad,missing_person"
+
+
 @dataclass(slots=True)
 class ChannelPolicy:
     channel_id: int = 0
@@ -101,8 +118,16 @@ class ChannelPolicy:
     media_policy: str = "optional"
     monitoring_source_policy: str = "institutional"
     monitoring_denied_origins: str = ""
+    # 2.2.4: monitoring event types this channel never publishes (comma list of
+    # MONITORING_EVENT_TYPES) and the window for one post per named initiative.
+    monitoring_blocked_event_types: str = ""
+    initiative_dedupe_days: int = 0
     target_min_chars: int = 300
     target_max_chars: int = 750
+
+    def blocked_event_types(self) -> frozenset[str]:
+        values = {x.strip().casefold() for x in str(self.monitoring_blocked_event_types or "").replace(";", ",").split(",")}
+        return frozenset(x for x in values if x in MONITORING_EVENT_TYPES)
 
     def normalized_monitoring_source_policy(self) -> str:
         """Explicit per-channel monitoring source trust rule."""

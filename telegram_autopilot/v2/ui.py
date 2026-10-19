@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from ..codex_engine import inspect_codex, install_codex, login_chatgpt, test_codex
 from ..facebook import FacebookError, discover_pages, inspect_page
 from ..secrets_store import load_secrets, save_secrets
-from .domain import ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode, SourceBodyAttributionMode
+from .domain import MONITORING_EVENT_TYPES, ChannelConfig, ChannelMode, ChannelPolicy, DedupeProfile, EditorialRuntimeProfile, SourceAttributionMode, SourceBodyAttributionMode
 from .feedback import FeedbackRuntime, FeedbackService, analytics_configured, authorize_telegram_analytics, save_analytics_credentials
 from .learning import LearningEngine, audience_performance_score, audience_raw_rate, topic_feedback_signal
 from .editorial_review import EditorialReviewService
@@ -239,6 +239,9 @@ class ChannelDialog(tk.Toplevel):
             list(MONITORING_SOURCE_POLICY_VALUES))
         ttk.Label(p, text="Діє лише для моніторингу. Оригінали підключених каналів не скасовують відхилення чуток, репостів та небезпечних оперативних повідомлень.", wraplength=760, foreground="#444").grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=8)
         self._text(p, 7, "Заборонені оригінальні Telegram-джерела (username або URL)", q.monitoring_denied_origins, 3)
+        self._text(p, 8, "Заблоковані типи подій (моніторинг)", q.monitoring_blocked_event_types, 2)
+        ttk.Label(p, text="Через кому: " + ", ".join(MONITORING_EVENT_TYPES), wraplength=760, foreground="#444").grid(row=9, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._entry(p, 10, "Дедуп програм/кампаній, днів", q.initiative_dedupe_days)
 
     def _build_editorial(self, p, cfg):
         q = cfg.policy
@@ -341,6 +344,8 @@ class ChannelDialog(tk.Toplevel):
                 source_body_attribution_marker=self._get("Маркер у назві джерела для атрибуції"),
                 monitoring_source_policy=MONITORING_SOURCE_POLICY_VALUES.get(self._get("Політика походження моніторингових джерел"), "institutional"),
                 monitoring_denied_origins=self._get("Заборонені оригінальні Telegram-джерела (username або URL)"),
+                monitoring_blocked_event_types=self._get("Заблоковані типи подій (моніторинг)"),
+                initiative_dedupe_days=int(self._get("Дедуп програм/кампаній, днів") or 0),
                 media_policy=self._get("Політика медіа"),
                 target_min_chars=int(self._get("Мін. символів")),
                 target_max_chars=int(self._get("Макс. символів")),
