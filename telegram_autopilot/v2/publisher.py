@@ -754,6 +754,17 @@ class Publisher:
                 event("media", "VIDEO_EXPECTED_BUT_NOT_FOUND", level=30, channel_id=channel_id, article_id=article_id, source_url=source_url)
 
         text = str(article["final_text"] or "").strip()
+        # P0: an AI selector/editor rejection must never become a public Telegram post.
+        from .publication_safety import is_ai_rejection_text
+        if is_ai_rejection_text(text):
+            self.store.block_article(
+                article_id, blocked_by=BlockedBy.QUALITY,
+                error_code="AI_REJECTION_LEAK_BLOCKED",
+                detail="Службова відмова AI потрапила до final_text; публікацію заблоковано.",
+            )
+            event("publish", "AI_REJECTION_LEAK_BLOCKED", level=40,
+                  channel_id=channel_id, article_id=article_id)
+            return "AI_REJECTION_LEAK_BLOCKED"
         event(
             "publish", "publication source binding",
             channel_id=channel_id, article_id=article_id, source_id=int(article["source_id"]),
