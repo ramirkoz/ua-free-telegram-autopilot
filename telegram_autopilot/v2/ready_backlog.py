@@ -11,6 +11,7 @@ from .local_supervisor import LocalOnlyProductionSupervisorService
 from .loghub import event
 from .media_pipeline import build_media_bundle, media_asset_keys, media_bundle_complete
 from .media_recovery import MediaRecoveryStore
+from .source_retirement import retire_blocked_sources_once
 from .storage import _clean_media_json, _media_json_count, _normalize_datetime_value, _parse_datetime_value, now_iso
 
 
@@ -85,11 +86,13 @@ class ReadyBacklogStore(MediaRecoveryStore):
             if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
                 con.commit()
                 return {"skipped": 1, "restored": 0}
+            # Items from disabled (e.g. retired, image-blocking) sources stay archived.
             rows = con.execute(
-                """SELECT id,ready_at,article_layout_json FROM articles
-                   WHERE stage='ARCHIVED' AND decision='REJECT'
-                     AND last_error_code='MEDIA_REQUIRED_PERMANENT'
-                     AND COALESCE(final_text,'')<>''"""
+                """SELECT a.id,a.ready_at,a.article_layout_json FROM articles a
+                   JOIN sources s ON s.id=a.source_id AND s.enabled=1
+                   WHERE a.stage='ARCHIVED' AND a.decision='REJECT'
+                     AND a.last_error_code='MEDIA_REQUIRED_PERMANENT'
+                     AND COALESCE(a.final_text,'')<>''"""
             ).fetchall()
             for row in rows:
                 ready_at = _parse_datetime_value(str(row["ready_at"] or ""))
@@ -121,6 +124,7 @@ class ReadyBacklogStore(MediaRecoveryStore):
         reset = self._reset_2010_queue_once()
         stats = dict(super().run_startup_maintenance())
         stats["queue_reset_2010"] = reset
+        stats["blocked_sources_retired_223"] = retire_blocked_sources_once(self)
         stats["media_permanent_restore_223"] = self._restore_223_media_permanent_once()
         expired = 0
         for channel in self.list_channels(enabled_only=True):

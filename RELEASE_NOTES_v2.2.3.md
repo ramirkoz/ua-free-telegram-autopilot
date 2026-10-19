@@ -16,6 +16,8 @@
 - **Vector icons are not media.** `.svg`/`.svgz` are never media candidates (menu icons were counted as an 11-item "gallery").
 - **Replayable media trace.** `media prepared for telegram upload` events carry `media_trace` (kind, URL, SHA-256 of uploaded bytes, size, kept/removed) for exact incident replay.
 
+- **Blocked sources retired (operator decision).** One-time startup migration disables Trend Hunter (every CDN image answers 403), Little Black Book, The Dieline, Campaign and DesignTAXI (HTTP 403 on every request). Sources are disabled, not deleted — article history is kept and they can be re-enabled in channel settings. Their archived items are not restored. Rest of World (CTRL+UA) also answers 403 and is left for a separate decision.
+
 ## Commercial observability (ПРОДАНО!)
 - **Structured selector rejections.** The channel-fit selector returns a `reject_code` (off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other); rejection reasons are stored as `[code] reason`. Telemetry categories use the code first and fall back to the old text matching only for legacy reasons. Selector thresholds are unchanged.
 - **24 h report.** `commercial_throughput.channels[].window_24h`: processed, published, rejected, reject categories, value-score buckets of rejections, media-permanent losses, READY items waiting for media.
@@ -24,7 +26,7 @@
 - **Release PR builds Windows assets.** The release workflow now builds and tests the portable on release PRs (`RELEASE_NOTES_v*.md`) without publishing; Drive sync skips PR runs.
 
 ## Validation
-- New regressions `tests/test_223_media_evidence_core.py` (16 cases) and `tests/test_223_observability.py` (6 cases): asset keys, JSON-LD renditions vs real gallery, low-contrast renditions 3→1, same-sky different frames kept, video never merged, CSS context not evidence, page-declared lead image kept, recommendation cards excluded, 403 reported as `http_403`, re-poll keeps backoff, genuinely new asset unblocks.
+- New regressions `tests/test_223_media_evidence_core.py` (17 cases) and `tests/test_223_observability.py` (6 cases): asset keys, JSON-LD renditions vs real gallery, low-contrast renditions 3→1, same-sky different frames kept, video never merged, CSS context not evidence, page-declared lead image kept, recommendation cards excluded, 403 reported as `http_403`, re-poll keeps backoff, genuinely new asset unblocks.
 - Full suite green locally (Windows, Python 3.12); CI 4/4 on the PR.
 - **Replay of original public pages and CDN bytes** through the production functions (`hydrate_article_page` → `prepare_article_media` → `prepare_telegram_media_list` → `remove_visual_duplicates`), 17 articles from Tom's Hardware, Ars Technica, The Decoder, Space.com, The Verge, TechCrunch: F-22 4→1 and Wi-Fi 2→1 (renditions and promo removed); the other 15 articles publish the same images as 2.2.2.
 - Pixel matcher on original bytes: 14/14 (7 renditions merged, 7 different frames/images kept).

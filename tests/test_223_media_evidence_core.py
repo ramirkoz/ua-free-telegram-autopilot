@@ -318,3 +318,25 @@ def test_media_prepared_event_carries_replayable_trace():
     source = inspect.getsource(Publisher)
     assert "media_trace=media_trace" in source
     assert '"sha256"' in source and '"kept"' in source
+
+
+def test_blocked_sources_are_disabled_once_and_their_items_stay_archived(tmp_path):
+    from telegram_autopilot.v2.source_retirement import retire_blocked_sources_once
+    store = ReadyBacklogStore(tmp_path / "v2.sqlite3")
+    _seed_blocked_ready(store, ["https://cdn.example.com/p/a_1.jpeg"], [])
+    with store.connect() as con:
+        con.execute("UPDATE sources SET name='Trend Hunter',url='https://www.trendhunter.com/rss' WHERE id=1")
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized,priority) VALUES(2,1,'rss','Campaign','https://feeds.example.org/campaign',1,1,100)")
+        con.execute("INSERT INTO source_health(source_id,last_outcome,consecutive_failures) VALUES(2,'HTTP_403',12)")
+        con.execute("INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized,priority) VALUES(3,1,'rss','Fast Company','https://www.fastcompany.com/feed',1,1,100)")
+        con.execute("""UPDATE articles SET stage='ARCHIVED',decision='REJECT',final_text='Текст',
+                       last_error_code='MEDIA_REQUIRED_PERMANENT' WHERE id=1""")
+        con.commit()
+    first = retire_blocked_sources_once(store)
+    assert sorted(first["retired"]) == ["Campaign (channel 1)", "Trend Hunter (channel 1)"]
+    assert retire_blocked_sources_once(store)["skipped"] == 1
+    with store.connect() as con:
+        enabled = {int(r["id"]): int(r["enabled"]) for r in con.execute("SELECT id,enabled FROM sources")}
+    assert enabled == {1: 0, 2: 0, 3: 1}
+    # The archived TrendHunter item is not resurrected by the 2.2.3 restore.
+    assert store._restore_223_media_permanent_once()["restored"] == 0
