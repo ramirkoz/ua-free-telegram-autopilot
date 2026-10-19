@@ -62,7 +62,7 @@ def test_ai_selector_reason_reject_overrides_structured_publish():
     class FakeGateway:
         def run(self, prompt, **kwargs):
             return SimpleNamespace(
-                text='{"included": true, "excluded": false, "reason": "This is an ongoing air alert and should be rejected."}',
+                text='{"event_type": "local_news", "settled": true, "included": true, "excluded": false, "reason": "This is an ongoing air alert and should be rejected."}',
                 provider="openrouter", model="mistralai/mistral-nemo",
             )
 
@@ -81,7 +81,7 @@ def test_clean_ai_selector_publish_remains_allowed():
     class FakeGateway:
         def run(self, prompt, **kwargs):
             return SimpleNamespace(
-                text='{"included": true, "excluded": false, "reason": "Confirmed public opening with factual details."}',
+                text='{"event_type": "local_news", "settled": true, "included": true, "excluded": false, "reason": "Confirmed public opening with factual details."}',
                 provider="openrouter", model="mistralai/mistral-nemo",
             )
 

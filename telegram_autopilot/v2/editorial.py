@@ -19,7 +19,7 @@ from .source_attribution import (
     require_source_context, source_body_attribution_issues, source_body_context_name, source_body_instruction,
     source_body_hard_limit, source_context_name, strip_forbidden_source_body_attribution,
 )
-from .domain import BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
+from .domain import MONITORING_EVENT_TYPES, BlockedBy, ChannelConfig, ChannelMode, Decision, EditorialRuntimeProfile, Stage
 from .loghub import event
 from .learning import LearningEngine
 from .storage import V2Store
@@ -28,6 +28,9 @@ from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
+
+# 2.2.4: values that mean the model copied the schema instead of deciding.
+_PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
 
 # 2.2.3: structured selector rejection codes (see the CHANNEL-FIT SELECTOR prompt).
 SELECTOR_REJECT_CODES = (
@@ -557,8 +560,11 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
 
     source_len = len(_source_text(article))
     if source_len <= 220:
-        effective_min = 80
-        effective_max = min(configured_max, max(180, source_len + 100))
+        # 2.2.4: a short notice must not grow. The old floor of 80 chars and
+        # "+100" ceiling made models pad a 28-char "Загроза КАБ" with invented
+        # advice and invented attack details. Retell, do not expand.
+        effective_min = max(20, int(source_len * 0.6))
+        effective_max = min(configured_max, max(180, source_len + 100), int(source_len * 1.5) + 20)
     elif source_len <= 420:
         effective_min = min(configured_min, max(90, int(source_len * 0.42)))
         effective_max = min(configured_max, max(260, source_len + 120))
@@ -1056,19 +1062,44 @@ class EditorialEngine:
         exclusion = channel.policy.rejection_rules.strip()
         if not inclusion and not exclusion:
             return EditorialOutcome(Decision.PUBLISH, reason="MONITORING_PASS: explicit inclusion/exclusion empty; interest gates disabled", fit_score=100, angle="Передай факт точно і стисло.")
+        types = "\n".join(f"- {key}: {label}" for key, label in MONITORING_EVENT_TYPES.items())
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
-INCLUSION RULES:\n{inclusion or 'Не задано: inclusion виконаний.'}\n\nEXCLUSION RULES:\n{exclusion or 'Не задано.'}
-Рішення: explicit exclusion -> reject; якщо inclusion заданий і SOURCE йому не відповідає -> reject; якщо бракує контексту або фактів -> reject; сумнів -> reject. Не доповнюй невідомі факти здогадками.
-SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
-Поверни ТІЛЬКИ JSON: {{"included":true,"excluded":false,"reason":"коротко"}}"""
+INCLUSION RULES:
+{inclusion or 'Не задано: inclusion виконаний.'}
+
+EXCLUSION RULES:
+{exclusion or 'Не задано.'}
+Спершу визнач ТИП повідомлення (рівно один ключ):
+{types}
+attack_summary — лише якщо є конкретний підсумок: кількість загиблих/поранених/пошкоджених об'єктів або офіційні підсумки. Повідомлення «обстріляли/закидають/атакують» без такого результату — attack_in_progress.
+Потім рішення: explicit exclusion -> excluded=true; якщо inclusion заданий і SOURCE йому не відповідає -> included=false. Не доповнюй невідомі факти здогадками.
+SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
+SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
+SOURCE:
+{_source_pack(article, 3600)}
+Поверни ТІЛЬКИ JSON з такими полями (значення визнач сам, не копіюй цей опис):
+{{"event_type": "<один ключ зі списку>", "settled": <true якщо подія завершена і має підсумок, інакше false>, "included": <true/false>, "excluded": <true/false>, "reason": "<одне речення: чому саме таке рішення>"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
-            return bool(obj.get("included", False)), bool(obj.get("excluded", True)), _clean(obj.get("reason"), 500)
+            event_type = str(obj.get("event_type") or "").strip().casefold()
+            if event_type not in MONITORING_EVENT_TYPES:
+                raise ValueError(f"invalid event_type {event_type!r}")
+            reason = _clean(obj.get("reason"), 500)
+            # 2.2.4: a copied template value is not a decision ("коротко", "<...>").
+            if not reason or reason.casefold().strip(" .") in _PLACEHOLDER_REASONS or reason.startswith("<"):
+                raise ValueError("placeholder reason")
+            for key in ("included", "excluded", "settled"):
+                if not isinstance(obj.get(key), bool):
+                    raise ValueError(f"{key} must be boolean")
+            return event_type, bool(obj["settled"]), bool(obj["included"]), bool(obj["excluded"]), reason
 
-        result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=190, timeout_seconds=22, purpose="monitoring_selector")
-        included, excluded, reason = parse(result.text)
+        result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=220, timeout_seconds=22, purpose="monitoring_selector")
+        event_type, settled, included, excluded, reason = parse(result.text)
+        if event_type == "attack_summary" and not settled:
+            event_type = "attack_in_progress"
+        blocked_types = channel.policy.blocked_event_types()
         # A model can contradict its own rationale: 56082 was marked included
         # while the returned explanation explicitly ordered rejection.
         # Fail closed for explicit English/Ukrainian reject instructions only.
@@ -1079,10 +1110,16 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             r"\bне\s+(?:можна|слід|варто)\s+публікувати\b)",
             reason,
         ))
+        if event_type in blocked_types:
+            return EditorialOutcome(
+                Decision.REJECT,
+                reason=f"MONITORING_EVENT_TYPE_BLOCKED: [{event_type}] {reason}",
+                fit_score=0, provider=result.provider, model=result.model,
+            )
         rejected = excluded or (bool(inclusion) and not included) or rationale_reject
         return EditorialOutcome(
             Decision.REJECT if rejected else Decision.PUBLISH,
-            reason=("MONITORING_POLICY_REJECT: " if rejected else "MONITORING_POLICY_PASS: ") + (reason or "none"),
+            reason=("MONITORING_POLICY_REJECT: " if rejected else "MONITORING_POLICY_PASS: ") + f"[{event_type}] " + reason,
             fit_score=0 if rejected else 100,
             angle="" if rejected else "Передай факт точно і стисло.",
             provider=result.provider,
