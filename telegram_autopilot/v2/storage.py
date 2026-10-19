@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from . import V2_SCHEMA_VERSION
+from . import article_state
 from ..media import canonical_asset_key, encode_media, media_identity, valid_public_media
 from .domain import AIModelHealth, BlockedBy, ChannelConfig, ChannelMode, ChannelPolicy, Decision, DedupeProfile, EditorialRuntimeProfile, ProviderHealth, ProviderState, SourceAttributionMode, SourceBodyAttributionMode, Stage
 from .urlnorm import normalize_url
@@ -1981,11 +1982,9 @@ class V2Store:
                 permanent = False
             if not permanent:
                 continue
-            con.execute(
-                """UPDATE articles SET stage='ARCHIVED',decision='REJECT',
-                   blocked_by='MEDIA',reject_reason='No publishable source-owned media',
-                   last_error_code='MEDIA_REQUIRED_PERMANENT',next_retry_at=''
-                   WHERE id=? AND stage='READY'""", (int(row["id"]),),
+            article_state.transition(
+                con, int(row["id"]), article_state.MEDIA_ARCHIVE_PERMANENT,
+                extra={"reject_reason": "No publishable source-owned media"},
             )
         con.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (key,"1"))
 
@@ -1997,17 +1996,10 @@ class V2Store:
         is permitted when the channel requires source-owned media.
         """
         with self.connect() as con:
-            con.execute(
-                """UPDATE articles
-                   SET stage='ARCHIVED', decision='REJECT', blocked_by='MEDIA',
-                       reject_reason=?, last_error_code='MEDIA_REQUIRED_PERMANENT',
-                       last_error_detail=?, next_retry_at=''
-                   WHERE id=? AND stage='READY' AND decision='PUBLISH'""",
-                (
-                    "Не знайдено придатного медіа джерела після обмежених повторних спроб.",
-                    str(detail)[:2000],
-                    int(article_id),
-                ),
+            article_state.transition(
+                con, int(article_id), article_state.MEDIA_ARCHIVE_PERMANENT,
+                detail=str(detail),
+                extra={"reject_reason": "Не знайдено придатного медіа джерела після обмежених повторних спроб."},
             )
 
     def publication_backoff(
@@ -2031,6 +2023,13 @@ class V2Store:
         if retry_seconds is not None:
             retry_at = (datetime.now(timezone.utc) + timedelta(seconds=max(30, int(retry_seconds)))).astimezone().isoformat(timespec='seconds')
         with self.connect() as con:
+            if str(blocked_by) == str(BlockedBy.MEDIA):
+                article_state.transition(
+                    con, int(article_id), article_state.MEDIA_BACKOFF,
+                    error_code=str(error_code), detail=str(detail), next_retry_at=retry_at,
+                    count_attempt=bool(count_attempt),
+                )
+                return retry_at
             con.execute(
                 """UPDATE articles SET blocked_by=?,last_error_code=?,last_error_detail=?,next_retry_at=?,
                           retry_count=retry_count+? WHERE id=?""",
@@ -2094,18 +2093,19 @@ class V2Store:
                                 or (prior_error == "TELEGRAM_VIDEO_PENDING" and refreshed_video_ok)
                                 or (prior_error in {"MEDIA_REQUIRED","MEDIA_MISSING_AFTER_INGEST","MEDIA_DOWNLOAD_FAILED","VIDEO_SOURCE_UNAVAILABLE"} and genuinely_new_media)
                             )
-                            clear_flag = 1 if clear_media_block else 0
                             if stage == str(Stage.READY):
                                 con.execute(
-                                    "UPDATE articles SET media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
-                                    (refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
+                                    "UPDATE articles SET media_json=?,article_layout_json=? WHERE id=?",
+                                    (refreshed_media,refreshed_layout,aid),
                                 )
                             else:
                                 con.execute(
-                                    "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=?,blocked_by=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN 'NONE' ELSE blocked_by END,last_error_code=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_code END,last_error_detail=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE last_error_detail END,next_retry_at=CASE WHEN blocked_by='MEDIA' AND ?=1 THEN '' ELSE next_retry_at END WHERE id=?",
-                                    (str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),refreshed_media,refreshed_layout,clear_flag,clear_flag,clear_flag,clear_flag,aid),
+                                    "UPDATE articles SET title=?,source_url=?,canonical_source_url=?,raw_text=?,content_hash=?,source_published_at=?,media_json=?,article_layout_json=? WHERE id=?",
+                                    (str(title),str(source_url),canonical,str(raw_text),str(content_hash),str(source_published_at),refreshed_media,refreshed_layout,aid),
                                 )
                             if clear_media_block:
+                                # Guarded: only a MEDIA blocker is cleared; other blockers stay.
+                                article_state.transition(con, aid, article_state.MEDIA_UNBLOCK_NEW_ASSET)
                                 con.execute("UPDATE jobs SET state='QUEUED',available_at=?,lease_owner='',lease_until='',error_code='',error_detail='',updated_at=? WHERE article_id=? AND state='WAITING'",(stamp,stamp,aid))
                         con.commit(); return aid
                 # Hard identity guard: the same article URL must not become a second DB row

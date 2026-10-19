@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import article_state
 from .domain import BlockedBy, Decision, Stage
 from .editorial_state import ensure_editorial_state_schema
 from .guarded_runtime import GuardedRuntimeEngine
@@ -15,12 +16,7 @@ from .source_retirement import retire_blocked_sources_once
 from .storage import _clean_media_json, _media_json_count, _normalize_datetime_value, _parse_datetime_value, now_iso
 
 
-_RECOVERABLE_READY_MEDIA_CODES = {
-    "MEDIA_REQUIRED",
-    "MEDIA_INCOMPLETE",
-    "MEDIA_DOWNLOAD_FAILED",
-    "MEDIA_DOWNLOAD_RETRY",
-}
+_RECOVERABLE_READY_MEDIA_CODES = article_state.READY_MEDIA_RECOVERABLE_CODES
 
 
 class ReadyBacklogStore(MediaRecoveryStore):
@@ -105,16 +101,16 @@ class ReadyBacklogStore(MediaRecoveryStore):
                 if not isinstance(layout, dict):
                     layout = {}
                 layout["media_recovery"] = {"attempts": 0, "tried_assets": [], "restored_by": "2.2.3"}
-                con.execute(
-                    """UPDATE articles SET stage=?,decision=?,blocked_by=?,reject_reason='',
-                              last_error_code='MEDIA_REQUIRED',
-                              last_error_detail='Restored by 2.2.3 for one fresh bounded media recovery',
-                              next_retry_at=?,article_layout_json=?
-                       WHERE id=?""",
-                    (str(Stage.READY), str(Decision.PUBLISH), str(BlockedBy.MEDIA), stamp,
-                     json.dumps(layout, ensure_ascii=False, separators=(",", ":")), int(row["id"])),
-                )
-                restored += 1
+                if article_state.transition(
+                    con, int(row["id"]), article_state.MEDIA_RESTORE_223,
+                    detail="Restored by 2.2.3 for one fresh bounded media recovery",
+                    next_retry_at=stamp,
+                    extra={
+                        "reject_reason": "",
+                        "article_layout_json": json.dumps(layout, ensure_ascii=False, separators=(",", ":")),
+                    },
+                ):
+                    restored += 1
             con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, stamp))
             con.commit()
         event("media", "2.2.3 restored media-permanent READY items", restored=int(restored))
@@ -284,14 +280,13 @@ class ReadyBacklogStore(MediaRecoveryStore):
         if tried and not (offered - tried):
             return False
 
-        self.update_article(
-            int(article_id),
-            blocked_by=str(BlockedBy.NONE),
-            last_error_code="",
-            last_error_detail="",
-            next_retry_at="",
-            status_detail="",
-        )
+        # BlockedBy.MEDIA -> BlockedBy.NONE, guarded against a concurrent writer.
+        with self.connect() as con:
+            if not article_state.transition(
+                con, int(article_id), article_state.MEDIA_UNBLOCK_READY_BUNDLE,
+                extra={"status_detail": ""},
+            ):
+                return False
         event(
             "media",
             "fresh source media unblocked READY publication",
