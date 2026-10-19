@@ -16,6 +16,19 @@ def _value(row: Mapping[str, Any] | Any, key: str) -> str:
     return str(value or "")
 
 
+# 2.2.4: weapon/attack vocabulary used across the gate. "КАБ" is matched as a
+# whole word so "кабінет"/"кабель" never trigger it.
+_WEAPON = (
+    r"(?:бпла|дрон\w*|ракет\w*|шахед\w*|авіац\w*|реактивн\w*\s+мопед\w*|каб(?:и|ами|ом|ів|ах)?|авіабомб\w*|"
+    r"керован\w*\s+авіа\w*|рсзв|град\w*|артилері\w*|балістик\w*)"
+)
+_ATTACK_VERBS = re.compile(
+    r"\b(?:закидають|закидують|закидали|гатять|гатили|вдарил\w*|прилеті\w*|приліт\w*|прильот\w*|"
+    r"обстрілюють|обстріляли|атакують|атакували|атаковано)\b",
+    re.I,
+)
+
+
 def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Reject minute-lived or still-unsettled monitoring events when policy opts in.
 
@@ -99,6 +112,11 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         return "Первинне повідомлення про влучання/удар без стабілізованих підсумків"
 
     patterns = (
+        rf"\bзагроз\w*\b.{{0,80}}\b{_WEAPON}\b",
+        rf"\b{_WEAPON}\b.{{0,80}}\bзагроз\w*",
+        r"\bреактивн\w*\s+мопед\w*",
+        rf"\b(?:пуск|запуск)\w*\b.{{0,60}}\b{_WEAPON}\b",
+        r"\b(?:будьте|перебувайте|залишайтесь|залишайтеся)\s+в\s+укритт",
         r"\bповітрян\w*\s+тривог",
         r"\bвідбій\b.*\bтривог",
         r"\bтривог\w*\s+скас",
@@ -111,8 +129,13 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     if any(re.search(pattern, low, re.I) for pattern in patterns):
         return "Оперативна live-now подія, що втрачає актуальність у 15-хвилинному циклі моніторингу"
 
-    war_context = any(token in low for token in ("росій", "ворож", "бпла", "дрон", "шахед", "ракет", "обстріл", "удар", "запоріж"))
-    attack_now = war_context and any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
+    war_context = any(token in low for token in (
+        "росій", "ворож", "бпла", "дрон", "шахед", "ракет", "обстріл", "удар", "запоріж", "орк", "рашист", "окупант",
+    )) or bool(re.search(rf"\b{_WEAPON}\b", low, re.I))
+    attack_now = war_context and (
+        any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
+        or bool(_ATTACK_VERBS.search(low))
+    )
     if attack_now and not settled_aftermath and not strong_settled_result:
         return "Первинне повідомлення про атаку/вибух без стабілізованих підсумків"
 
