@@ -1106,7 +1106,7 @@ SOURCE:
             _source_text(article)[:1800],
         ))).casefold()
         false_geo_reject = bool(re.search(
-            r"(?:не\\s+стосується|не\\s+належить|не\\s+відповідає).{0,100}"
+            r"(?:не\s+стосується|не\s+належить|не\s+відповідає).{0,100}"
             r"(?:запорізьк|регіон|област|тематиц)", reason.casefold(), re.S
         ))
         region_evidence = bool(re.search(
