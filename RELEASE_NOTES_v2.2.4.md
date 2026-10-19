@@ -21,7 +21,7 @@ These defects were not caused by 2.2.3: the same kinds of posts appeared on 17�
 - **Enemy claims** (e.g. the INFORM.ZP "Герасимов заявив…" post) are not changed, by operator decision.
 
 ## Validation
-- New `tests/test_224_monitoring_event_types.py` (0 cases). The selector tests were updated to the new response schema. Full suite green locally.
+- New `tests/test_224_monitoring_event_types.py` (28 cases). The selector tests were updated to the new response schema. Full suite green locally.
 - **Replay on the operator's real data** (copy of the 19.10 database, deterministic gates):
   - Of today's 29 ГРОМАДИ posts, 6 are blocked: "Загроза КАБ", "реактивний мопед", "Оріхів" and three «ВідНОВА:UA» repeats (the programme was already published on 13.10). Nothing else is blocked.
   - Over 269 posts in 7 days, the live-now gate adds 9 blocks. All are attacks without a settled result, e.g. "РСЗВ вдарило по Юрївці" and "ще відео наслідків прильоту".
