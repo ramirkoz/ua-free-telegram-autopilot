@@ -1097,6 +1097,30 @@ SOURCE:
 
         result = self.gateway.run(prompt, validator=lambda raw: parse(raw), max_output_tokens=220, timeout_seconds=22, purpose="monitoring_selector")
         event_type, settled, included, excluded, reason = parse(result.text)
+        # P0: prevent an AI false "not Zaporizhzhia" rejection when the
+        # source explicitly identifies the region and reports settled casualties.
+        # This corrects ONLY the geographic false-negative, never safety/event blocks.
+        regional_source = (" ".join((
+            _clean(_v(article, "source_name", ""), 200),
+            _clean(_v(article, "title", ""), 400),
+            _source_text(article)[:1800],
+        ))).casefold()
+        false_geo_reject = bool(re.search(
+            r"(?:не\\s+стосується|не\\s+належить|не\\s+відповідає).{0,100}"
+            r"(?:запорізьк|регіон|област|тематиц)", reason.casefold(), re.S
+        ))
+        region_evidence = bool(re.search(
+            r"запоріжж|запорізьк|оріхів|василівк|мелітопол|бердянськ|"
+            r"енергодар|гуляйпол|полог[иів]|токмак", regional_source
+        ))
+        casualty_evidence = bool(re.search(
+            r"загибл|загинул|поранен|постраждал|пошкоджен", regional_source
+        ))
+        if false_geo_reject and region_evidence and casualty_evidence:
+            included, excluded = True, False
+            reason = "Регіональна прив'язка підтверджена джерелом; " + reason
+            event("editorial", "MONITORING_GEO_FALSE_REJECT_CORRECTED",
+                  channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
         if event_type == "attack_summary" and not settled:
             event_type = "attack_in_progress"
         blocked_types = channel.policy.blocked_event_types()
