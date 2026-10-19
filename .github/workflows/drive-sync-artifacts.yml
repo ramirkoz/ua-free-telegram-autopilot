@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   archive-release-assets:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Release PRs only build/test assets; there is no published release to archive.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

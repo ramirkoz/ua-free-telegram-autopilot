@@ -16,7 +16,7 @@ from ..telegram import (
 from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
-from .media_pipeline import build_publication_media_bundle, media_bundle_complete
+from .media_pipeline import build_publication_media_bundle, media_asset_keys, media_bundle_complete
 from .evidence_first import video_required_by_copy
 from .visual_media_dedupe import remove_visual_duplicates
 from .storage import V2Store, now_iso
@@ -316,7 +316,15 @@ class Publisher:
         else:
             classification = "permanent"
             retry_seconds = None
+        # 2.2.3: remember which source assets were already tried. Re-collecting the
+        # same assets must not clear this backoff (see ReadyBacklogStore).
+        tried = set(str(x) for x in (recovery.get("tried_assets") or []) if str(x))
+        try:
+            tried |= media_asset_keys(str(article["media_json"] or "[]"))
+        except (KeyError, IndexError, TypeError):
+            pass
         recovery.update({
+            "tried_assets": sorted(tried)[:64],
             "attempts": attempts,
             "classification": classification,
             "last_attempt_at": now_iso(),
@@ -716,7 +724,8 @@ class Publisher:
             article, bundle, recovery_outcome = self._recover_missing_source_media(channel, article, source_url, recurring)
             event("media", "source page media recovery", channel_id=channel_id,
                   article_id=article_id, outcome=recovery_outcome,
-                  recovered_media_count=bundle.count)
+                  recovered_media_count=bundle.count,
+                  media_drop_reasons=dict(getattr(bundle, "drop_reasons", ()) or ()))
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
@@ -788,6 +797,7 @@ class Publisher:
             extracted_media_count=int(getattr(bundle,"extracted_media_count",0) or 0),
             filtered_media_count=int(getattr(bundle,"filtered_media_count",0) or 0),
             media_validation_error=str(getattr(bundle,"media_validation_error","") or ""),
+            media_drop_reasons=dict(getattr(bundle, "drop_reasons", ()) or ()),
         )
         if policy == "required" and not bundle.count:
             classification, retry_seconds, media_attempt = self._media_recovery_plan(article, bundle, video_expected=_video_expected(article))
@@ -862,7 +872,20 @@ class Publisher:
         # Telegram never receives third-party URLs, eliminating WEBPAGE_CURL_FAILED
         # from CDN/hotlink restrictions and letting us dedupe exact binary clones.
         prepared, prepare_failures = prepare_telegram_media_list(bundle.encoded_items, timeout=35.0, heartbeat=heartbeat)
+        before_visual_dedupe = list(prepared)
         prepared, visual_duplicate_count = remove_visual_duplicates(prepared)
+        # 2.2.3: exact evidence for replaying a media incident from original bytes.
+        kept_ids = {id(item) for item in prepared}
+        media_trace = [
+            {
+                "kind": str(getattr(item, "kind", "") or ""),
+                "url": str(getattr(item, "source_url", "") or "")[:500],
+                "sha256": str(getattr(item, "digest", "") or ""),
+                "bytes": len(getattr(item, "data", b"") or b""),
+                "kept": id(item) in kept_ids,
+            }
+            for item in before_visual_dedupe[:12]
+        ]
         duplicate_binary_count = max(0, bundle.count - len(prepared) - len(prepare_failures))
         event(
             "media", "media prepared for telegram upload", channel_id=channel_id, article_id=article_id,
@@ -870,6 +893,7 @@ class Publisher:
             prepared_media_count=len(prepared), failed_media_count=len(prepare_failures),
             binary_duplicates_removed=duplicate_binary_count - visual_duplicate_count,
             visual_duplicates_removed=visual_duplicate_count, upload_mode="multipart_local",
+            media_trace=media_trace,
             gallery_detected=bool(getattr(bundle,"gallery_detected",False)),
             gallery_items_found=int(getattr(bundle,"gallery_items_found",0) or 0),
             gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),

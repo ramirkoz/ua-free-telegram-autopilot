@@ -22,6 +22,15 @@ from ..secrets_store import load_secrets
 from .provider_discovery import provider_discovery_snapshot
 
 
+# 2.2.3: structured selector reject codes -> commercial telemetry categories.
+_SELECTOR_CODE_CATEGORY = {
+    "off_topic": "off_topic", "weak_audience_hook": "weak_broad_audience_hook",
+    "routine_pr": "routine_b2b_pr", "weak_mechanism": "weak_commercial_mechanism",
+    "weak_visual": "weak_creative_visual_signal", "duplicate": "duplicate",
+    "insufficient_facts": "insufficient_facts", "stale": "stale", "other": "other",
+}
+
+
 @dataclass(slots=True)
 class SupervisorConfig:
     enabled: bool = True
@@ -309,6 +318,7 @@ class SupervisorService:
                 oldest_ready_age_seconds = int(max(0.0, now_ts - oldest_ready_ts)) if oldest_ready_ts is not None else 0
                 published_total = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED'", (cid,)).fetchone()[0] or 0)
                 published_today = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND substr(published_at,1,10)=?", (cid, today)).fetchone()[0] or 0)
+                jobs_done_today = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND substr(updated_at,1,10)=?", (cid, today)).fetchone()[0] or 0)
                 last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE channel_id=? AND stage='PUBLISHED'", (cid,)).fetchone()[0] or "")
                 published_30m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut30)).fetchone()[0] or 0)
                 published_60m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut60)).fetchone()[0] or 0)
@@ -364,9 +374,21 @@ class SupervisorService:
                     "empty_streak_6plus": int(con.execute("""SELECT COUNT(*) FROM source_health sh JOIN sources s ON s.id=sh.source_id
                         WHERE s.channel_id=? AND s.enabled=1 AND sh.zero_result_streak>=6""",(cid,)).fetchone()[0] or 0),
                 }
+                # 2.2.3: sources that keep refusing automated reading (HTTP 403). Fixing
+                # this is an operator decision (feed, permission or replacement).
+                blocked_sources = [
+                    {"name": str(r["name"]), "consecutive_failures": int(r["consecutive_failures"] or 0)}
+                    for r in con.execute(
+                        """SELECT s.name,sh.consecutive_failures FROM source_health sh JOIN sources s ON s.id=sh.source_id
+                             WHERE s.channel_id=? AND s.enabled=1 AND sh.last_outcome='HTTP_403' AND sh.consecutive_failures>=3
+                             ORDER BY sh.consecutive_failures DESC LIMIT 20""", (cid,),
+                    ).fetchall()
+                ]
                 out[str(cid)] = {
                     "name": str(ch["name"]),
                     "max_age_hours": int(ch["max_age_hours"] or 0),
+                    "jobs_done_today": jobs_done_today,
+                    "blocked_sources": blocked_sources,
                     "active_jobs": active,
                     "due_jobs": due,
                     "last_job_update": last_job_activity,
@@ -435,6 +457,30 @@ class SupervisorService:
         if minute < end:
             return True, float(((24 * 60 - start) + minute) * 60 + now_dt.second)
         return False, 0.0
+
+    @staticmethod
+    def _publish_window_elapsed_today(stats: dict[str, Any], now_dt: datetime) -> float:
+        """Seconds the publish window has been open since local midnight.
+
+        Unlike the "currently open" check, this still counts a window that closed
+        earlier today, so "no publications today" stays visible in the evening.
+        """
+        if bool(stats.get("publish_24h")):
+            return float(now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second)
+        def hm(value: str, fallback: str) -> int:
+            try:
+                h, m = str(value or fallback).split(":", 1)
+                return max(0, min(23, int(h))) * 60 + max(0, min(59, int(m)))
+            except Exception:
+                h, m = fallback.split(":", 1)
+                return int(h) * 60 + int(m)
+        start = hm(str(stats.get("publish_start") or "07:00"), "07:00")
+        end = hm(str(stats.get("publish_end") or "00:00"), "00:00")
+        minute = now_dt.hour * 60 + now_dt.minute
+        if start < end:
+            return float(max(0, min(minute, end) - start) * 60)
+        # Window crossing midnight (or 00:00 end): today's part starts at `start`.
+        return float(max(0, minute - start) * 60)
 
     def _operational_states(self, snapshot: dict[str, Any], cfg: SupervisorConfig) -> dict[str, dict[str, Any]]:
         now = time.time()
@@ -524,13 +570,40 @@ class SupervisorService:
                     f"output starvation: published={starvation_published}/{starvation_min_published}, "
                     f"processed={starvation_processed}/{starvation_min_processed} in {starvation_window}h"
                 )
+            # 2.2.3: no publication at all today after the configured starvation window
+            # of open publishing time, while the channel did process work today.
+            day_open = self._publish_window_elapsed_today(stats, datetime.now().astimezone())
+            day_starved = bool(
+                stats.get("output_starvation_enabled")
+                and day_open >= starvation_window * 3600
+                and int(stats.get("published_today") or 0) == 0
+                and int(stats.get("jobs_done_today") or 0) >= starvation_min_processed
+                and starvation_min_published > 0
+                and not output_starved
+            )
+            if day_starved:
+                reasons.append(
+                    f"no publications today: processed={int(stats.get('jobs_done_today') or 0)}, "
+                    f"open window={day_open/3600:.1f}h"
+                )
+            notices = []
+            blocked = list(stats.get("blocked_sources") or [])
+            if blocked:
+                notices.append(
+                    "sources refuse automated reading (HTTP 403): "
+                    + ", ".join(str(x.get("name") or "?") for x in blocked[:8])
+                )
             channel_runtime = dict(dict(snapshot.get("channels") or {}).get(str(cid)) or dict(dict(snapshot.get("channels") or {}).get(cid) or {}))
             cfg_row = self.store.get_channel(cid)
             input_cycles = int(channel_runtime.get("input_zero_add_cycles") or 0)
             input_starved = bool(cfg_row is not None and bool(getattr(cfg_row,"input_starvation_enabled",True)) and input_cycles >= max(1,int(getattr(cfg_row,"input_starvation_cycles",3) or 3)))
             if input_starved:
                 reasons.append(f"input starvation: seen={int(channel_runtime.get('last_collect_seen') or 0)}, added={int(channel_runtime.get('last_collect_added') or 0)}, zero-add cycles={input_cycles}")
-            result[str(cid)] = {"state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons, "output_starved": output_starved, "input_starved": input_starved}
+            result[str(cid)] = {
+                "state": "DEGRADED" if reasons else "HEALTHY", "reasons": reasons,
+                "output_starved": output_starved, "input_starved": input_starved,
+                "day_output_starved": day_starved, "notices": notices,
+            }
         return result
 
     def _database_status(self) -> dict[str, Any]:
@@ -566,7 +639,20 @@ class SupervisorService:
 
     @staticmethod
     def _commercial_reject_category(reason: str) -> str:
-        low = str(reason or "").casefold()
+        text = str(reason or "").strip()
+        # 2.2.3: explicit selector code ("[weak_mechanism] ...") wins over text guessing.
+        if text.startswith("[") and "]" in text[:32]:
+            code = text[1:text.index("]")].strip().casefold()
+            mapped = _SELECTOR_CODE_CATEGORY.get(code)
+            if mapped:
+                return mapped
+        if text.startswith("SOLD_VALUE_REJECT"):
+            return "below_commercial_value"
+        if text.startswith("EDITORIAL_VALUE_REJECT"):
+            return "below_editorial_value"
+        if text.startswith("MEDIA_REQUIRED") or "Не знайдено придатного медіа" in text:
+            return "media_required"
+        low = text.casefold()
         if "learning_" in low or "editor-disliked" in low:
             return "learning_suppression"
         if any(x in low for x in ("b2b", "пресреліз", "press release", "анонс", "найм", "hiring", "routine")):
@@ -600,8 +686,48 @@ class SupervisorService:
                 publish_candidates=int(con.execute(
                     "SELECT COUNT(*) FROM articles WHERE channel_id=? AND decision='PUBLISH' AND (stage='READY' OR stage='PUBLISHED')", (cid,),
                 ).fetchone()[0] or 0)
-                channels.append({"channel_id":cid,"name":str(ch["name"]),"reject_categories_2h":categories,"publish_or_ready_now":publish_candidates})
+                channels.append({
+                    "channel_id":cid,"name":str(ch["name"]),"reject_categories_2h":categories,
+                    "publish_or_ready_now":publish_candidates,
+                    "window_24h":self._commercial_day_report(con, cid),
+                })
         return {"window_hours":2,"channels":channels}
+
+    def _commercial_day_report(self, con: sqlite3.Connection, channel_id: int) -> dict[str, Any]:
+        """2.2.3 daily view: where commercial candidates were lost in the last 24 h."""
+        cut=datetime.fromtimestamp(time.time()-86400,tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+        processed=int(con.execute(
+            "SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND datetime(updated_at)>=datetime(?)",
+            (channel_id,cut),
+        ).fetchone()[0] or 0)
+        published=int(con.execute(
+            "SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)",
+            (channel_id,cut),
+        ).fetchone()[0] or 0)
+        categories: dict[str,int]={}; buckets: dict[str,int]={}
+        rows=con.execute(
+            """SELECT a.reject_reason,a.editorial_value_score FROM jobs j JOIN articles a ON a.id=j.article_id
+                 WHERE j.channel_id=? AND j.state='DONE' AND a.decision='REJECT' AND datetime(j.updated_at)>=datetime(?)""",
+            (channel_id,cut),
+        ).fetchall()
+        for row in rows:
+            key=self._commercial_reject_category(str(row["reject_reason"] or "")); categories[key]=categories.get(key,0)+1
+            score=row["editorial_value_score"]
+            if score is not None:
+                bucket=f"{min(90,(int(score)//10)*10)}-{min(99,(int(score)//10)*10+9)}"; buckets[bucket]=buckets.get(bucket,0)+1
+        media_lost=int(con.execute(
+            """SELECT COUNT(*) FROM articles WHERE channel_id=? AND last_error_code='MEDIA_REQUIRED_PERMANENT'
+                 AND datetime(CASE WHEN ready_at<>'' THEN ready_at ELSE discovered_at END)>=datetime(?)""",
+            (channel_id,cut),
+        ).fetchone()[0] or 0)
+        media_waiting=int(con.execute(
+            "SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='READY' AND blocked_by='MEDIA'", (channel_id,),
+        ).fetchone()[0] or 0)
+        return {
+            "processed":processed,"published":published,"rejected":len(rows),
+            "reject_categories":categories,"rejected_value_score_buckets":dict(sorted(buckets.items())),
+            "media_required_permanent":media_lost,"ready_waiting_for_media":media_waiting,
+        }
 
     def _media_recovery_snapshot(self) -> dict[str, Any]:
         items=[]; classes: dict[str,int]={}
@@ -948,6 +1074,24 @@ class SupervisorService:
                     f"rejected={int(stats.get('rejected_starvation_window') or 0)}; duplicates={int(stats.get('duplicates_starvation_window') or 0)}."
                 ))
 
+            day_code = f"CHANNEL_NO_OUTPUT_TODAY_{cid}"
+            day_starved = bool(op.get("day_output_starved")) and runtime_age >= 900.0
+            elapsed_day = self._condition_elapsed(day_code, day_starved, now)
+            if day_starved and elapsed_day >= 300.0:
+                incidents.append(Incident(
+                    "WARNING", day_code, f"Канал «{name}» сьогодні нічого не опублікував",
+                    f"processed_today={int(stats.get('jobs_done_today') or 0)}; published_today=0. "
+                    + "; ".join(str(x) for x in (op.get("notices") or []))
+                ))
+
+            notices = list(op.get("notices") or [])
+            if notices:
+                # Informational: shown to the operator in the UI incident line, no bundle.
+                incidents.append(Incident(
+                    "INFO", f"CHANNEL_SOURCES_BLOCKED_{cid}", f"Канал «{name}»: джерела блокують автоматичне читання",
+                    "; ".join(str(x) for x in notices) + ". Потрібне рішення оператора: офіційний фід, дозвіл або заміна джерела.",
+                ))
+
             input_code = f"CHANNEL_INPUT_STARVATION_{cid}"
             input_starved = bool(op.get("input_starved"))
             elapsed_input = self._condition_elapsed(input_code, input_starved, now)
@@ -1005,6 +1149,9 @@ class SupervisorService:
         # Telegram bot and do not invoke a separate analysis agent.
         for inc in incidents:
             if inc.code not in new_codes:
+                continue
+            if inc.severity == "INFO":
+                event("supervisor", "operator notice", code=inc.code, detail=inc.detail)
                 continue
             bundle = self.create_diagnostic_bundle(inc)
             event(

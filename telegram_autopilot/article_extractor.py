@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
-from .media import encode_media
+from .media import canonical_asset_key, decode_media, encode_media
 
 
 @dataclass(slots=True)
@@ -123,6 +123,11 @@ def editorial_media_candidate(
     except ValueError:
         return ""
     if parts.scheme not in {"http", "https"} or not parts.hostname or not _media_url_allowed(url):
+        return ""
+    # 2.2.3: vector files are site icons/logos/menu art, never story photos, and
+    # Telegram cannot send them as photos. They also inflated gallery counts
+    # (menu SVGs inside a "membership-slider" were counted as a 15-item gallery).
+    if parts.path.casefold().endswith((".svg", ".svgz")):
         return ""
     # Featured metadata is not trusted. Publishers frequently put sponsor banners or
     # AI-summary promos into og:image, so the same hard editorial filters apply.
@@ -967,9 +972,25 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
     # publishers render a browser gallery from JSON/JS while the semantic HTML shows
     # only the hero. If the schema node is tied to this article, keep the full set.
     jsonld_images=_jsonld_article_image_candidates(html,base_url,title,limit=24)
+    # 2.2.3: assets the page itself declares as THIS article's image. Used later as
+    # evidence only together with a lead-position body block (see media_pipeline).
+    declared_page_images=[decode_media(value)[1] for value in jsonld_images]
     if jsonld_images:
         existing=set(media)
-        gallery_flag=len(jsonld_images)>1
+        # 2.2.3: schema.org Article.image commonly lists ONE photo in several aspect
+        # ratios (16:9, 4:3, 1:1). Renditions of one asset are not a gallery; only
+        # distinct uploaded assets are. The first listed rendition is kept.
+        existing_assets={canonical_asset_key(decode_media(value)[1]) for value in media}
+        unique_assets=[]
+        seen_assets=set()
+        for encoded in jsonld_images:
+            asset=canonical_asset_key(decode_media(encoded)[1])
+            if asset in seen_assets:
+                continue
+            seen_assets.add(asset)
+            unique_assets.append((asset, encoded))
+        gallery_flag=len(unique_assets)>1
+        jsonld_images=[encoded for asset, encoded in unique_assets if asset not in existing_assets]
         next_index=max([int(block.get("index") or 0) for block in blocks if block.get("type")=="media"] or [0])
         for encoded in jsonld_images:
             if encoded in existing:
@@ -1085,6 +1106,9 @@ def extract_article_content(html: str, base_url: str = "") -> ExtractedArticle:
         "video_embed_count": len(video_links),
         "featured": selected_featured,
         "featured_video": parser.featured_video,
+        "page_image_assets": sorted({
+            canonical_asset_key(url) for url in [parser.featured_media, *declared_page_images] if url
+        })[:12],
         "featured_meta": {
             "alt": parser.featured_alt,
             "provenance": provenance,
