@@ -67,10 +67,61 @@ class ReadyBacklogStore(MediaRecoveryStore):
         event("queue", "2.0.10 one-time cutover completed", retired=int(changed), jobs_closed=int(closed))
         return {"skipped": 0, "retired": int(changed), "jobs_closed": int(closed)}
 
+    def _restore_223_media_permanent_once(self) -> dict[str, int]:
+        """One-time 2.2.3 repair of READY items archived by the pre-2.2.3 recovery loop.
+
+        Before 2.2.3, re-polling the same source assets reset the media backoff, so
+        all bounded attempts could be spent within a minute (e.g. a transient CDN
+        403) and the article was archived as MEDIA_REQUIRED_PERMANENT. Items archived
+        that way within the last 48 hours, with finished copy, get one fresh bounded
+        recovery under the 2.2.3 media rules. Channel TTL still applies afterwards.
+        """
+        key = "autopilot_223_media_permanent_restore_done"
+        stamp = now_iso()
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        restored = 0
+        with self.transaction() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
+                con.commit()
+                return {"skipped": 1, "restored": 0}
+            rows = con.execute(
+                """SELECT id,ready_at,article_layout_json FROM articles
+                   WHERE stage='ARCHIVED' AND decision='REJECT'
+                     AND last_error_code='MEDIA_REQUIRED_PERMANENT'
+                     AND COALESCE(final_text,'')<>''"""
+            ).fetchall()
+            for row in rows:
+                ready_at = _parse_datetime_value(str(row["ready_at"] or ""))
+                if ready_at is None or ready_at < cutoff:
+                    continue
+                try:
+                    layout = json.loads(str(row["article_layout_json"] or "{}"))
+                except (TypeError, ValueError):
+                    layout = {}
+                if not isinstance(layout, dict):
+                    layout = {}
+                layout["media_recovery"] = {"attempts": 0, "tried_assets": [], "restored_by": "2.2.3"}
+                con.execute(
+                    """UPDATE articles SET stage=?,decision=?,blocked_by=?,reject_reason='',
+                              last_error_code='MEDIA_REQUIRED',
+                              last_error_detail='Restored by 2.2.3 for one fresh bounded media recovery',
+                              next_retry_at=?,article_layout_json=?
+                       WHERE id=?""",
+                    (str(Stage.READY), str(Decision.PUBLISH), str(BlockedBy.MEDIA), stamp,
+                     json.dumps(layout, ensure_ascii=False, separators=(",", ":")), int(row["id"])),
+                )
+                restored += 1
+            con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, stamp))
+            con.commit()
+        event("media", "2.2.3 restored media-permanent READY items", restored=int(restored))
+        return {"skipped": 0, "restored": int(restored)}
+
     def run_startup_maintenance(self) -> dict[str, int]:
         reset = self._reset_2010_queue_once()
         stats = dict(super().run_startup_maintenance())
         stats["queue_reset_2010"] = reset
+        stats["media_permanent_restore_223"] = self._restore_223_media_permanent_once()
         expired = 0
         for channel in self.list_channels(enabled_only=True):
             expired += self.expire_stale_ready(

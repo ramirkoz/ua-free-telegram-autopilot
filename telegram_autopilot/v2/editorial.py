@@ -29,6 +29,12 @@ from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
 
+# 2.2.3: structured selector rejection codes (see the CHANNEL-FIT SELECTOR prompt).
+SELECTOR_REJECT_CODES = (
+    "off_topic", "weak_audience_hook", "routine_pr", "weak_mechanism", "weak_visual",
+    "duplicate", "insufficient_facts", "stale", "other",
+)
+
 
 def _v(row: Mapping[str, Any] | Any, key: str, default: Any = "") -> Any:
     try:
@@ -1099,7 +1105,8 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {topic_memory}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
-Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false}}"""
+Якщо decision="reject", reject_code — РІВНО один із: off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other.
+Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","reject_code":"","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false}}"""
 
         def parse_fit(raw: str):
             obj = _parse_json(raw)
@@ -1125,7 +1132,11 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
                 adjustment=int(learning.fit_adjustment), raw_fit=raw_score, adjusted_fit=score,
             )
         if fit["decision"] == "reject":
-            return EditorialOutcome(Decision.REJECT, reason=_clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
+            # 2.2.3: a structured code makes rejection statistics countable instead of
+            # guessing a category from free text. Unknown/missing codes stay uncoded.
+            code = str(fit.get("reject_code") or "").strip().casefold()
+            prefix = f"[{code}] " if code in SELECTOR_REJECT_CODES else ""
+            return EditorialOutcome(Decision.REJECT, reason=prefix + _clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)

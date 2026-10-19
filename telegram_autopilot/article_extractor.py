@@ -124,6 +124,11 @@ def editorial_media_candidate(
         return ""
     if parts.scheme not in {"http", "https"} or not parts.hostname or not _media_url_allowed(url):
         return ""
+    # 2.2.3: vector files are site icons/logos/menu art, never story photos, and
+    # Telegram cannot send them as photos. They also inflated gallery counts
+    # (menu SVGs inside a "membership-slider" were counted as a 15-item gallery).
+    if parts.path.casefold().endswith((".svg", ".svgz")):
+        return ""
     # Featured metadata is not trusted. Publishers frequently put sponsor banners or
     # AI-summary promos into og:image, so the same hard editorial filters apply.
     if _looks_noneditorial_media_context(" ".join((alt, context))):

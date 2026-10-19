@@ -270,3 +270,51 @@ def test_genuinely_new_asset_unblocks_ready(tmp_path):
     row = store.get_article(1)
     assert str(row["blocked_by"]) == str(BlockedBy.NONE)
     assert str(row["next_retry_at"]) == ""
+
+
+# --------------------------------------------------------------------------- 2.2.3 completion
+
+def test_burst_of_same_scene_frames_has_no_false_merges():
+    """45 pairs of different frames of one low-contrast scene (negative corpus)."""
+    frames = [_jpeg(_sky(plane_at=(300 + 120 * k, 150 + 40 * k)), 85) for k in range(10)]
+    remaining, removed = remove_visual_duplicates([SimpleNamespace(kind="image", data=d) for d in frames])
+    assert removed == 0 and len(remaining) == 10
+
+
+def test_svg_icons_are_not_media_or_gallery_items():
+    html = """<html><head><title>Raptor pilot commands wingman drone</title></head><body>
+    <div class="membership-slider">
+      <img src="https://cdn.example.net/flexiimages/2lfo9jmvho1765179166.svg" alt="Badge picture">
+      <img src="https://cdn.example.net/flexiimages/os9yhxfeal1776177053.svg" alt="Latest on CPUs">
+    </div>
+    <article><h1>Raptor pilot commands wingman drone</h1>
+    <figure><img src="https://cdn.example.net/hero-image-1200x675.jpg" width="1200" height="675" alt="Raptor"></figure>
+    <p>A Raptor pilot commanded a wingman drone in a simulated combat test.</p></article></body></html>"""
+    layout = json.loads(extract_article_content(html, "https://news.test/drones/raptor").layout_json)
+    urls = [b["url"] for b in layout["blocks"] if b.get("type") == "media"]
+    assert not any(u.endswith(".svg") for u in urls)
+
+
+def test_pre_223_media_permanent_items_get_one_fresh_recovery(tmp_path):
+    store = ReadyBacklogStore(tmp_path / "v2.sqlite3")
+    _seed_blocked_ready(store, ["https://cdn.example.com/p/a_1.jpeg"], ["cdn.example.com/p/a_1"])
+    with store.connect() as con:
+        con.execute("""UPDATE articles SET stage='ARCHIVED',decision='REJECT',final_text='Готовий текст',
+                       last_error_code='MEDIA_REQUIRED_PERMANENT',next_retry_at='' WHERE id=1""")
+        con.commit()
+    first = store._restore_223_media_permanent_once()
+    second = store._restore_223_media_permanent_once()
+    row = store.get_article(1)
+    assert first == {"skipped": 0, "restored": 1}
+    assert second["skipped"] == 1
+    assert str(row["stage"]) == str(Stage.READY) and str(row["decision"]) == str(Decision.PUBLISH)
+    assert str(row["last_error_code"]) == "MEDIA_REQUIRED"
+    assert json.loads(row["article_layout_json"])["media_recovery"]["attempts"] == 0
+
+
+def test_media_prepared_event_carries_replayable_trace():
+    import inspect
+    from telegram_autopilot.v2.publisher import Publisher
+    source = inspect.getsource(Publisher)
+    assert "media_trace=media_trace" in source
+    assert '"sha256"' in source and '"kept"' in source

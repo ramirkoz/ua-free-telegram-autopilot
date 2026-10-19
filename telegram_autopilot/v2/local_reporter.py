@@ -129,7 +129,10 @@ class LocalTelegramReporter:
         ai = dict(snapshot.get("ai") or {})
         database = dict(snapshot.get("database") or {})
         channel_stats = dict(snapshot.get("channel_stats") or {})
-        incident_codes = [str(getattr(item, "code", "UNKNOWN")) for item in incidents]
+        # 2.2.3: INFO incidents are operator notices (e.g. sources blocking automated
+        # reading), not a runtime problem.
+        incident_codes = [str(getattr(item, "code", "UNKNOWN")) for item in incidents if str(getattr(item, "severity", "")) != "INFO"]
+        notice_codes = [str(getattr(item, "code", "UNKNOWN")) for item in incidents if str(getattr(item, "severity", "")) == "INFO"]
         published_60m = sum(int(dict(row or {}).get("published_60m") or 0) for row in channel_stats.values())
         jobs_done_30m = sum(int(dict(row or {}).get("jobs_done_30m") or 0) for row in channel_stats.values())
         oldest_due_age_seconds = max(
@@ -176,6 +179,7 @@ class LocalTelegramReporter:
             "channels": channel_lines,
             "slow_sources": slow_sources[:3],
             "incidents": incident_codes,
+            "notices": notice_codes,
         }
 
     @staticmethod

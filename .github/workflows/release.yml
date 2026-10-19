@@ -15,12 +15,13 @@ on:
       - pyproject.toml
       - .github/workflows/release.yml
   workflow_dispatch:
-  # Build and test exact 2.0.11 Windows assets on the release PR, without
-  # publishing a GitHub tag before the operator approves the code.
+  # Build and test exact Windows assets on any release PR (one that adds release
+  # notes), without publishing a GitHub tag before the operator approves the code.
+  # Publishing is gated by `github.event_name != 'pull_request'` below.
   pull_request:
     branches: [main]
     paths:
-      - RELEASE_NOTES_v2.1.0.md
+      - RELEASE_NOTES_v*.md
 
 permissions:
   contents: write

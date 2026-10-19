@@ -872,7 +872,20 @@ class Publisher:
         # Telegram never receives third-party URLs, eliminating WEBPAGE_CURL_FAILED
         # from CDN/hotlink restrictions and letting us dedupe exact binary clones.
         prepared, prepare_failures = prepare_telegram_media_list(bundle.encoded_items, timeout=35.0, heartbeat=heartbeat)
+        before_visual_dedupe = list(prepared)
         prepared, visual_duplicate_count = remove_visual_duplicates(prepared)
+        # 2.2.3: exact evidence for replaying a media incident from original bytes.
+        kept_ids = {id(item) for item in prepared}
+        media_trace = [
+            {
+                "kind": str(getattr(item, "kind", "") or ""),
+                "url": str(getattr(item, "source_url", "") or "")[:500],
+                "sha256": str(getattr(item, "digest", "") or ""),
+                "bytes": len(getattr(item, "data", b"") or b""),
+                "kept": id(item) in kept_ids,
+            }
+            for item in before_visual_dedupe[:12]
+        ]
         duplicate_binary_count = max(0, bundle.count - len(prepared) - len(prepare_failures))
         event(
             "media", "media prepared for telegram upload", channel_id=channel_id, article_id=article_id,
@@ -880,6 +893,7 @@ class Publisher:
             prepared_media_count=len(prepared), failed_media_count=len(prepare_failures),
             binary_duplicates_removed=duplicate_binary_count - visual_duplicate_count,
             visual_duplicates_removed=visual_duplicate_count, upload_mode="multipart_local",
+            media_trace=media_trace,
             gallery_detected=bool(getattr(bundle,"gallery_detected",False)),
             gallery_items_found=int(getattr(bundle,"gallery_items_found",0) or 0),
             gallery_items_kept=int(getattr(bundle,"gallery_items_kept",0) or 0),
