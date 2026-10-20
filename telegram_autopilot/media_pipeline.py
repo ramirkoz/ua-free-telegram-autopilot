@@ -58,6 +58,8 @@ class PreparedMedia:
     # 2.2.3: lead body image whose asset the page declares as the article image
     # (og:image / twitter:image / schema.org Article.image).
     page_declared: bool = False
+    # A thumbnail can live in the article DOM but link to a different story.
+    linked_page_url: str = ""
 
     @property
     def filename(self) -> str:
@@ -313,6 +315,46 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
     return title_overlap >= 1 or article_overlap >= 2
 
 
+def _foreign_story_image_reason(item: PreparedMedia, *, source_url: str) -> str:
+    """Block web image cards bound to another article, before the binary fetch.
+
+    Same CDN/host and schema/lead position do not prove article ownership.
+    An image linking to an image asset is a gallery/zoom link, not another story.
+    Only image candidates are checked here; editorial video links have their own
+    source-video binding, and Telegram original media use a separate pipeline.
+    """
+    if item.kind != "image" or not source_url:
+        return ""
+    try:
+        source = urlsplit(source_url)
+        link = urlsplit(item.linked_page_url)
+        asset = urlsplit(item.url)
+    except ValueError:
+        return ""
+    source_host = (source.hostname or "").casefold()
+    if not source_host:
+        return ""
+    link_host = (link.hostname or "").casefold()
+    if link.scheme in {"http", "https"} and link_host:
+        link_path = re.sub(r"/+", "/", link.path or "/").rstrip("/") or "/"
+        source_path = re.sub(r"/+", "/", source.path or "/").rstrip("/") or "/"
+        # Gallery zoom, direct downloads and same-article anchors are valid.
+        asset_link = bool(re.search(r"\.(?:png|jpe?g|gif|webp|avif|svg|mp4|webm)$", link_path, re.I))
+        if not asset_link and link_path != source_path:
+            # A same-publisher different page is unambiguously another story
+            # card. Cross-site article-like links are also not article art.
+            if link_host == source_host or re.search(r"/20\d{2}/\d{1,2}/", link_path):
+                return "linked_other_article"
+    # The Register uses numeric story IDs in both article URLs and CDN
+    # thumbnails. Incident 67109: source /5303961, unrelated /5303967.webp.
+    if source_host in {"theregister.com", "www.theregister.com"} and (asset.hostname or "").casefold() == "image.theregister.com":
+        source_id = re.search(r"/(\d{7,9})(?:/|$)", source.path)
+        image_id = re.fullmatch(r"/(\d{7,9})\.(?:png|jpe?g|webp|avif)", asset.path, re.I)
+        if source_id and image_id and source_id.group(1) != image_id.group(1):
+            return "cross_article_image_id"
+    return ""
+
+
 def _hard_reject(item: PreparedMedia, *, marketing_context: bool = False) -> bool:
     low = (item.url + " " + _candidate_text(item)).casefold().replace("_", "-")
     blocked = _HARD_REJECT
@@ -486,6 +528,7 @@ def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedM
                     position=max(0.0, min(1.0, position)), width=width, height=height,
                     gallery=bool(block.get("gallery")),
                     schema_verified=bool(block.get("schema_verified")),
+                    linked_page_url=str(block.get("linked_page_url") or "")[:3000],
                     page_declared=bool(
                         kind == "image" and max(0.0, min(1.0, position)) <= _LEAD_POSITION
                         and canonical_asset_key(url) in declared_assets
@@ -545,6 +588,7 @@ def prepare_article_media(
     *,
     title: str = "",
     article_text: str = "",
+    source_url: str = "",
     marketing_context: bool = False,
     excluded_urls: set[str] | None = None,
 ) -> PreparedArticleMedia:
@@ -564,6 +608,11 @@ def prepare_article_media(
     if featured and _media_identity(featured.url) in excluded_identities:
         featured = None
         dropped("already_published")
+    if featured and featured.kind == "image":
+        foreign_reason = _foreign_story_image_reason(featured, source_url=source_url)
+        if foreign_reason:
+            dropped(foreign_reason)
+            featured = None
     if featured and featured.kind == "image":
         featured.classification = _classify(featured)
         featured = _probe_image(featured, marketing_context=marketing_context)
@@ -599,6 +648,10 @@ def prepare_article_media(
         seen_urls.add(featured.url)
         seen_identities.add(_media_identity(featured.url))
     for item in body:
+        foreign_reason = _foreign_story_image_reason(item, source_url=source_url)
+        if foreign_reason:
+            dropped(foreign_reason)
+            continue
         identity = _media_identity(item.url)
         if identity in excluded_identities:
             dropped("already_published")
