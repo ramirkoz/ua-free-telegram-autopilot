@@ -34,7 +34,7 @@ def enforce_source_media_parity(publisher, channel, article_id: int, article, bu
     encoded = bundle.encoded_items
     if check.media and (
         not bundle.count or len(check.media) > bundle.count
-        or (not stitched and list(check.media) != encoded)
+        or (not stitched and len(check.media) == bundle.count and list(check.media) != encoded)
     ):
         # A stitched article may have media from an explicitly linked adjacent
         # post; retain it. A single-post article uses the exact post's media.
