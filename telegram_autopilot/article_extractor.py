@@ -176,6 +176,9 @@ class _ArticleHTMLParser(HTMLParser):
         self.skip_depths: list[int] = []
         self.article_depths: list[int] = []
         self.context_by_depth: dict[int, str] = {}
+        # The URL behind an image card distinguishes an actual story photo from
+        # a recommended/linked article thumbnail embedded in the same DOM scope.
+        self.links_by_depth: dict[int, str] = {}
         self.all_chunks: list[str] = []
         self.title_chunks: list[str] = []
         self.in_title = False
@@ -253,6 +256,7 @@ class _ArticleHTMLParser(HTMLParser):
         return {
             "kind": "image", "url": url, "alt": " ".join(alt.split())[:500],
             "width": width, "height": height, "context": " ".join(context.split())[:800],
+            "linked_page_url": self.links_by_depth[max(self.links_by_depth)] if self.links_by_depth else "",
         }
 
     def _finish_text_capture(self) -> None:
@@ -286,6 +290,8 @@ class _ArticleHTMLParser(HTMLParser):
         values = {str(k).casefold(): str(v or "") for k, v in attrs}
         own_context = self._attrs_text(values)
         self.context_by_depth[self.depth] = own_context
+        if tag == "a" and values.get("href"):
+            self.links_by_depth[self.depth] = urljoin(self.base_url, values["href"])[:3000]
 
         # Some publishers (notably TrendHunter-like layouts) expose the gallery only
         # through a VIEW GALLERY control while the surrounding wrapper has no useful
@@ -446,6 +452,7 @@ class _ArticleHTMLParser(HTMLParser):
             if self.gallery_depths and self.gallery_depths[-1] == self.depth:
                 self.gallery_depths.pop()
             self.context_by_depth.pop(self.depth, None)
+            self.links_by_depth.pop(self.depth, None)
             if self.skip_depths and self.skip_depths[-1] == self.depth:
                 self.skip_depths.pop()
             self.depth = max(0, self.depth - 1)
@@ -473,6 +480,7 @@ class _ArticleHTMLParser(HTMLParser):
         if self.gallery_depths and self.gallery_depths[-1] == self.depth:
             self.gallery_depths.pop()
         self.context_by_depth.pop(self.depth, None)
+        self.links_by_depth.pop(self.depth, None)
         self.depth = max(0, self.depth - 1)
 
     def handle_data(self, data: str) -> None:
@@ -530,6 +538,7 @@ def _normalize_layout(blocks: list[dict[str, object]], featured: str, featured_v
             "width": int(block.get("width") or 0),
             "height": int(block.get("height") or 0),
             "context": " ".join(str(block.get("context") or "").split())[:800],
+            "linked_page_url": str(block.get("linked_page_url") or "")[:3000],
             "gallery": bool(block.get("gallery")),
         })
         media_urls.append(encoded)
