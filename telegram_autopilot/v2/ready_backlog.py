@@ -439,6 +439,8 @@ class ReadyBacklogSupervisor(LocalOnlyProductionSupervisorService):
                 )
                 stats_all[str(channel_id)] = stats
         snapshot["channel_stats"] = stats_all
+        # Use READY availability before classifying an intentional interval pause.
+        snapshot["operational_states"] = self._operational_states(snapshot, self.config.normalized())
         supervision = dict(snapshot.get("supervision") or {})
         supervision["ready_backlog_guard"] = True
         snapshot["supervision"] = supervision
