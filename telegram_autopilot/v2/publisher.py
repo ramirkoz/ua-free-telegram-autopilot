@@ -726,6 +726,51 @@ class Publisher:
                   article_id=article_id, outcome=recovery_outcome,
                   recovered_media_count=bundle.count,
                   media_drop_reasons=dict(getattr(bundle, "drop_reasons", ()) or ()))
+        # 2.2.6 P0: an empty Telegram bundle is not proof that the source post
+        # never had a video. Confirm its *exact* post before text-only delivery.
+        # Applies to preferred/optional channels, not only media-required ones.
+        # The video is restored to this article alone; no adjacent ownership guess.
+        if bundle.source_kind == "telegram" and not bundle.count:
+            from .telegram_post_preflight import check_exact_telegram_video
+            preflight = check_exact_telegram_video(source_url)
+            event(
+                "media", "exact Telegram video preflight", channel_id=channel_id,
+                article_id=article_id, outcome=preflight.outcome,
+                video_signal=preflight.video_signal, recovered=len(preflight.video_media),
+                reason=preflight.reason,
+            )
+            if preflight.outcome == "video_recovered":
+                patched = dict(article)
+                patched["media_json"] = json.dumps(list(preflight.video_media), ensure_ascii=False)
+                try:
+                    layout = json.loads(str(patched.get("article_layout_json") or "{}"))
+                    if not isinstance(layout, dict):
+                        layout = {}
+                except (ValueError, TypeError):
+                    layout = {}
+                tg = dict(layout.get("telegram") or {})
+                tg["video_attachment_seen"] = True
+                tg["video_recovery"] = "exact_publish_preflight"
+                tg["media_count"] = len(preflight.video_media)
+                layout["telegram"] = tg
+                patched["article_layout_json"] = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+                recovered_bundle = build_publication_media_bundle(channel, patched)
+                if recovered_bundle.count and any(x.kind == "video" for x in recovered_bundle.items):
+                    self.store.update_article(article_id, media_json=patched["media_json"], article_layout_json=patched["article_layout_json"])
+                    article, bundle = patched, recovered_bundle
+                    event("media", "exact Telegram video restored to publication", channel_id=channel_id,
+                          article_id=article_id, source_url=source_url, video_count=bundle.count)
+                else:
+                    preflight = type(preflight)("video_pending", reason="recovered_video_failed_bundle_validation", video_signal=preflight.video_signal)
+            if preflight.outcome in {"video_pending", "uncertain"}:
+                code = "TELEGRAM_VIDEO_PENDING" if preflight.outcome == "video_pending" else "TELEGRAM_MEDIA_PREFLIGHT_RETRY"
+                detail = f"{preflight.outcome}: {preflight.reason}; {preflight.video_signal}"
+                self.store.publication_backoff(article_id, blocked_by=BlockedBy.MEDIA, error_code=code,
+                                               detail=detail, retry_seconds=1800, count_attempt=False)
+                event("media", "Telegram text-only publication withheld", level=30,
+                      channel_id=channel_id, article_id=article_id, code=code, detail=detail)
+                return code
+
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
         # preview image.  Add the canonical video as a dedicated clickable footer.
