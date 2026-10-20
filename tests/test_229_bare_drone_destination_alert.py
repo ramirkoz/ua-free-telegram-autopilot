@@ -14,7 +14,7 @@ def channel(marker: bool = True) -> ChannelConfig:
     return ChannelConfig(
         id=3, name="ЗАПОРІЖЖЯ | ГРОМАДИ", telegram_chat_id="-100test",
         mode=ChannelMode.MONITORING, policy=ChannelPolicy(
-            channel_id=3,
+            channel_id=3, monitoring_source_policy="connected_original",
             rejection_rules="[LIVE_NOW_RC96] Відсів live сигналів" if marker else "",
         ),
     )
