@@ -190,6 +190,7 @@ def build_publication_media_bundle(
             # Relevance evidence must be source-owned. AI-written final text
             # cannot justify an unrelated source image by mentioning its subject.
             article_text=str(_v(article, "raw_text", "") or "")[:12000],
+            source_url=str(_v(article, "canonical_source_url", "") or _v(article, "source_url", "") or ""),
             marketing_context=marketing_context,
             excluded_urls=excluded_urls,
         )
