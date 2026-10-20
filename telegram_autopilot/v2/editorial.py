@@ -157,7 +157,7 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     if channel.mode != ChannelMode.MONITORING:
         return ""
     source = " ".join((str(_v(article, "title", "")), _source_text(article))).casefold()
-    security = re.search(r"(?iu)(?:вибух\w*|дим\w*|тривог\w*|відбій|дрон\w*|фпв|fpv|бпла|ракет\w*|шахед\w*|обстріл\w*|атак\w*|удар\w*)", source)
+    security = re.search(r"(?iu)(?:вибух\w*|дим\w*|тривог\w*|відбій|дрон\w*|фпв|fpv|бпла|ланцет\w*|ракет\w*|шахед\w*|обстріл\w*|атак\w*|удар\w*)", source)
     if not security:
         return ""
     result = _RESULT_FACT_RE.search(source)
@@ -189,6 +189,15 @@ _BARE_ALERT_RE = re.compile(
     r"молні(?:я|ї)[!. ]*|пуски\s+каб\w*[!. ]*|"
     r"вибух\w*[!. ]*|дим[!. ]*|тривог\w*[!. ]*)$"
 )
+# 2.2.9 P0: source-owned bare tactical threat alerts are NOT local_news.
+# This deterministic rule is independent of AI event typing and channel marker.
+_BARE_DRONE_DESTINATION_ALERT_RE = re.compile(
+    r"(?iu)\b(?:ланцет\w*|бпла|дрон\w*|шахед\w*|фпв|fpv|каб(?:и|ів)?)\b"
+    r"[^.!?\n]{0,28}\b(?:на|по|у|в|над|біля|поблизу|до|"
+    r"в\s+бік|у\s+напрямку|напрямку)\b\s+\S+"
+)
+
+
 _LIVE_THREAT_RE = re.compile(
     r"(?iu)\b(?:пуски\s+(?:каб\w*|ракет\w*)|каб\w*\s+(?:в\s+бік|у\s+напрямку)|"
     r"бпла\s+(?:летить|рухається)|(?:летить|рухається)\s+(?:бпла|ракета|шахед)|"
@@ -359,6 +368,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if official_gate:
         return official_gate
     clean = re.sub(r"https?://\S+", "", source).strip(" .!?—–:;\n\t")
+    # A weapon + place/destination bulletin is an active positional alert,
+    # even when the source omits verbs such as "flies" or "moving".
+    if _BARE_DRONE_DESTINATION_ALERT_RE.search(clean) and not _RESULT_FACT_RE.search(clean):
+        return "MONITORING_LIVE_ALERT"
     if re.search(r"(?iu)\b(?:рсзв|окупанти)\b.{0,70}\b(?:криють|гатять|обстрілюють)\b", clean) and not _RESULT_FACT_RE.search(clean):
         return "MONITORING_ACTIVE_ATTACK_WARNING"
     evidence = assess_monitoring_source(article, final_text=text)
