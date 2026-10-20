@@ -917,6 +917,19 @@ class Publisher:
             video_embed_count=int(getattr(bundle,"video_embed_count",0) or 0),
         )
 
+        # Preserve source-owned media also when preferred/optional downloads fail.
+        if bundle.source_kind == "telegram" and bundle.count and (prepare_failures or not prepared):
+            self.store.publication_backoff(
+                article_id, blocked_by=BlockedBy.MEDIA,
+                error_code="TELEGRAM_MEDIA_DOWNLOAD_PENDING",
+                detail="Telegram source media could not be fully downloaded",
+                retry_seconds=1800, count_attempt=False)
+            event("media", "Telegram media download incomplete", level=30,
+                  channel_id=channel_id, article_id=article_id,
+                  source_media=bundle.count, prepared=len(prepared),
+                  failures=len(prepare_failures))
+            return "TELEGRAM_MEDIA_DOWNLOAD_PENDING"
+
         if prepare_failures and policy == "required":
             retryable = any(exc.retryable for _, exc in prepare_failures)
             detail = "; ".join(str(exc) for _, exc in prepare_failures[:3])
