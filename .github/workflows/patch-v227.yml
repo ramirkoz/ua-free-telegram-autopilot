@@ -1,0 +1,28 @@
+name: Apply Autopilot 2.2.7 publisher patch
+on:
+  push:
+    branches:
+      - release/autopilot-v2.2.7-telegram-photo-parity
+    paths:
+      - Tools/patch_227_publisher.py
+      - .github/workflows/patch-v227.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/autopilot-v2.2.7-telegram-photo-parity
+          persist-credentials: true
+      - name: Apply deterministic patch
+        run: python Tools/patch_227_publisher.py
+      - name: Check and commit patch
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add telegram_autopilot/v2/publisher.py VERSION.txt PUBLIC_VERSION.txt V2_VERSION.txt telegram_autopilot/__init__.py pyproject.toml
+          git commit -m "Autopilot 2.2.7: install exact photo album media publisher guard"
+          git push
