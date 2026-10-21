@@ -33,6 +33,8 @@ class FactGuardAssessment:
 _COMMON_LATIN = {
     "AI", "API", "CPU", "GPU", "RAM", "SSD", "USB", "GPS", "NASA", "ESA", "EU", "US", "USA", "UK",
     "CEO", "CVE", "WiFi", "Wi-Fi", "HTTP", "HTTPS", "RSS", "PDF", "LLM", "VR", "AR", "OS",
+    # Technical and numeral vocabulary is not itself evidence of a new model.
+    "ACL", "III", "II", "IV", "XII",
     "OAuth", "DNS", "TCP", "IP", "VPN", "LAN", "WAN", "URL", "HTML", "JSON", "SQL", "SSH", "TLS",
 }
 
@@ -48,6 +50,9 @@ _COMMON_ENGLISH = {
     "that", "the", "their", "them", "there", "these", "they", "this", "to", "up", "use",
     "used", "using", "was", "we", "were", "what", "when", "where", "which", "who",
     "why", "will", "with", "would", "you", "your", "bring", "brings", "make", "makes",
+    # Generic title/sentence-boundary vocabulary seen in real operator QA logs.
+    # Keep model/version tokens with digits (e.g. Gen5) protected.
+    "semantic", "overview", "summary", "analysis", "review", "research", "report",
 }
 
 # High-risk claims are deliberately conservative. They are blocked only when the
@@ -97,7 +102,7 @@ def _protected_latin_tokens(value: str) -> set[str]:
         token = raw_token.strip("._+/-")
         if not token:
             continue
-        if token in _COMMON_LATIN or token.casefold() in _COMMON_ENGLISH:
+        if token in _COMMON_LATIN or token.upper() in _COMMON_LATIN or token.casefold() in _COMMON_ENGLISH:
             continue
         # Protect product/version-like tokens and proper-name shaped Latin tokens.
         if any(ch.isdigit() for ch in token) or (token[0].isupper() and any(ch.islower() for ch in token[1:])) or token.isupper():
