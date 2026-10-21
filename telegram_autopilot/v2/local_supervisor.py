@@ -80,7 +80,7 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         # filesystem mirror remains fallback-only for machines where OAuth is
         # intentionally unavailable. Core runtime work never depends on either.
         self.reload_drive_transport()
-        self._operator_snapshot_next_at = time.monotonic() + 300.0
+        self._operator_snapshot_next_at = time.monotonic() + 600.0
         self._operator_snapshot_running = False
         self._operator_snapshot_status: dict[str, object] = {"status":"scheduled","interval_minutes":60,"redacted":True}
 
