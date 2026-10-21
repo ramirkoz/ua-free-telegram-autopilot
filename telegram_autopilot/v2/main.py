@@ -20,6 +20,7 @@ from .ui_hardening import FastMainWindow
 from .update_protocol import UpdateProtocol
 from .update_signing import signing_key_available
 from .first_run_import import maybe_import_legacy_data
+from .startup_database_gate import configured_channel_count, ExistingDatabaseUnreadable
 from .migration_repair import repair_polling_baseline
 from .commercial_profile_audit import audit_commercial_profiles
 from ..language_tool_local import shutdown_languagetool
@@ -112,51 +113,47 @@ def _enable_crash_diagnostics(logs: Path) -> None:
 
 
 def _run_visible_first_run_import() -> bool:
-    import sqlite3
-    """Finish a valid Data import before ever constructing the main window."""
-    target = data_dir()
-    target_db = target / "telegram_autopilot_v2.sqlite3"
+    """Never confuse an existing-but-unreadable Data with a fresh installation."""
+    target=data_dir()
+    target_db=target/"telegram_autopilot_v2.sqlite3"
+    try:
+        if configured_channel_count(target_db)>0:
+            return True
+    except ExistingDatabaseUnreadable as exc:
+        event("app","existing database startup blocked safely",level=40,detail=str(exc)[:1200])
+        messagebox.showerror("База Data потребує перевірки",str(exc))
+        return False
 
-    # Existing databases are not evidence of successful initialization.
-    # A failed earlier attempt can leave a zero-channel SQLite database.
-    if target_db.exists():
-        try:
-            with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
-                channels = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
-            if channels:
-                return True
-        except sqlite3.Error:
-            pass
-    if str(__import__("os").environ.get("UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT") or "") == "1":
-        # CI/headless contract may start without configured channels.
+    if str(__import__("os").environ.get("UA_FREE_AUTOPILOT_SKIP_FIRST_RUN_IMPORT") or "")=="1":
         return True
 
     import tkinter as tk
-    from tkinter import messagebox
-
-    root = tk.Tk()
+    root=tk.Tk()
     root.title("UA FREE Telegram Autopilot V2 · імпорт перед запуском")
     root.geometry("620x180")
-    root.resizable(False, False)
-    root.protocol("WM_DELETE_WINDOW", lambda: None)
-    frame = tk.Frame(root, padx=22, pady=22)
-    frame.pack(fill="both", expand=True)
-    tk.Label(frame, text="Відновлення каналів перед запуском", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-    tk.Label(frame, text="Поки імпорт не завершиться і канали не будуть перевірені, головне вікно не відкриється.", wraplength=560, justify="left").pack(anchor="w", pady=(12, 8))
+    root.resizable(False,False)
+    root.protocol("WM_DELETE_WINDOW",lambda:None)
+    frame=tk.Frame(root,padx=22,pady=22)
+    frame.pack(fill="both",expand=True)
+    tk.Label(frame,text="Відновлення каналів перед запуском",font=("TkDefaultFont",12,"bold")).pack(anchor="w")
+    tk.Label(frame,text="Поки імпорт не завершиться і канали не будуть перевірені, головне вікно не відкриється.",wraplength=560,justify="left").pack(anchor="w",pady=(12,8))
     try:
         root.deiconify()
         root.lift()
         root.update_idletasks()
-        outcome = maybe_import_legacy_data(root)
+        outcome=maybe_import_legacy_data(root)
         if not outcome.get("imported"):
-            event("app", "startup import incomplete", level=30, reason=str(outcome.get("reason")))
+            event("app","startup import incomplete",level=30,reason=str(outcome.get("reason")))
             return False
-        with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
-            channels = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
-        if channels <= 0:
-            messagebox.showerror("Імпорт неповний", "Імпорт не відновив жодного каналу. Головне вікно не відкриється.", parent=root)
+        try:
+            channels=configured_channel_count(target_db)
+        except ExistingDatabaseUnreadable as exc:
+            messagebox.showerror("База Data потребує перевірки",str(exc),parent=root)
             return False
-        event("app", "startup import verified", channels=channels)
+        if channels<=0:
+            messagebox.showerror("Імпорт неповний","Імпорт не відновив жодного каналу. Головне вікно не відкриється.",parent=root)
+            return False
+        event("app","startup import verified",channels=channels)
         return True
     finally:
         root.destroy()
