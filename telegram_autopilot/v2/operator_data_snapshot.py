@@ -19,10 +19,10 @@ EXPORT_TABLES={
 }
 
 _SECRET_PATTERNS = (
-    (re.compile(r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|client[_-]?secret|auth|secret|key)=)[^&#\\s]+"), r"\\1<redacted>"),
-    (re.compile(r"(?i)(bot[0-9]{8,12}:)[A-Za-z0-9_-]{20,}"), r"\\1<redacted>"),
-    (re.compile(r"(?i)\\bsk-[A-Za-z0-9_-]{15,}"), "sk-<redacted>"),
-    (re.compile(r"(?i)(Bearer\\s+)[A-Za-z0-9_.-]{16,}"), r"\\1<redacted>"),
+    (re.compile(r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|client[_-]?secret|auth|secret|key)=)[^&#\s]+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(bot[0-9]{8,12}:)[A-Za-z0-9_-]{20,}"), r"\1<redacted>"),
+    (re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{15,}"), "sk-<redacted>"),
+    (re.compile(r"(?i)(Bearer\s+)[A-Za-z0-9_.-]{16,}"), r"\1<redacted>"),
 )
 
 def _scrub(value):
