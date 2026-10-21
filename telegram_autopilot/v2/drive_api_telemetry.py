@@ -454,7 +454,63 @@ class DirectDriveTelemetry:
         self._folder_id = folder_id
         return folder_id
 
+    def _upload_resumable(self, name: str, data: bytes, parent_id: str) -> str:
+        """Upload big SQLite snapshots without multipart's small-file assumptions."""
+        existing = self._find_child(parent_id, name, folder=False)
+        metadata: dict[str, object] = {"name": name, "mimeType": "application/octet-stream"}
+        if not existing:
+            metadata["parents"] = [parent_id]
+        if existing:
+            url = f"https://www.googleapis.com/upload/drive/v3/files/{quote(existing, safe='')}?uploadType=resumable&fields=id,name,modifiedTime&supportsAllDrives=true"
+            method = "PATCH"
+        else:
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,modifiedTime&supportsAllDrives=true"
+            method = "POST"
+        token = self._token()
+        start = fetch_url(
+            url, method=method, headers={
+                "Authorization": f"Bearer {token}", "Accept": "application/json",
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": "application/octet-stream",
+                "X-Upload-Content-Length": str(len(data)),
+            },
+            body=json.dumps(metadata, ensure_ascii=False).encode("utf-8"),
+            max_bytes=1024 * 1024, timeout=45.0, max_redirects=0, allow_http_errors=True,
+        )
+        if start.status not in (200, 201):
+            raise DriveTelemetryError(f"Google Drive resumable session failed: HTTP {start.status}")
+        session = str(start.headers.get("location") or "")
+        from urllib.parse import urlsplit
+        parsed = urlsplit(session)
+        if parsed.scheme != "https" or not (
+            parsed.hostname == "googleapis.com" or str(parsed.hostname or "").endswith(".googleapis.com")
+        ):
+            raise DriveTelemetryError("Google Drive resumable session URL missing or untrusted")
+        finish = fetch_url(
+            session, method="PUT", headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(data)),
+                "Content-Range": f"bytes 0-{len(data)-1}/{len(data)}",
+            },
+            body=data, max_bytes=2 * 1024 * 1024,
+            timeout=180.0, max_redirects=0, allow_http_errors=True,
+        )
+        if finish.status not in (200, 201):
+            raise DriveTelemetryError(f"Google Drive resumable upload failed: HTTP {finish.status}")
+        try:
+            value = finish.json()
+        except Exception as exc:
+            raise DriveTelemetryError("Google Drive resumable upload returned invalid JSON") from exc
+        file_id = str(value.get("id") or existing) if isinstance(value, dict) else ""
+        if not file_id:
+            raise DriveTelemetryError("Google Drive resumable upload returned no file ID")
+        return file_id
+
     def _upload_bytes(self, name: str, data: bytes, parent_id: str) -> str:
+        if name.casefold().endswith(".sqlite3") and len(data) > 5 * 1024 * 1024:
+            return self._upload_resumable(name, data, parent_id)
         existing = self._find_child(parent_id, name, folder=False)
         boundary = "ua_free_autopilot_" + secrets.token_hex(12)
         metadata: dict[str, object] = {"name": name}
