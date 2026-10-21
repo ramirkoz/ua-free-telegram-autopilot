@@ -1,6 +1,7 @@
 """Consistent, allowlisted SQLite diagnostics, not a restorable Data backup."""
 from __future__ import annotations
 import os
+from contextlib import closing
 import re
 import sqlite3
 import tempfile
@@ -41,10 +42,10 @@ def export_operator_data_snapshot(db_path:Path,output:Path)->dict[str,object]:
     with tempfile.TemporaryDirectory(prefix="autopilot-private-backup-") as td:
         private=Path(td)/"source.sqlite3"
         candidate=Path(td)/"diagnostics.sqlite3"
-        with sqlite3.connect(str(db_path),timeout=30) as source:
-            with sqlite3.connect(str(private),timeout=30) as backup:
+        with closing(sqlite3.connect(str(db_path),timeout=30)) as source:
+            with closing(sqlite3.connect(str(private),timeout=30)) as backup:
                 source.backup(backup,pages=256,sleep=0.05)
-        with sqlite3.connect(str(private)) as original,sqlite3.connect(str(candidate)) as safe:
+        with closing(sqlite3.connect(str(private))) as original,closing(sqlite3.connect(str(candidate))) as safe:
             original.row_factory=sqlite3.Row
             safe.execute("PRAGMA journal_mode=DELETE")
             for table,allowed in EXPORT_TABLES.items():
@@ -76,7 +77,7 @@ def export_operator_data_snapshot(db_path:Path,output:Path)->dict[str,object]:
             staging=Path(dest.name)
         try:
             os.chmod(staging,0o600)
-            with sqlite3.connect(str(candidate)) as source,sqlite3.connect(str(staging)) as target:
+            with closing(sqlite3.connect(str(candidate))) as source,closing(sqlite3.connect(str(staging))) as target:
                 source.backup(target)
                 assert target.execute("PRAGMA quick_check").fetchone()[0]=="ok"
             os.replace(staging,output)
