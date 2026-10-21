@@ -20,6 +20,10 @@ _STABLE_TABLES = (
     "channel_policies",
     "sources",
     "articles",
+    # Never lose delivery identities during an operator's manual Data import.
+    # Preserve UNKNOWN quarantine and receipts from older pruning as well.
+    "publication_delivery_journal",
+    "delivery_receipt_archive",
     "feedback",
     "feedback_editor_reactions",
     "editorial_actions",
