@@ -1,0 +1,13 @@
+# Autopilot 2.2.15 — 21 October 2026 P0 refusal leak fix
+
+**Operator evidence:** at 18:46 Kyiv, running v2.2.13 published a video from `https://t.me/zaborzp/155017` (article #71994, Telegram message 3311) but its caption was **the AI's no-publish explanation**, not a news item: `Джерело не містить інформації, що стосується Запорізької області, її громад, місцевої влади, послуг чи життя мешканців регіону. Тому пост не створюється.` The screenshot and Google Drive LIVE `recent_events.json` establish the incident. An existing `is_ai_rejection_text()` detector failed because it didn't understand `джерело не містить ... тому пост не створюється` without an `Відповідь:` prefix. Older [issue #199](https://github.com/ramirkoz/ua-free-telegram-autopilot/issues/199) covered a narrower refusal phrase.
+
+**Fix:**
+- Extend channel-independent refusal recognition to source relevance explanations, final `пост не створюється/не публікується`, `do not publish` and equivalent variants, without treating reported attributed quotations as AI refusals.
+- Fail closed at writer validator (before READY), at the channel-independent `hard_editorial_reject` (including migrated old READY), and immediately after source/delivery guard **before preparing media or contacting Telegram**. Do not retry or transform rejections into public news. Existing delivery journal/UNKNOWN quarantine unchanged.
+- For channels that have enabled existing `[LIVE_NOW_RC96]` civic relevance filtering, reject source-owned, unanchored Trump/Witkoff/Putin video conversations lacking any substantive Zaporizhzhia regional fact. Content relevance does not depend on the source publisher name; original locally relevant diplomatic event remains eligible. Existing 2.2.14 false-local invite/meme fixes remain intact.
+- Add exact screenshot regression, variants, valid attributed quotation controls, original Telegram foreign clip and real local-news positive controls.
+
+**Protected:** SQLite launch recovery, full original operator Data, delivery receipt archive, Google Drive operator snapshot/telemetry, 3-channel scheduling, user 45/30/5min intervals and source preferences, media provenance and UNKNOWN #66297 quarantine. No Telegram auto-delete or replay. The posted mistake is already visible on Telegram; it requires separate manual moderation, not an automatic deletion.
+
+**Release criteria:** PR CI Linux and Windows matrix + native Windows Portable build; merge to `main`; separately validate main CI and official main ZIP hash. Do not call PR candidate a released version. After operator installs official v2.2.15, verify initial and repeated startup and observe no new refusal-leaks on LIVE.
