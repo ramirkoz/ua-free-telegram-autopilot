@@ -70,11 +70,22 @@ SECOND = story(
 )
 
 
-def test_operator_shelter_duplicate_is_same_event_despite_independent_photos():
-    yes,why=municipal_same_event(FIRST,SECOND)
-    assert yes,why
+def test_shelter_same_district_and_phase_without_same_site_is_not_automatically_duplicate():
+    # 2.2.10 used a district-only identity for the street/park reports;
+    # the operator's original screenshots did not establish a shared exact site.
+    # Fail open rather than silence another real shelter in the same district.
+    assert not municipal_same_event(FIRST, SECOND)[0]
+
+
+def test_shelter_same_exact_park_and_stage_across_sources_is_duplicate():
+    first = story("У парку Дубовий Гай у Запоріжжі монтують модульне укриття",
+                  "Почався монтаж біля парку Дубовий Гай.", 190)
+    second = story("В Запоріжжі встановлюють нове модульне укриття",
+                   "Роботи біля парку Дубовий Гай тривають.", 191)
+    yes, why = municipal_same_event(first, second)
+    assert yes, why
     assert "phase=installing" in why
-    assert event_fingerprint_same_event(FIRST,SECOND)[0]
+    assert "park:" in why
 
 
 def test_distinct_sites_are_not_merged():
