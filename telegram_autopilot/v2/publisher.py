@@ -569,6 +569,16 @@ class Publisher:
         delivery_preflight = self._delivery_preflight(article_id, channel)
         if delivery_preflight != "CONTINUE":
             return delivery_preflight
+        # Strongest safety boundary: abort before any image/video preparation
+        # and before every Telegram call, including old READY rows on upgrade.
+        from .publication_safety import is_ai_rejection_text
+        if is_ai_rejection_text(str(article["final_text"] or "")):
+            self.store.reject_editorial_article(
+                article_id, "AI_REJECTION_LEAK_BLOCKED: службове повідомлення AI замість публікації"
+            )
+            event("publish", "AI_REJECTION_LEAK_BLOCKED", level=40,
+                  channel_id=channel_id, article_id=article_id, gate="before_media")
+            return "AI_REJECTION_LEAK_BLOCKED"
         # Publication hard stop: linked page is NOT the RSS story. Never publish
         # another campaign's URL or media alongside this article's generated text.
         try:
