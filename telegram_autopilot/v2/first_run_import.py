@@ -12,6 +12,7 @@ from ..paths import data_dir
 from .storage import V2Store
 from .credential_recovery import merge_missing_credentials_from_data
 from .editorial_state import ensure_editorial_state_schema
+from .startup_database_gate import configured_channel_count, ExistingDatabaseUnreadable
 
 _MARKER = "first_run_import.json"
 _STABLE_TABLES = (
@@ -19,6 +20,10 @@ _STABLE_TABLES = (
     "channel_policies",
     "sources",
     "articles",
+    # Never lose delivery identities during an operator's manual Data import.
+    # Preserve UNKNOWN quarantine and receipts from older pruning as well.
+    "publication_delivery_journal",
+    "delivery_receipt_archive",
     "feedback",
     "feedback_editor_reactions",
     "editorial_actions",
@@ -333,12 +338,13 @@ def maybe_import_legacy_data(root) -> dict[str, object]:
         # imported channels; earlier failed runs left empty DBs/markers behind.
         if target_db.exists():
             try:
-                with sqlite3.connect(f"file:{target_db.resolve().as_posix()}?mode=ro", uri=True, timeout=5) as con:
-                    count = int(con.execute("SELECT COUNT(*) FROM channels").fetchone()[0])
-                if count > 0:
-                    return {"imported": True, "reason": "already_initialized", "channels": count}
-            except sqlite3.Error:
-                pass
+                count = configured_channel_count(target_db)
+            except ExistingDatabaseUnreadable as exc:
+                return {"imported": False, "reason": "existing_database_unreadable", "error": str(exc)}
+            if count > 0:
+                return {"imported": True, "reason": "already_initialized", "channels": count}
+            if _read_json_file(marker).get("imported") is True:
+                return {"imported": False, "reason": "import_marker_but_channels_missing"}
         # Keep failed-run Data for forensic recovery; it is not import evidence.
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import threading
 from pathlib import Path
 from dataclasses import asdict
 from typing import Any
@@ -18,6 +19,7 @@ from .telemetry_supervisor import TelemetryProductionSupervisorService
 from .drive_api_telemetry import DirectDriveTelemetry
 from ..secrets_store import load_secrets
 from .commercial_profile_audit import audit_commercial_profiles
+from .operator_data_snapshot import export_operator_data_snapshot
 
 
 # Passive observability only. These files are written from the application to the
@@ -78,6 +80,9 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         # filesystem mirror remains fallback-only for machines where OAuth is
         # intentionally unavailable. Core runtime work never depends on either.
         self.reload_drive_transport()
+        self._operator_snapshot_next_at = time.monotonic() + 600.0
+        self._operator_snapshot_running = False
+        self._operator_snapshot_status: dict[str, object] = {"status":"scheduled","interval_minutes":60,"redacted":True}
 
     def reload_drive_transport(self) -> dict[str, object]:
         """Reload operator-visible Drive credentials/folder without restarting runtime."""
@@ -272,6 +277,38 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             if str(incident.code) not in _REMOTE_ONLY_INCIDENTS
         ]
 
+    def _schedule_operator_snapshot_if_due(self) -> None:
+        """Background-only exporter; never delay publishing or fast telemetry."""
+        if self._operator_snapshot_running or time.monotonic() < self._operator_snapshot_next_at:
+            return
+        self._operator_snapshot_running = True
+        self._operator_snapshot_next_at = time.monotonic() + 900.0
+
+        def work() -> None:
+            try:
+                output = self.root / "operator_data_current.sqlite3"
+                report = export_operator_data_snapshot(self.store.path, output)
+                folder = str(self._drive_api.status().get("configured_folder_id") or CANONICAL_LIVE_FEED_FOLDER_ID)
+                drive = DirectDriveTelemetry(CANONICAL_LIVE_FEED_NAME, folder_id=folder)
+                file_id = drive.upload_path(output, name="operator_data_current.sqlite3")
+                self._operator_snapshot_status = {
+                    "status":"uploaded","redacted":True,"file_id":file_id,
+                    "size_bytes":report["size_bytes"],"rows":report["rows"],
+                    "updated_at":time.strftime("%Y-%m-%dT%H:%M:%S%z"),"interval_minutes":60
+                }
+                self._operator_snapshot_next_at = time.monotonic() + 3600.0
+                event("supervisor","operator data snapshot uploaded",size_bytes=report["size_bytes"],file_id=file_id)
+            except Exception as exc:
+                self._operator_snapshot_status = {
+                    "status":"error","redacted":True,
+                    "detail":f"{type(exc).__name__}: {exc}"[:300],"interval_minutes":60
+                }
+                event("supervisor","operator data snapshot failed",level=30,detail=str(exc)[:400])
+            finally:
+                self._operator_snapshot_running = False
+
+        threading.Thread(target=work,name="Autopilot-Operator-Data-Snapshot",daemon=True).start()
+
     def _loop(self) -> None:
         # Deliberately bypass the inherited remote maintenance tick. This loop only
         # writes local state, evaluates local health, mirrors passive telemetry and
@@ -281,7 +318,9 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             try:
                 cfg = self.config
                 if cfg.enabled:
+                    self._schedule_operator_snapshot_if_due()
                     snapshot = self.write_snapshot()
+                    snapshot["operator_data_snapshot"] = dict(self._operator_snapshot_status)
                     incidents = self.evaluate(snapshot, cfg)
                     self._handle_incidents(snapshot, incidents, cfg)
                     try:

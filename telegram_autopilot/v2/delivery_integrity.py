@@ -15,9 +15,13 @@ def delivery_integrity_snapshot(store: Any) -> dict[str, object]:
     highest = 0
     with store.connect() as con:
         rows = con.execute(
-            """SELECT article_id,channel_id,primary_message_id,committed_at
-               FROM publication_delivery_journal
-               WHERE state='COMMITTED' ORDER BY article_id ASC"""
+            """SELECT article_id,channel_id,primary_message_id,committed_at FROM (
+                  SELECT article_id,channel_id,primary_message_id,committed_at FROM publication_delivery_journal WHERE state='COMMITTED'
+                  UNION ALL
+                  SELECT a.article_id,a.channel_id,a.primary_message_id,a.committed_at FROM delivery_receipt_archive a
+                   WHERE a.state='COMMITTED' AND NOT EXISTS
+                         (SELECT 1 FROM publication_delivery_journal j WHERE j.article_id=a.article_id)
+               ) ORDER BY article_id ASC"""
         )
         for row in rows:
             total += 1
@@ -27,12 +31,16 @@ def delivery_integrity_snapshot(store: Any) -> dict[str, object]:
                 raw = str(value or "").encode("utf-8")
                 digest.update(len(raw).to_bytes(4, "big"))
                 digest.update(raw)
+        archived_receipts = int(con.execute(
+            "SELECT COUNT(*) FROM delivery_receipt_archive WHERE state='COMMITTED'"
+        ).fetchone()[0] or 0)
         published_stage = int(con.execute(
             "SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED'"
         ).fetchone()[0] or 0)
     return {
         "mode": "read_only",
         "committed_count": total,
+        "archived_committed_receipts": archived_receipts,
         "committed_receipts_sha256": digest.hexdigest(),
         "max_committed_article_id": highest,
         "published_stage_count": published_stage,
