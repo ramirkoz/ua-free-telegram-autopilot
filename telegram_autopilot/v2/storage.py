@@ -2185,25 +2185,84 @@ class V2Store:
             cur=con.execute("UPDATE jobs SET state='QUEUED',lease_owner='',lease_until='',updated_at=? WHERE state='LEASED' AND lease_until<>'' AND datetime(lease_until)<=datetime('now')",(now_iso(),)); return int(cur.rowcount or 0)
 
     def claim_job(self, *, channel_id:int|None=None,worker_id:str|None=None,lease_seconds:int=180) -> sqlite3.Row|None:
-        owner=worker_id or f"worker-{uuid.uuid4().hex[:10]}"; until=(datetime.now(timezone.utc)+timedelta(seconds=max(30,int(lease_seconds)))).astimezone().isoformat(timespec="seconds"); stamp=now_iso()
+        owner=worker_id or f"worker-{uuid.uuid4().hex[:10]}"
+        until=(datetime.now(timezone.utc)+timedelta(seconds=max(30,int(lease_seconds)))).astimezone().isoformat(timespec="seconds")
+        stamp=now_iso()
         with self.transaction() as con:
             try:
-                con.execute("BEGIN IMMEDIATE"); args=[]; channel_sql=""
-                if channel_id is not None: channel_sql=" AND j.channel_id=?"; args.append(int(channel_id))
-                # Fresh-first remains the default, but jobs within four hours of their
-                # channel TTL get a rescue lane so they are processed instead of simply
-                # aging out while newer items continually arrive.
-                row=con.execute("""SELECT j.* FROM jobs j JOIN articles a ON a.id=j.article_id JOIN channels c ON c.id=j.channel_id
-                    WHERE j.state IN ('QUEUED','WAITING') AND datetime(j.available_at)<=datetime('now') AND a.decision='PENDING'"""+channel_sql+"""
-                    ORDER BY j.priority ASC,
-                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 >= MAX(1,c.max_age_hours-4) THEN 0 ELSE 1 END ASC,
-                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 >= MAX(1,c.max_age_hours-4) THEN julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) END ASC,
-                      CASE WHEN (julianday('now')-julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END))*24.0 < MAX(1,c.max_age_hours-4) THEN julianday(CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END) END DESC,
-                      j.id ASC LIMIT 1""",tuple(args)).fetchone()
-                if row is None: con.commit(); return None
-                con.execute("UPDATE jobs SET state='LEASED',lease_owner=?,lease_until=?,updated_at=? WHERE id=?",(owner,until,stamp,int(row["id"]))); con.commit(); jid=int(row["id"])
-            except Exception: con.rollback(); raise
-        with self.connect() as read: return read.execute("SELECT * FROM jobs WHERE id=?",(jid,)).fetchone()
+                con.execute("BEGIN IMMEDIATE")
+                args: list[int] = []
+                channel_sql=""
+                freshness_mode=False
+                if channel_id is not None:
+                    channel_sql=" AND j.channel_id=?"
+                    args.append(int(channel_id))
+                    # Read-only congestion check under the job-lease transaction.
+                    # Overloaded, short-lived news feeds should prepare fresh
+                    # stories rather than spending tokens rescuing nearly expired
+                    # ones they cannot publish before the operator's next slot.
+                    from .capacity_pressure import capacity_window
+                    settings=con.execute(
+                        """SELECT min_publish_interval_minutes,publish_24h,publish_start,
+                                  publish_end,max_age_hours FROM channels WHERE id=?""",
+                        (int(channel_id),),
+                    ).fetchone()
+                    if settings is not None:
+                        pending=int(con.execute(
+                            """SELECT COUNT(*) FROM jobs WHERE channel_id=?
+                               AND state IN ('QUEUED','WAITING')
+                               AND datetime(available_at)<=datetime('now')""",
+                            (int(channel_id),),
+                        ).fetchone()[0] or 0)
+                        estimate=capacity_window(
+                            pending_jobs=pending,
+                            min_interval_minutes=int(settings["min_publish_interval_minutes"] or 0),
+                            publish_24h=bool(settings["publish_24h"]),
+                            publish_start=str(settings["publish_start"] or "08:00"),
+                            publish_end=str(settings["publish_end"] or "20:00"),
+                            max_age_hours=int(settings["max_age_hours"] or 24),
+                        )
+                        freshness_mode=bool(estimate["overloaded"])
+                source_date="CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END"
+                if freshness_mode:
+                    # Preserve operator/source priority and source timestamps;
+                    # never change article state, TTL, media checks or send rate.
+                    ordering=f"j.priority ASC,julianday({source_date}) DESC,j.id ASC"
+                else:
+                    # Existing near-TTL rescue lane remains active when the
+                    # backlog can realistically fit inside publication capacity.
+                    age=f"(julianday('now')-julianday({source_date}))*24.0"
+                    urgent="MAX(1,c.max_age_hours-4)"
+                    ordering=(
+                        f"j.priority ASC,"
+                        f"CASE WHEN {age}>={urgent} THEN 0 ELSE 1 END ASC,"
+                        f"CASE WHEN {age}>={urgent} THEN julianday({source_date}) END ASC,"
+                        f"CASE WHEN {age}<{urgent} THEN julianday({source_date}) END DESC,"
+                        "j.id ASC"
+                    )
+                row=con.execute(
+                    """SELECT j.* FROM jobs j JOIN articles a ON a.id=j.article_id
+                       JOIN channels c ON c.id=j.channel_id
+                       WHERE j.state IN ('QUEUED','WAITING')
+                         AND datetime(j.available_at)<=datetime('now')
+                         AND a.decision='PENDING'"""
+                    +channel_sql+" ORDER BY "+ordering+" LIMIT 1",
+                    tuple(args),
+                ).fetchone()
+                if row is None:
+                    con.commit()
+                    return None
+                con.execute(
+                    "UPDATE jobs SET state='LEASED',lease_owner=?,lease_until=?,updated_at=? WHERE id=?",
+                    (owner,until,stamp,int(row["id"])),
+                )
+                con.commit()
+                jid=int(row["id"])
+            except Exception:
+                con.rollback()
+                raise
+        with self.connect() as read:
+            return read.execute("SELECT * FROM jobs WHERE id=?",(jid,)).fetchone()
 
     def finish_job(self, job_id:int) -> None:
         with self.connect() as con: con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',updated_at=? WHERE id=?",(now_iso(),int(job_id)))
