@@ -108,6 +108,9 @@ def test_publication_guard_before_media_is_present():
     # selector rejection. The publisher must check before its first media API.
     import inspect
     from telegram_autopilot.v2.publisher import Publisher
-    source=inspect.getsource(Publisher.publish_one)
-    assert 'gate="before_media"' in source
-    assert source.index('gate="before_media"') < source.index("bundle")
+    # publish_one has an operator-approval wrapper; inspect the complete
+    # class definition, not the decorated wrapper's replacement function.
+    source=inspect.getsource(Publisher)
+    body=source[source.index("def publish_one("):source.index("def publish_ready(",source.index("def publish_one("))]
+    assert 'gate="before_media"' in body
+    assert body.index('gate="before_media"') < body.index("bundle")
