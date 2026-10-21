@@ -58,3 +58,15 @@ def test_redacted_snapshot_has_public_content_but_no_secrets(tmp_path):
     raw=destination.read_bytes()
     assert b"PRIVATE_TARGET" not in raw
     assert b"BOT_TOKEN_SECRET" not in raw
+
+def test_large_sqlite_snapshot_uses_resumable_drive_upload(monkeypatch):
+    from telegram_autopilot.v2.drive_api_telemetry import DirectDriveTelemetry
+    calls=[]
+    def fake(self, name, data, parent):
+        calls.append((name,len(data),parent))
+        return "file-id"
+    monkeypatch.setattr(DirectDriveTelemetry,"_upload_resumable",fake)
+    instance=object.__new__(DirectDriveTelemetry)
+    content=b"x"*(5*1024*1024+1)
+    assert instance._upload_bytes("operator_data_current.sqlite3",content,"folder-id")=="file-id"
+    assert calls==[("operator_data_current.sqlite3",len(content),"folder-id")]
