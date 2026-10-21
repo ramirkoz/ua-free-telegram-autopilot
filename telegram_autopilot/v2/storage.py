@@ -2253,21 +2253,37 @@ class V2Store:
                             max_age_hours=int(settings["max_age_hours"] or 24),
                         )
                         freshness_mode=bool(estimate["overloaded"])
-                source_date="CASE WHEN a.source_published_at<>'' THEN a.source_published_at ELSE a.discovered_at END"
+                # julianday() handles ISO timestamps with offsets. Invalid
+                # legacy RFC-style dates are normalized during TTL maintenance;
+                # while pending, fall back to a parseable discovery time rather
+                # than letting NULL sort ahead of known fresh source dates.
+                source_time=(
+                    "COALESCE(julianday(NULLIF(a.source_published_at,'')),"
+                    "julianday(NULLIF(a.discovered_at,'')),0)"
+                )
                 if freshness_mode:
-                    # Preserve operator/source priority and source timestamps;
-                    # never change article state, TTL, media checks or send rate.
-                    ordering=f"j.priority ASC,julianday({source_date}) DESC,j.id ASC"
+                    # In 2.2.12 'FRESHNESS_FIRST' was priority-first in SQL,
+                    # so an old high-priority feed could monopolize all worker
+                    # leases while fresher news from another feed expired.
+                    # Under *verified overload only*, honor source priority
+                    # within a six-hour age tier, but prefer younger tiers.
+                    # Never change user interval, TTL, article, or source state.
+                    age=f"(julianday('now')-{source_time})*24.0"
+                    tier=(f"CASE WHEN {source_time}<=0 THEN 4 "
+                          f"WHEN {age}<6 THEN 0 WHEN {age}<12 THEN 1 "
+                          f"WHEN {age}<18 THEN 2 WHEN {age}<24 THEN 3 "
+                          f"ELSE 4 END")
+                    ordering=f"{tier} ASC,j.priority ASC,{source_time} DESC,j.id ASC"
                 else:
                     # Existing near-TTL rescue lane remains active when the
                     # backlog can realistically fit inside publication capacity.
-                    age=f"(julianday('now')-julianday({source_date}))*24.0"
+                    age=f"(julianday('now')-{source_time})*24.0"
                     urgent="MAX(1,c.max_age_hours-4)"
                     ordering=(
                         f"j.priority ASC,"
                         f"CASE WHEN {age}>={urgent} THEN 0 ELSE 1 END ASC,"
-                        f"CASE WHEN {age}>={urgent} THEN julianday({source_date}) END ASC,"
-                        f"CASE WHEN {age}<{urgent} THEN julianday({source_date}) END DESC,"
+                        f"CASE WHEN {age}>={urgent} THEN {source_time} END ASC,"
+                        f"CASE WHEN {age}<{urgent} THEN {source_time} END DESC,"
                         "j.id ASC"
                     )
                 row=con.execute(
