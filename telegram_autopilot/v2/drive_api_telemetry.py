@@ -460,10 +460,11 @@ class DirectDriveTelemetry:
         metadata: dict[str, object] = {"name": name}
         if not existing:
             metadata["parents"] = [parent_id]
+        payload_type = "application/octet-stream" if name.casefold().endswith(".sqlite3") else "application/json"
         body = (
             f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
             + json.dumps(metadata, ensure_ascii=False)
-            + f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n"
+            + f"\r\n--{boundary}\r\nContent-Type: {payload_type}\r\n\r\n"
         ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
         token = self._token()
         if existing:
