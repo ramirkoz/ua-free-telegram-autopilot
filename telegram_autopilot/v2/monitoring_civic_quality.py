@@ -32,6 +32,53 @@ def _value(row: Any, key: str) -> str:
     return str(value or "")
 
 
+_PROMO_JOIN_LINK = re.compile(r"(?iu)(?:https?://)?t\.me/\+[A-Za-z0-9_-]{8,}")
+_PROMO_JOIN_PROMPT = re.compile(
+    r"(?iu)\b(?:приєднал\w*|приєднуй\w*|заход\w*\s+в\s+(?:чат|груп\w*)|"
+    r"видаля\w*|видалю\w*|лише\s+\d+\s+хвилин\w*)\b"
+)
+_URGENT_DELETE = re.compile(r"(?iu)\b(?:видаля\w*|видалю\w*)\b.{0,65}\b\d+\s*(?:хв|хвилин\w*)")
+_MEANINGFUL_EVENT = re.compile(
+    r"(?iu)\b(?:запоріж\w*|запоріз\w*|мелітопол\w*|бердянськ\w*|"
+    r"енергодар\w*|оріхів\w*|громад\w*|містян\w*|мешканц\w*|"
+    r"укритт\w*|евакуац\w*|допомог\w*|виплат\w*|"
+    r"відбуд\w*|відкри\w*|запровад\w*|нада\w*|розклад\w*|"
+    r"пошкодж\w*|постраждал\w*|пожеж\w*|будин\w*|школ\w*|"
+    r"лікарн\w*|зустріч\w*|заход\w*|тренінг\w*|виставк\w*)\b"
+)
+_SPECULATIVE_SOCIAL = re.compile(r"(?iu)\b(?:як\s*би|уяв\w*|вигадан\w*|вваж\w*\s+тіктокер\w*)\b")
+_SOCIAL_ENTERTAINMENT = re.compile(
+    r"(?iu)\b(?:рілс\w*|reels?\b|тікток\w*|tiktok\w*|"
+    r"блогер\w*|мем\w*|ш[іи]\s*відео)\b"
+)
+_PURE_SOCIAL_REACTION = re.compile(r"(?iu)\b(?:а\s+як\s+ви\s+відноситес\w*|що\s+думаєте\s+про\s+це)\b")
+
+
+def _pure_invitation_noise(original: str) -> bool:
+    """A vanishing join link is not a municipal event even in a local source."""
+    if not _PROMO_JOIN_LINK.search(original):
+        return False
+    if not (_URGENT_DELETE.search(original) or _PROMO_JOIN_PROMPT.search(original)):
+        return False
+    # Do not suppress actual community service/instructions with a Telegram link.
+    meaningful = re.sub(r"(?iu)https?://\S+", " ", original)
+    meaningful = re.sub(r"(?iu)\b(?:приєднал\w*|приєднуй\w*|видаля\w*|видалю\w*)\b", " ", meaningful)
+    return not bool(_MEANINGFUL_EVENT.search(meaningful))
+
+
+def _unanchored_speculative_meme(original: str) -> bool:
+    """Hypothetical reels without a source-owned local fact are not local news."""
+    if not (_SPECULATIVE_SOCIAL.search(original) and _SOCIAL_ENTERTAINMENT.search(original)):
+        return False
+    # Actual regional exhibitions, screenings, people and civic initiatives survive.
+    return not bool(_LOCAL_ANCHOR.search(original) or re.search(
+        r"(?iu)\b(?:презентувал\w*|провел\w*|відкри\w*|"
+        r"відбуд\w*|анонсува\w*|організувал\w*|"
+        r"виставк\w*|показ\w*|фестивал\w*)\b",
+        original,
+    ))
+
+
 def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     """Fail closed only for a channel that has explicitly opted into the live gate."""
     if channel.mode != ChannelMode.MONITORING:
@@ -39,6 +86,12 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     if "[LIVE_NOW_RC96]" not in str(channel.policy.rejection_rules or ""):
         return ""
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
+    # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
+    # and the name/geography of the newsroom that forwarded it.
+    if _pure_invitation_noise(original):
+        return "MONITORING_PROMO_JOIN_BAIT: тимчасове запрошення до чату без місцевої події або послуги"
+    if _unanchored_speculative_meme(original):
+        return "MONITORING_NONLOCAL_MEME: вигаданий інтернет-сюжет без факту чи події громади"
     # A source's geographic channel name does not turn national or EU policy
     # into a municipal announcement. Require an explicit local outcome for
     # high-confidence national-only categories; keep genuine local impacts.
