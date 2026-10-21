@@ -27,10 +27,10 @@ _LOCAL_OUTCOME = re.compile(r"(?iu)\b(?:отрима\w*|відкри\w*|запр
 # The operator's 21 Oct #71994 was an unrelated Putin/Trump/Witkoff clip
 # copied by a Zaporizhzhia-branded feed. Channel name is not local evidence.
 _GLOBAL_LEADER_CHAT = re.compile(
-    r"(?iu)\\b(?:трамп\\w*|trump|віткофф\\w*|уіткофф\\w*|witkoff)\\b"
+    r"(?iu)\b(?:трамп\w*|trump|віткофф\w*|уіткофф\w*|witkoff)\b"
 )
 _KREMLIN_INTERLOCUTOR = re.compile(
-    r"(?iu)\\b(?:путін\\w*|путіном|putin|кремл\\w*)\\b"
+    r"(?iu)\b(?:путін\w*|путіном|putin|кремл\w*)\b"
 )
 
 def _value(row: Any, key: str) -> str:
