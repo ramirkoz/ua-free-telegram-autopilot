@@ -81,17 +81,11 @@ def municipal_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
         return False, ""
     if all(parks) and parks[0] != parks[1]:
         return False, ""
-    same_specific_site = bool(streets[0] and streets[0] == streets[1]) or bool(parks[0] and parks[0] == parks[1])
-    districts_a = {p for p in _DISTRICTS if p in a}
-    districts_b = {p for p in _DISTRICTS if p in b}
-    same_district = bool(districts_a & districts_b)
-    if not same_specific_site and not same_district:
+    # A district contains many possible shelters. Treating the entire district
+    # as one site silences real civic updates about independent facilities.
+    shared_street = bool(streets[0] and streets[0] == streets[1])
+    shared_park = bool(parks[0] and parks[0] == parks[1])
+    if not (shared_street or shared_park):
         return False, ""
-    # Within a district, admit street-to-nearby-park reports only when neither
-    # provides *conflicting comparable* street/park addresses, and both say Zaporizhzhia.
-    if not same_specific_site and not (any(root in a for root in ("запоріж", "запоріз")) and any(root in b for root in ("запоріж", "запоріз"))):
-        return False, ""
-    site = ("street:" + streets[0]) if same_specific_site and streets[0] else (
-        "park:" + parks[0] if same_specific_site else "district:" + ",".join(sorted(districts_a & districts_b))
-    )
+    site = "street:" + streets[0] if shared_street else "park:" + parks[0]
     return True, f"municipal event identity object=modular_shelter phase={stage_a} site={site}"

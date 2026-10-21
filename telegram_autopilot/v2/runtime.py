@@ -80,6 +80,23 @@ def _media_gate_retry_seconds(channel: ChannelConfig, reason: str) -> int:
         return max(1800, max(1, int(channel.poll_interval_minutes or 1)) * 60 * 6)
     return 300
 
+def _ready_buffer_counts(store: V2Store, channel_id: int) -> tuple[int, int]:
+    """Only genuinely sendable READY rows consume the AI-preparation buffer.
+
+    A MEDIA/QUALITY/TELEGRAM blocked row does not become sendable just because
+    its retry timestamp elapsed: the preflight must actually clear its blocker.
+    No publication limits or user-specified intervals are changed here.
+    """
+    with store.connect() as con:
+        row = con.execute(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN COALESCE(blocked_by,'NONE')='NONE' THEN 1 ELSE 0 END) AS usable
+               FROM articles WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'""",
+            (int(channel_id),),
+        ).fetchone()
+    return int(row["total"] or 0), int(row["usable"] or 0)
+
+
 class RuntimeEngine:
     """Clean V2 scheduler with one isolated preparation loop per channel."""
 
@@ -227,14 +244,10 @@ class RuntimeEngine:
                 # Keep only a tiny READY buffer.  A 10-minute publication interval must
                 # not allow the worker to spend AI quota preparing dozens of posts that
                 # cannot be published yet.
-                with self.store.connect() as con:
-                    ready_count = int(con.execute(
-                        "SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'",
-                        (int(channel_id),),
-                    ).fetchone()[0] or 0)
+                ready_count, ready_usable = _ready_buffer_counts(self.store, channel_id)
                 ready_buffer = max(1, min(2, int(channel.max_posts_per_cycle or 1)))
                 can_publish, publish_reason = self.publisher.can_publish_now(channel_id)
-                if ready_count >= ready_buffer and not can_publish:
+                if ready_usable >= ready_buffer and not can_publish:
                     self._touch(state, "idle")
                     # The same intentional pause may last several minutes.
                     # Emit a heartbeat state every loop but keep event telemetry bounded.
@@ -243,7 +256,9 @@ class RuntimeEngine:
                         state.last_ready_pause_notice_monotonic = notice_now
                         event(
                             "worker", "AI preparation paused by READY buffer",
-                            channel_id=channel_id, ready=ready_count, buffer=ready_buffer, reason=publish_reason,
+                            channel_id=channel_id, ready=ready_count, ready_usable=ready_usable,
+                            ready_blocked=ready_count-ready_usable, buffer=ready_buffer,
+                            reason=publish_reason, min_publish_interval_minutes=int(channel.min_publish_interval_minutes),
                         )
                     self.stop_event.wait(1.0)
                     continue

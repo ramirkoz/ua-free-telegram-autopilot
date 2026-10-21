@@ -428,6 +428,24 @@ class ReadyBacklogSupervisor(LocalOnlyProductionSupervisorService):
                     ).fetchone()[0]
                     or 0
                 )
+                stats["ready_buffer_usable"] = int(
+                    con.execute(
+                        """SELECT COUNT(*) FROM articles
+                           WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'
+                             AND COALESCE(blocked_by,'NONE')='NONE'""",
+                        (int(channel_id),),
+                    ).fetchone()[0] or 0
+                )
+                channel = self.store.get_channel(int(channel_id))
+                if channel is not None:
+                    stats["min_publish_interval_minutes"] = int(channel.min_publish_interval_minutes)
+                    previous = str(self.store.last_published_at(int(channel_id)) or "")
+                    try:
+                        prior = _parse_datetime_value(previous)
+                        next_send = prior + timedelta(minutes=max(0, int(channel.min_publish_interval_minutes))) if prior else None
+                        stats["next_allowed_publish_at"] = next_send.isoformat() if next_send else ""
+                    except Exception:
+                        stats["next_allowed_publish_at"] = ""
                 stats["ready_permanent_blocked"] = int(
                     con.execute(
                         """SELECT COUNT(*) FROM articles
