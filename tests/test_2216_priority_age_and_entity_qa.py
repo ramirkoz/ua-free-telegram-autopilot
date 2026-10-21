@@ -89,5 +89,5 @@ def test_generic_capitalized_words_acronyms_and_roman_numerals_are_not_models():
 def test_unsupported_model_name_is_still_blocked():
     row={"title":"Місто повідомило про відкриття школи",
          "raw_text":"У Запоріжжі відкрили школу після ремонту"}
-    with pytest.raises(FactGuardError,match="Gen5"):
+    with pytest.raises(FactGuardError,match="gen5"):
         validate_fact_guard(row,"У Запоріжжі відкрили школу Gen5 після ремонту.")
