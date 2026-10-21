@@ -24,6 +24,15 @@ _EU_SANCTIONS = re.compile(r"(?iu)\b(?:єс|євросоюз\w*|європейс
 _LOCAL_ANCHOR = re.compile(r"(?iu)\b(?:запоріж\w*|запоріз\w*|мелітопол\w*|бердянськ\w*|енергодар\w*|токмак\w*|гуляйпол\w*|оріхів\w*|василів\w*|полог\w*|громад\w*\s+запорізьк\w*)\b")
 _LOCAL_OUTCOME = re.compile(r"(?iu)\b(?:отрима\w*|відкри\w*|запровад\w*|нада\w*|запуска\w*|змін\w*|впровад\w*|використа\w*|передад\w*|підтрима\w*)\b")
 
+# The operator's 21 Oct #71994 was an unrelated Putin/Trump/Witkoff clip
+# copied by a Zaporizhzhia-branded feed. Channel name is not local evidence.
+_GLOBAL_LEADER_CHAT = re.compile(
+    r"(?iu)\\b(?:трамп\\w*|trump|віткофф\\w*|уіткофф\\w*|witkoff)\\b"
+)
+_KREMLIN_INTERLOCUTOR = re.compile(
+    r"(?iu)\\b(?:путін\\w*|путіном|putin|кремл\\w*)\\b"
+)
+
 def _value(row: Any, key: str) -> str:
     try:
         value = row[key]
@@ -92,6 +101,9 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
         return "MONITORING_PROMO_JOIN_BAIT: тимчасове запрошення до чату без місцевої події або послуги"
     if _unanchored_speculative_meme(original):
         return "MONITORING_NONLOCAL_MEME: вигаданий інтернет-сюжет без факту чи події громади"
+    if (_GLOBAL_LEADER_CHAT.search(original) and _KREMLIN_INTERLOCUTOR.search(original)
+        and not _LOCAL_ANCHOR.search(original)):
+        return "MONITORING_OFF_TOPIC_GLOBAL_CLIP: дипломатичний кліп без джерельного факту про громади регіону"
     # A source's geographic channel name does not turn national or EU policy
     # into a municipal announcement. Require an explicit local outcome for
     # high-confidence national-only categories; keep genuine local impacts.
