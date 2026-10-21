@@ -329,6 +329,31 @@ CREATE TABLE IF NOT EXISTS publication_delivery_journal (
  updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_journal_state ON publication_delivery_journal(state,updated_at,article_id);
+CREATE TABLE IF NOT EXISTS delivery_receipt_archive (
+ article_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, state TEXT NOT NULL,
+ mode TEXT NOT NULL DEFAULT '', complete INTEGER NOT NULL DEFAULT 0,
+ expected_media_count INTEGER NOT NULL DEFAULT 0, media_count INTEGER NOT NULL DEFAULT 0,
+ primary_message_id TEXT NOT NULL DEFAULT '', message_ids_json TEXT NOT NULL DEFAULT '[]',
+ attempt_count INTEGER NOT NULL DEFAULT 0, prepared_at TEXT NOT NULL DEFAULT '',
+ sending_at TEXT NOT NULL DEFAULT '', acknowledged_at TEXT NOT NULL DEFAULT '',
+ committed_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+ archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_receipt_archive_state ON delivery_receipt_archive(state,committed_at);
+CREATE TRIGGER IF NOT EXISTS preserve_delivery_receipt_on_article_delete
+ BEFORE DELETE ON articles
+ BEGIN
+  INSERT OR IGNORE INTO delivery_receipt_archive (
+   article_id,channel_id,state,mode,complete,expected_media_count,media_count,
+   primary_message_id,message_ids_json,attempt_count,prepared_at,sending_at,
+   acknowledged_at,committed_at,updated_at
+  )
+  SELECT article_id,channel_id,state,mode,complete,expected_media_count,media_count,
+         primary_message_id,message_ids_json,attempt_count,prepared_at,sending_at,
+         acknowledged_at,committed_at,updated_at
+    FROM publication_delivery_journal WHERE article_id=OLD.id;
+ END;
+
 CREATE TABLE IF NOT EXISTS dedupe_shadow_candidates (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -1880,7 +1905,12 @@ class V2Store:
     def delivery_journal_summary(self) -> dict[str, Any]:
         with self.connect() as con:
             rows = list(con.execute(
-                "SELECT state,COUNT(*) AS n FROM publication_delivery_journal GROUP BY state ORDER BY state"
+                """SELECT state,COUNT(*) AS n FROM (
+                       SELECT article_id,state FROM publication_delivery_journal
+                       UNION ALL
+                       SELECT a.article_id,a.state FROM delivery_receipt_archive a
+                        WHERE NOT EXISTS (SELECT 1 FROM publication_delivery_journal j WHERE j.article_id=a.article_id)
+                   ) GROUP BY state ORDER BY state"""
             ))
             unknown = list(con.execute(
                 """SELECT article_id,channel_id,state,mode,sending_at,updated_at,last_error
@@ -1889,13 +1919,13 @@ class V2Store:
                       ORDER BY updated_at ASC LIMIT 20"""
             ))
             last_committed = str(con.execute(
-                "SELECT COALESCE(MAX(committed_at),'') FROM publication_delivery_journal WHERE state='COMMITTED'"
+                "SELECT MAX(committed_at) FROM (SELECT committed_at FROM publication_delivery_journal WHERE state='COMMITTED' UNION ALL SELECT committed_at FROM delivery_receipt_archive WHERE state='COMMITTED')"
             ).fetchone()[0] or '')
             committed_24h = int(con.execute(
-                "SELECT COUNT(*) FROM publication_delivery_journal WHERE state='COMMITTED' AND datetime(committed_at)>=datetime('now','-24 hours')"
+                "SELECT COUNT(*) FROM (SELECT article_id,committed_at FROM publication_delivery_journal WHERE state='COMMITTED' UNION ALL SELECT article_id,committed_at FROM delivery_receipt_archive WHERE state='COMMITTED' AND article_id NOT IN (SELECT article_id FROM publication_delivery_journal)) WHERE datetime(committed_at)>=datetime('now','-24 hours')"
             ).fetchone()[0] or 0)
             recovered_after_retry = int(con.execute(
-                "SELECT COUNT(*) FROM publication_delivery_journal WHERE state='COMMITTED' AND attempt_count>1"
+                "SELECT COUNT(*) FROM (SELECT article_id,attempt_count FROM publication_delivery_journal WHERE state='COMMITTED' UNION ALL SELECT article_id,attempt_count FROM delivery_receipt_archive WHERE state='COMMITTED' AND article_id NOT IN (SELECT article_id FROM publication_delivery_journal)) WHERE attempt_count>1"
             ).fetchone()[0] or 0)
         counts = {str(r['state']): int(r['n']) for r in rows}
         unresolved = sum(counts.get(k,0) for k in ('UNKNOWN','SENDING'))
