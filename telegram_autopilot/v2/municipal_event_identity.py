@@ -89,7 +89,7 @@ def municipal_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
         return False, ""
     # Within a district, admit street-to-nearby-park reports only when neither
     # provides *conflicting comparable* street/park addresses, and both say Zaporizhzhia.
-    if not same_specific_site and not ("запоріж" in a and "запоріж" in b):
+    if not same_specific_site and not (any(root in a for root in ("запоріж", "запоріз")) and any(root in b for root in ("запоріж", "запоріз"))):
         return False, ""
     site = ("street:" + streets[0]) if same_specific_site and streets[0] else (
         "park:" + parks[0] if same_specific_site else "district:" + ",".join(sorted(districts_a & districts_b))
