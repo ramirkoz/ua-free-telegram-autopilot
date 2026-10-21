@@ -13,6 +13,8 @@ from .media_pipeline import build_media_bundle, media_asset_keys, media_bundle_c
 from .media_recovery import MediaRecoveryStore
 from .source_retirement import retire_blocked_sources_once
 from .storage import _clean_media_json, _media_json_count, _normalize_datetime_value, _parse_datetime_value, now_iso
+from .capacity_pressure import capacity_window
+from .delivery_integrity import delivery_integrity_snapshot
 
 
 _RECOVERABLE_READY_MEDIA_CODES = {
@@ -446,6 +448,16 @@ class ReadyBacklogSupervisor(LocalOnlyProductionSupervisorService):
                         stats["next_allowed_publish_at"] = next_send.isoformat() if next_send else ""
                     except Exception:
                         stats["next_allowed_publish_at"] = ""
+                if channel is not None:
+                    estimate = capacity_window(
+                        pending_jobs=int(stats.get("due_jobs") or 0),
+                        min_interval_minutes=int(channel.min_publish_interval_minutes),
+                        publish_24h=bool(channel.publish_24h),
+                        publish_start=str(channel.publish_start),
+                        publish_end=str(channel.publish_end),
+                        max_age_hours=int(channel.max_age_hours),
+                    )
+                    stats["publication_capacity"] = estimate
                 stats["ready_permanent_blocked"] = int(
                     con.execute(
                         """SELECT COUNT(*) FROM articles
@@ -457,6 +469,13 @@ class ReadyBacklogSupervisor(LocalOnlyProductionSupervisorService):
                 )
                 stats_all[str(channel_id)] = stats
         snapshot["channel_stats"] = stats_all
+        try:
+            snapshot["delivery_integrity"] = delivery_integrity_snapshot(self.store)
+        except Exception as exc:
+            snapshot["delivery_integrity"] = {
+                "mode": "read_only", "error": type(exc).__name__,
+                "auto_replay": False, "auto_restore": False,
+            }
         # Use READY availability before classifying an intentional interval pause.
         snapshot["operational_states"] = self._operational_states(snapshot, self.config.normalized())
         supervision = dict(snapshot.get("supervision") or {})
