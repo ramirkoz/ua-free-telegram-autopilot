@@ -363,6 +363,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return ""
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
+    # Evaluate the SOURCE, not AI rewrite/title/forwarding channel, at both
+    # selection and final Telegram send. This also catches existing READY rows
+    # imported from older versions after their media blockers are resolved.
+    from .monitoring_civic_quality import civic_relevance_exclusion
+    source_exclusion = civic_relevance_exclusion(channel, article)
+    if source_exclusion:
+        return source_exclusion
     source = _source_text(article).strip()
     official_gate = _monitoring_official_context_reject(article, channel)
     if official_gate:
