@@ -26,8 +26,8 @@ def _seed_backlog(tmp_path, *, old_priority: int, fresh_priority: int,
         for source_id, priority in ((1, old_priority), (2, fresh_priority)):
             con.execute(
                 """INSERT INTO sources(id,channel_id,kind,name,url,enabled,initialized,priority)
-                   VALUES(?,1,'rss','Example','https://example.org/rss',1,1,?)""",
-                (source_id, priority),
+                   VALUES(?,1,'rss','Example','https://example.org/rss-' || ?,1,1,?)""",
+                (source_id, source_id, priority),
             )
         for i in range(old_count + 1):
             fresh = i == old_count
