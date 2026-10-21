@@ -359,6 +359,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     """
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
+    from .publication_safety import is_ai_rejection_text
+    if is_ai_rejection_text(text):
+        return "AI_REJECTION_LEAK_BLOCKED"
     if channel.mode != ChannelMode.MONITORING:
         return ""
     if _denied_original_monitoring_source(channel, article):
@@ -786,6 +789,9 @@ def validate_writer_output(
     # language or factual validation. This mirrors the upstream anti-ai-slop
     # architecture but keeps all runtime work local and dependency-free.
     value = apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip()
+    from .publication_safety import is_ai_rejection_text
+    if is_ai_rejection_text(value):
+        raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
