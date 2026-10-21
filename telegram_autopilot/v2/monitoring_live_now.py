@@ -43,6 +43,12 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     if _POLICY_MARKER not in rules:
         return ""
 
+    # 2.2.10: source-owned municipal editorial veto, independent of AI labels.
+    from .monitoring_civic_quality import civic_relevance_exclusion
+    civic_reason = civic_relevance_exclusion(channel, article)
+    if civic_reason:
+        return civic_reason
+
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
 
     # RC99: do not let AI invent a news item from a bare warning such as

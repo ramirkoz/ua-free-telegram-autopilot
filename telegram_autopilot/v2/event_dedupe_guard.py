@@ -415,6 +415,13 @@ def event_fingerprint_same_event(
     combines generic scientific names, concepts, rare terms, proper names, actions
     and normalized facts.
     """
+    # 2.2.10: civic site + action + stage can identify one local event across
+    # Ukrainian-language sources before generic English-centric title heuristics.
+    from .municipal_event_identity import municipal_same_event
+    civic_same, civic_reason = municipal_same_event(current, candidate)
+    if civic_same:
+        return True, civic_reason
+
     # Precondition for fuzzy cross-publisher decisions: shared topical labels
     # like "AI agents", "technology" and page footer vocabulary do not prove
     # that two headlines describe the same concrete event. Exact identity
@@ -895,6 +902,20 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
 
 class SemanticGuardedPublisher(_BaseSemanticGuardedPublisher):
     def publish_one(self, article_id: int, heartbeat=None) -> str:
+        # A READY article prepared under an older policy is not permission to
+        # publish. Recheck original source before a Telegram send.
+        article = self.store.get_article(article_id)
+        if article is not None:
+            channel = self.store.get_channel(int(article["channel_id"]))
+            if channel is not None:
+                from .monitoring_live_now import live_now_exclusion
+                veto = live_now_exclusion(channel, article)
+                if veto:
+                    self.store.reject_editorial_article(article_id, "MONITORING_PREPUBLISH_VETO: " + veto)
+                    event("editorial", "monitoring final source veto",
+                          channel_id=int(article["channel_id"]), article_id=article_id,
+                          reason=veto)
+                    return "MONITORING_PREPUBLISH_VETO"
         result = super().publish_one(article_id, heartbeat=heartbeat)
         if result == "PUBLISHED" and isinstance(self.semantic_dedupe, EventFingerprintDedupeEngine):
             try:
