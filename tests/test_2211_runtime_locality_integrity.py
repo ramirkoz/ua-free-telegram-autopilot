@@ -109,8 +109,11 @@ def test_media_blocked_ready_does_not_use_ai_ready_slot(tmp_path):
 
 
 def test_ready_telemetry_has_usable_count_and_interval():
-    import inspect
-    source=inspect.getsource(ReadyBacklogSupervisor.build_snapshot)
+    # Supervisor's public method is wrapped by the active runtime's supervisor
+    # composition layer. Test the implementation module rather than a wrapper.
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "telegram_autopilot/v2/ready_backlog.py").read_text(encoding="utf-8")
     assert "ready_buffer_usable" in source
     assert "min_publish_interval_minutes" in source
     assert "next_allowed_publish_at" in source
