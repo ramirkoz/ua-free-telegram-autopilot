@@ -1,6 +1,7 @@
 """Consistent, allowlisted SQLite diagnostics, not a restorable Data backup."""
 from __future__ import annotations
 import os
+import re
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
@@ -16,6 +17,20 @@ EXPORT_TABLES={
  "editorial_actions":("id","article_id","channel_id","action","title","created_at"),
  "rewrite_revisions":("id","article_id","channel_id","revision","origin","reason","text","created_at"),
 }
+
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|client[_-]?secret|auth|secret|key)=)[^&#\\s]+"), r"\\1<redacted>"),
+    (re.compile(r"(?i)(bot[0-9]{8,12}:)[A-Za-z0-9_-]{20,}"), r"\\1<redacted>"),
+    (re.compile(r"(?i)\\bsk-[A-Za-z0-9_-]{15,}"), "sk-<redacted>"),
+    (re.compile(r"(?i)(Bearer\\s+)[A-Za-z0-9_.-]{16,}"), r"\\1<redacted>"),
+)
+
+def _scrub(value):
+    if not isinstance(value,str):
+        return value
+    for pattern,replacement in _SECRET_PATTERNS:
+        value=pattern.sub(replacement,value)
+    return value
 
 def export_operator_data_snapshot(db_path:Path,output:Path)->dict[str,object]:
     """Use online backup for transaction consistency; export only explicitly allowed fields."""
@@ -44,7 +59,7 @@ def export_operator_data_snapshot(db_path:Path,output:Path)->dict[str,object]:
                 query=f'INSERT INTO "{table}" ({quoted}) VALUES ({marks})'
                 count=0
                 for batch in iter(lambda:rows.fetchmany(500),[]):
-                    safe.executemany(query,(tuple(r) for r in batch))
+                    safe.executemany(query,(tuple(_scrub(v) for v in r) for r in batch))
                     count+=len(batch)
                 counts[table]=count
             safe.execute('CREATE TABLE export_metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)')
