@@ -239,7 +239,7 @@ _MONITORING_UNOFFICIAL_POWER = re.compile(
 )
 _MONITORING_OFFICIAL_ORIGIN = re.compile(
     r"(?iu)(?:військов\w*\s+адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад\w*|"
-    r"\b(?:ОВА|МВА|ДСНС|поліці\w*|міськрад\w*|обленерго|"
+    r"\b(?:ОВА|МВА|ДСНС|поліці\w*|міськрад\w*|[а-яіїєґ]*обленерго|"
     r"міністерств\w*|департамент\w*|комунальн\w*\s+установ\w*)\b)"
 )
 
@@ -260,8 +260,9 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
         source_owned,
     ))
     confirmed_independently = bool(re.search(
-        r"(?iu)(?:(?:офіційно\s+)?підтвердил\w*|"
-        r"(?:поліція|ДСНС|ОВА|МВА|міська\s+рада|обласна\s+адміністрація)"
+        r"(?iu)(?:\bофіційно\s+підтвердил\w*|"
+        r"\b(?:поліція|ДСНС|ОВА|МВА|міська\s+рада|"
+        r"обласна\s+адміністрація|[а-яіїєґ]*обленерго)"
         r"[^.!?\n]{0,95}?(?:повідомил\w*|підтвердил\w*))",
         source_owned,
     ))
@@ -293,7 +294,7 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
         return "MONITORING_NOT_ORIGINAL_FORWARD"
     require_institutional_name = source_policy == "institutional"
     if require_institutional_name and source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
-        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
+        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|[а-яіїєґ]*обленерго)\b|"
         r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
         r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
         r"комунальн\w*\s+(?:заклад|установ|підприємств))", source_name
