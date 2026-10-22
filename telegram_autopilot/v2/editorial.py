@@ -515,8 +515,21 @@ def extract_actionable_facts(article: Any) -> list[str]:
     return out[:20]
 
 
+_UK_MONTH_AFTER_GLUE = re.compile(
+    r"(?iu)(?<=[А-Яа-яІіЇїЄєҐґ])"
+    r"(?=\d{1,2}\s+(?:січ\w*|лют\w*|берез\w*|квіт\w*|"
+    r"трав\w*|черв\w*|лип\w*|серп\w*|верес\w*|"
+    r"жовт\w*|листопад\w*|груд\w*)\b)"
+)
+
+
 def _number_tokens(text: str) -> set[str]:
     clean = re.sub(r"https?://\S+", "", str(text or ""))
+    # Telegram may join the last word of an HTML block to a date:
+    # "транспорту22 жовтня". The number is SOURCE-OWNED, not invented.
+    # Only split a glued DAY+MONTH, not arbitrary embedded model/product
+    # identifiers (GPT5, iPhone16), preserving invented-number protection.
+    clean = _UK_MONTH_AFTER_GLUE.sub(" ", clean)
     result: set[str] = set()
     for token in re.findall(r"(?<!\w)\d[\d\s.,:/-]*\d|(?<!\w)\d(?!\w)", clean):
         normalized = re.sub(r"[\s,._]", "", token).strip()
