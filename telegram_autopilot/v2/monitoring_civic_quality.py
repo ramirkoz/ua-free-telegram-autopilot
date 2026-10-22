@@ -132,6 +132,52 @@ def _definition_only_poster(article: Any) -> bool:
     return len(re.findall(r"[.!?…](?:\s|$)", compact)) <= 2
 
 
+
+# 2.2.21: bare incoming/overflying weapon notices are not community news.
+# Operator 74814: S8000 "Бандероль" described in source as a live route,
+# but AI treated it as postal parcels. Classify from original, never the rewrite.
+_LIVE_MUNITION = re.compile(
+    r"(?iu)\b(?:бандерол\w*|s[- ]?8000|с[- ]?8000|"
+    r"шахед\w*|бпла|дрон\w*|ланцет\w*|"
+    r"ракет\w*|крилат\w*\s+ракет\w*|каб(?:и|ів)?)\b"
+)
+_LIVE_AERIAL_ROUTE = re.compile(
+    r"(?iu)\b(?:повз|через|на\s+|у\s+бік|в\s+бік|"
+    r"у\s+напрямку|в\s+напрямку|курсом\s+на|"
+    r"проліта\w*|летить|рухає\w*)\b"
+)
+_LIVE_AFTER_ACTION = re.compile(
+    r"(?iu)\b(?:збит\w*|збил\w*|знешкод\w*|перехоп\w*|"
+    r"підтверджен\w*\s+наслідк\w*|пошкоджен\w*|"
+    r"загибл\w*|поранен\w*|постраждал\w*)\b"
+)
+_PARCEL_CONTEXT = re.compile(
+    r"(?iu)\b(?:поштов\w*|пошт\w*|відправлен\w*|"
+    r"посилк\w*|одержувач\w*|доставк\w*|відділенн\w*)\b"
+)
+
+
+def _unsettled_aerial_route(article: Any) -> bool:
+    """Conservative source-only gate for short, unresolved airborne-weapon routing."""
+    original = (_value(article, "title") + "\n" + _value(article, "raw_text")).strip()
+    compact = " ".join(original.split())
+    if len(compact) > 340:
+        return False
+    if not _LIVE_MUNITION.search(compact):
+        return False
+    if not _LIVE_AERIAL_ROUTE.search(compact):
+        return False
+    if _LIVE_AFTER_ACTION.search(compact):
+        return False
+    # "бандероль" alone is ambiguous in ordinary logistical reporting.
+    if _PARCEL_CONTEXT.search(compact) and not re.search(
+        r"(?iu)\b(?:ракета|ракет\w*|ударн\w*|бпла|"
+        r"повітрян\w*\s+ціл\w*|військов\w*)\b|🚀", compact
+    ):
+        return False
+    return True
+
+
 def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     """Fail closed only for a channel that has explicitly opted into the live gate."""
     if channel.mode != ChannelMode.MONITORING:
@@ -141,6 +187,8 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
     # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
     # and the name/geography of the newsroom that forwarded it.
+    if _unsettled_aerial_route(article):
+        return "MONITORING_LIVE_MUNITION_ROUTE: непідтверджене переміщення повітряної загрози без встановлених наслідків"
     if _definition_only_poster(article):
         return "MONITORING_GLOSSARY_NO_EVENT: визначення без нової події, послуги чи практичної інструкції"
     if _pure_invitation_noise(original):

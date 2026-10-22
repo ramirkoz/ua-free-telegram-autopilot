@@ -19,7 +19,7 @@ def _value(row: Mapping[str, Any] | Any, key: str) -> str:
 # 2.2.4: weapon/attack vocabulary used across the gate. "КАБ" is matched as a
 # whole word so "кабінет"/"кабель" never trigger it.
 _WEAPON = (
-    r"(?:бпла|дрон\w*|ракет\w*|шахед\w*|авіац\w*|реактивн\w*\s+мопед\w*|каб(?:и|ами|ом|ів|ах)?|авіабомб\w*|"
+    r"(?:бпла|дрон\w*|ракет\w*|бандерол\w*|s[- ]?8000|с[- ]?8000|шахед\w*|авіац\w*|реактивн\w*\s+мопед\w*|каб(?:и|ами|ом|ів|ах)?|авіабомб\w*|"
     r"керован\w*\s+авіа\w*|рсзв|град\w*|артилері\w*|балістик\w*|ланцет\w*|fpv|фпв)"
 )
 _ATTACK_VERBS = re.compile(
