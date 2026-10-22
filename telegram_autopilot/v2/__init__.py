@@ -6,7 +6,7 @@ from V2.
 """
 
 V2_SCHEMA_VERSION = 2
-V2_VERSION = "2.2.19"
+V2_VERSION = "2.2.20"
 
 from .runtime_contracts import install_runtime_contracts
 install_runtime_contracts()
