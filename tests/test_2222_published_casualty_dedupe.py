@@ -12,9 +12,12 @@ class Store:
     def __init__(self, path, *, age=11):
         self.path = path
         with self.connect() as con:
-            con.execute("CREATE TABLE published_event_ledger(article_id INTEGER,channel_id INTEGER,title TEXT,raw_text TEXT,final_text TEXT,published_at TEXT)")
+            con.execute("CREATE TABLE articles(id INTEGER PRIMARY KEY,channel_id INTEGER,stage TEXT,title TEXT,raw_text TEXT,final_text TEXT,published_at TEXT)")
+            con.execute("CREATE TABLE publication_delivery_journal(article_id INTEGER,channel_id INTEGER,state TEXT)")
+            con.execute("CREATE TABLE delivery_receipt_archive(article_id INTEGER,channel_id INTEGER,state TEXT)")
             at = (datetime.now().astimezone()-timedelta(minutes=age)).isoformat()
-            con.execute("INSERT INTO published_event_ledger VALUES(75211,3,?,?,?,?)",(FIRST,FIRST,FIRST,at))
+            con.execute("INSERT INTO articles VALUES(75211,3,'PUBLISHED',?,?,?,?)",(FIRST,FIRST,FIRST,at))
+            con.execute("INSERT INTO publication_delivery_journal VALUES(75211,3,'COMMITTED')")
 
     def connect(self):
         con = sqlite3.connect(self.path)
@@ -50,3 +53,33 @@ def test_different_explicit_streets_not_conflated():
     a="Росіяни атакували приватний будинок на вул. Весняній у Запоріжжі. Загинули двоє людей."
     b="Росіяни атакували приватний будинок на вул. Літній у Запоріжжі. Загинули двоє людей."
     assert not _same_short_fatal_residential_event(a,b)
+
+
+def test_unknown_receipt_does_not_prove_delivery(tmp_path):
+    store=Store(str(tmp_path/"unknown.db"))
+    with store.connect() as con:
+        con.execute("UPDATE publication_delivery_journal SET state='UNKNOWN'")
+    assert recent_community_incident_duplicate(store,3,75338,row()) == 0
+
+def test_archived_receipt_proves_delivery(tmp_path):
+    store=Store(str(tmp_path/"archive.db"))
+    with store.connect() as con:
+        con.execute("DELETE FROM publication_delivery_journal")
+        con.execute("INSERT INTO delivery_receipt_archive VALUES(75211,3,'COMMITTED')")
+    assert recent_community_incident_duplicate(store,3,75338,row()) == 75211
+
+def test_actual_ova_and_newsroom_wording_same_fatal_strike(tmp_path):
+    store=Store(str(tmp_path/"exact_operator.db"))
+    official="Ворог атакував Запоріжжя. Удар прийшовся по приватному будинку. Загинули двоє людей. Щирі співчуття рідним і близьким."
+    newsroom="Росіяни завдали удару по приватному сектору Запоріжжя: загинули двоє людей - ЗОВА."
+    with store.connect() as con:
+        con.execute("UPDATE articles SET title=?,raw_text=?,final_text=? WHERE id=75211",
+                    (official,official,official))
+    assert recent_community_incident_duplicate(store,3,75338,row(newsroom))==75211
+
+
+def test_unpublished_article_cannot_be_used_as_confirmation(tmp_path):
+    store=Store(str(tmp_path/"not_published.db"))
+    with store.connect() as con:
+        con.execute("UPDATE articles SET stage='READY' WHERE id=75211")
+    assert recent_community_incident_duplicate(store,3,75338,row()) == 0

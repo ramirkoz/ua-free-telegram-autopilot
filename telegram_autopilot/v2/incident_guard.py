@@ -112,10 +112,20 @@ def recent_community_incident_duplicate(store, channel_id: int, article_id: int,
         published = []
         with store.connect() as con:
             published = con.execute(
-                """SELECT article_id, title, raw_text, final_text, published_at
-                   FROM published_event_ledger
-                   WHERE channel_id=? AND article_id<>?
-                   ORDER BY published_at DESC LIMIT 60""",
+                """SELECT a.id AS article_id, a.title, a.raw_text, a.final_text,
+                          a.published_at
+                   FROM articles AS a
+                   WHERE a.channel_id=? AND a.id<>?
+                     AND a.stage='PUBLISHED' AND a.published_at<>''
+                     AND (
+                       EXISTS (SELECT 1 FROM publication_delivery_journal AS d
+                               WHERE d.article_id=a.id AND d.channel_id=a.channel_id
+                                 AND d.state='COMMITTED')
+                       OR EXISTS (SELECT 1 FROM delivery_receipt_archive AS h
+                                  WHERE h.article_id=a.id AND h.channel_id=a.channel_id
+                                    AND h.state='COMMITTED')
+                     )
+                   ORDER BY a.published_at DESC LIMIT 60""",
                 (channel_id, article_id),
             ).fetchall()
         now = datetime.now().astimezone()
