@@ -65,7 +65,7 @@ def test_actual_hero_single_story_with_sections_is_not_blocked():
 
 
 def test_compilation_named_in_title_not_automatically_rejected():
-    item=source(title="Four campaigns compared: films, generations, IKEA, and Nike")
+    item=source(title="IKEA Skyrim Nike Mbappé fandom examples")
     assert not multi_story_page_cards_reason(item)
 
 
