@@ -122,6 +122,11 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     # A source's geographic channel name does not turn national or EU policy
     # into a municipal announcement. Require an explicit local outcome for
     # high-confidence national-only categories; keep genuine local impacts.
+    # A nationwide return of fallen servicemembers does not become a local
+    # civic event merely because a regional news outlet copied the report.
+    from .repatriation_event_identity import remains_return_count
+    if remains_return_count(original.casefold()) is not None and not _LOCAL_ANCHOR.search(original):
+        return "MONITORING_NONLOCAL_REPATRIATION: загальноукраїнське повернення тіл без окремого факту про громаду"
     if (_NATIONAL_NBU.search(original) or _EU_SANCTIONS.search(original)) and not (
         _LOCAL_ANCHOR.search(original) and _LOCAL_OUTCOME.search(original)
     ):
