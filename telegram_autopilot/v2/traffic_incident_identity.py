@@ -10,7 +10,7 @@ direction is NOT suppressed. Media watermarks are not identity evidence.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
 from typing import Any
 
@@ -145,3 +145,47 @@ def traffic_incident_same_event(current: Any, candidate: Any) -> tuple[bool, str
     return True, ("cross-source traffic event crossing=" +
                   ",".join(sorted(crossings)) + " approach=" +
                   ",".join(sorted(approaches)) + " within=2h")
+
+
+_ONGOING_CLOSURE = re.compile(
+    r"(?iu)(?:офіційн\w*|повідомил\w*\s+(?:міськрад\w*|поліці\w*|ОВА))"
+    r".{0,90}(?:перекрит\w*|обмежен\w*|змін\w*\s+маршрут\w*)|"
+    r"(?:перекрит\w*|обмежен\w*)\s+рух\w*|"
+    r"(?:змін\w*|змінен\w*)\s+(?:маршрут\w*|рух\w*\s+транспорт\w*)|"
+    r"(?:об'їзд\w*|об’їзд\w*|обхідн\w*\s+маршрут\w*)"
+)
+
+
+def transient_traffic_age_exclusion(
+    article: Any, *, now: datetime | None = None, max_minutes: int = 75
+) -> str:
+    """Veto an old *current* road-jam bulletin, not a completed incident report.
+
+    Never guess from crawl time or use the new publication timestamp as the
+    freshness reference. No source timestamp => no automatic rejection.
+    """
+    low = _source_body(article)
+    if not (_CRASH.search(low) and _CONGESTION.search(low)):
+        return ""
+    if _CLEARED.search(low) or _ONGOING_CLOSURE.search(low):
+        return ""
+    published = _v(article, "source_published_at").strip()
+    if not published:
+        return ""
+    try:
+        event_time = datetime.fromisoformat(published.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if event_time.tzinfo is None:
+        # A naive local date has no reliable timezone; don't guess.
+        return ""
+    observed = now or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        return ""
+    elapsed = observed.astimezone(timezone.utc) - event_time.astimezone(timezone.utc)
+    if elapsed > timedelta(minutes=max_minutes):
+        return (
+            "MONITORING_STALE_TRAFFIC: оперативне повідомлення про ДТП "
+            "та поточний затор старше " + str(max_minutes) + " хвилин"
+        )
+    return ""
