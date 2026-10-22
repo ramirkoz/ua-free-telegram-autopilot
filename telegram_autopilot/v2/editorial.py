@@ -1049,6 +1049,9 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues: list[str] = []
     if not value:
         return ("порожній final_text",)
+    # Independent final publish-boundary language sentinel. Run BEFORE source
+    # and fact checks so another issue cannot mask a nonword that would be sent.
+    issues.extend("Жорсткий мовний QA: " + item for item in final_language_blockers(value))
     critical = hard_editorial_reject(channel, article, value)
     if critical:
         issues.append(critical)
