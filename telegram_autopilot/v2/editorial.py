@@ -1125,6 +1125,17 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # Run the source-integrity veto at the shared public entry point.
+        # Runtime contracts replace _select_editorial dynamically, so checks
+        # confined to that inner method would otherwise be bypassed in LIVE.
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .source_integrity import multi_story_page_cards_reason
+            source_problem = multi_story_page_cards_reason(article)
+            if source_problem:
+                event("editorial", "multi story page contamination rejected",
+                      channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                      reason=source_problem)
+                return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
         return self._select_monitoring(channel, article) if channel.mode == ChannelMode.MONITORING else self._select_editorial(channel, article)
 
     def _select_monitoring(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
