@@ -207,6 +207,21 @@ _LIVE_THREAT_RE = re.compile(
 )
 
 
+# Operator LIVE #74908: "повідомляють підписники" is the same unverified
+# attribution as "підписники повідомляють", regardless of AI rewriting.
+_MONITORING_READER_REVERSE = re.compile(
+    r"(?iu)\b(?:повідомляють|повідомили|повідомляє|пишуть|"
+    r"розповідають|кажуть|стверджують|заявляють)\b"
+    r"[^.!?\n]{0,95}\b(?:(?:наші|місцеві|деякі|окремі)\s+)?"
+    r"(?:підписник\w*|читач\w*|очевидц\w*|свідк\w*|сусід\w*)\b|"
+    r"\b(?:баба\s+[а-яіїєґ]+|кум|сусід\w*)\b"
+    r"[^.!?\n]{0,70}\b(?:сказав|сказала|казала|каже|"
+    r"повідомив|повідомила|розповів|розповіла)\b|"
+    r"\b(?:у\s+чат(?:і|ах)\s+пишуть|"
+    r"повідомленн\w*\s+від\s+(?:наших\s+)?(?:читач\w*|підписник\w*))\b"
+)
+
+
 _MONITORING_READER_RUMOR = re.compile(
     r"(?iu)(?:\b(?:підписник[иаів]*|читач[іів]*|очевидц[іів]*|свідк[иів]*)\b"
     r".{0,95}\b(?:повідом|пиш|розпов|каж|ствердж)|"
@@ -219,12 +234,12 @@ _MONITORING_PRIVATE_NOTICES = re.compile(
     r"\b(?:загубили\s+вейп|чий\s+малий\s+бігає|чия\s+собак))"
 )
 _MONITORING_UNOFFICIAL_POWER = re.compile(
-    r"(?iu)(?:зникло\s+світло|немає\s+світла|вимкнул\w*\s+світло|"
+    r"(?iu)(?:зникло\s+світло|світло\s+зникло|немає\s+світла|світла\s+немає|вимкнул\w*\s+світло|"
     r"електрик\w*\s+вже\s+відновил\w*)"
 )
 _MONITORING_OFFICIAL_ORIGIN = re.compile(
     r"(?iu)(?:військов\w*\s+адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад\w*|"
-    r"\b(?:ОВА|МВА|ДСНС|поліці\w*|міськрад\w*|обленерго|"
+    r"\b(?:ОВА|МВА|ДСНС|поліці\w*|міськрад\w*|[а-яіїєґ]*обленерго|"
     r"міністерств\w*|департамент\w*|комунальн\w*\s+установ\w*)\b)"
 )
 
@@ -236,24 +251,26 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     # Title is not proof. The first source caption takes precedence.
     # The disallowed material is unverified citizen-submitted reporting,
     # NOT reporting created by an independent local newsroom.
-    citizen_claim = bool(_MONITORING_READER_RUMOR.search(raw) or re.search(
+    source_owned = (raw + "\n" + title).strip()
+    citizen_claim = bool(_MONITORING_READER_RUMOR.search(source_owned) or _MONITORING_READER_REVERSE.search(source_owned) or re.search(
         r"(?iu)(?:\b(?:місцеві|жителі|мешканці|люди)\s+"
         r"(?:пишуть|повідомляють|кажуть|стверджують|розповідають)\b|"
         r"\b(?:за\s+словами|зі\s+слів)\s+"
         r"(?:місцевих|мешканців|жителів|очевидців)\b)",
-        raw,
+        source_owned,
     ))
     confirmed_independently = bool(re.search(
-        r"(?iu)(?:(?:офіційно\s+)?підтвердил\w*|"
-        r"(?:поліція|ДСНС|ОВА|МВА|міська\s+рада|обласна\s+адміністрація)"
+        r"(?iu)(?:\bофіційно\s+підтвердил\w*|"
+        r"\b(?:поліція|ДСНС|ОВА|МВА|міська\s+рада|"
+        r"обласна\s+адміністрація|[а-яіїєґ]*обленерго)"
         r"[^.!?\n]{0,95}?(?:повідомил\w*|підтвердил\w*))",
-        raw,
+        source_owned,
     ))
     if citizen_claim and not confirmed_independently:
         return "MONITORING_READER_RUMOR_NOT_OFFICIAL"
     if _MONITORING_PRIVATE_NOTICES.search(raw):
         return "MONITORING_PRIVATE_ANNOUNCEMENT"
-    if _MONITORING_UNOFFICIAL_POWER.search(raw) and not _MONITORING_OFFICIAL_ORIGIN.search(raw + " " + source_name):
+    if _MONITORING_UNOFFICIAL_POWER.search(source_owned) and not _MONITORING_OFFICIAL_ORIGIN.search(source_owned + " " + source_name):
         return "MONITORING_UNVERIFIED_SERVICE_RUMOR"
     # Headlines without independently verifiable factual content do not
     # acquire meaning merely because a photo/video is attached.
@@ -277,7 +294,7 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
         return "MONITORING_NOT_ORIGINAL_FORWARD"
     require_institutional_name = source_policy == "institutional"
     if require_institutional_name and source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
-        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|обленерго)\b|"
+        r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|[а-яіїєґ]*обленерго)\b|"
         r"громад|військов.{0,15}адміністрац|\b(?:міськ|селищн|сільськ|обласн)\w*\s+рад|"
         r"департамент|міністерств|управління\s+освіт|центр\s+соціальн|"
         r"комунальн\w*\s+(?:заклад|установ|підприємств))", source_name
@@ -1125,6 +1142,11 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
+        if channel.mode == ChannelMode.MONITORING:
+            source_problem = _monitoring_official_context_reject(article, channel)
+            if source_problem:
+                return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
         # Run the source-integrity veto at the shared public entry point.
         # Runtime contracts replace _select_editorial dynamically, so checks
         # confined to that inner method would otherwise be bypassed in LIVE.
