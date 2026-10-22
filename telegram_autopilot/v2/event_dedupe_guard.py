@@ -422,6 +422,15 @@ def event_fingerprint_same_event(
     if civic_same:
         return True, civic_reason
 
+    # A very short road-incident caption can omit the event facts that generic
+    # news-fingerprint thresholds need. Require source-owned same crossing,
+    # same named approach, accident+congestion and a bounded time window.
+    # This also works against the durable PUBLISHED ledger before Telegram send.
+    from .traffic_incident_identity import traffic_incident_same_event
+    traffic_same, traffic_reason = traffic_incident_same_event(current, candidate)
+    if traffic_same:
+        return True, traffic_reason
+
     # Precondition for fuzzy cross-publisher decisions: shared topical labels
     # like "AI agents", "technology" and page footer vocabulary do not prove
     # that two headlines describe the same concrete event. Exact identity
