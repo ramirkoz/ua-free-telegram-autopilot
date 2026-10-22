@@ -431,6 +431,17 @@ def event_fingerprint_same_event(
     if traffic_same:
         return True, traffic_reason
 
+    # A military repatriation batch may be reported by regional newsrooms in
+    # two completely different short captions. Source-owned returned-remains
+    # action + corroborated numerical body count identify the same event, not
+    # the source watermark, newsroom name or an AI-generated paraphrase.
+    from .repatriation_event_identity import repatriation_same_event
+    repatriation_same, repatriation_reason = repatriation_same_event(current, candidate)
+    if repatriation_same:
+        return True, repatriation_reason
+    if repatriation_reason.startswith("distinct repatriation"):
+        return False, repatriation_reason
+
     # Precondition for fuzzy cross-publisher decisions: shared topical labels
     # like "AI agents", "technology" and page footer vocabulary do not prove
     # that two headlines describe the same concrete event. Exact identity
