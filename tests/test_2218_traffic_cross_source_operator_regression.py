@@ -1,4 +1,3 @@
-from datetime import datetime, timezone, timedelta
 """22 October 2026 operator screenshot regression: the same dam video was posted twice.
 
 First: #73290 from ZapoLife, Telegram #3388 at 10:06:10.
@@ -9,6 +8,8 @@ Prior prepublish matched nearest_published_article_id=73290 but logged
 DTP+jam at the dam with queue starting at the Kakhovska road ring.
 """
 from __future__ import annotations
+
+from datetime import datetime, timezone, timedelta
 
 from telegram_autopilot.v2.traffic_incident_identity import traffic_incident_same_event, transient_traffic_age_exclusion
 from telegram_autopilot.v2.event_dedupe_guard import event_fingerprint_same_event
