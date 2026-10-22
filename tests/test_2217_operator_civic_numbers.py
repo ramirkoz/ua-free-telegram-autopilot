@@ -10,7 +10,7 @@ import pytest
 
 from telegram_autopilot.v2.domain import ChannelConfig, ChannelMode, ChannelPolicy
 from telegram_autopilot.v2.editorial import (
-    _number_tokens, validate_writer_output, hard_editorial_reject,
+    _number_tokens, _source_day_month_pairs, validate_writer_output, hard_editorial_reject,
     deterministic_monitoring_exclusion, prepublish_quality_issues,
 )
 from telegram_autopilot.v2.monitoring_civic_quality import civic_relevance_exclusion
@@ -113,3 +113,33 @@ def test_72839_glued_ukrainian_month_is_real_supported_day():
 def test_source_parser_glued_dates_and_product_names(month):
     assert "22" in _number_tokens(f"маршруту22 {month} діє розклад.")
     assert "22" not in _number_tokens("iPhone22 це позначення моделі, не календарна дата.")
+
+
+def test_operator_exact_route_23_does_not_justify_fabricated_october_23():
+    # The real #72839 contains route №23 and date 22 October. The preceding
+    # numeric-only verifier would approve a false 23 October because 23
+    # happens to be present as the *route number*.
+    original=LOCAL_TRANSPORT + (
+        " Маршрути № 23 та № 54 скоротили до зупинок «Гастроном» "
+        "і «Школа № 2» відповідно."
+    )
+    row=article(original,source="https://t.me/bezbaidy/42419")
+    assert "22" in _number_tokens(original)
+    assert "23" in _number_tokens(original)
+    assert _source_day_month_pairs(original)=={(22,"жовт")}
+    valid=(
+        "У Запоріжжі 22 жовтня змінено схему громадського транспорту "
+        "через перекриття греблі ДніпроГЕС. Маршрути № 23 та № 54 "
+        "скорочено до визначених зупинок."
+    )
+    assert validate_writer_output(row,valid,min_chars=60,max_chars=750)
+    with pytest.raises(ValueError,match="AI додав дату"):
+        validate_writer_output(row,valid.replace("22 жовтня","23 жовтня"),
+                               min_chars=60,max_chars=750)
+
+
+def test_named_month_check_stays_opt_in_to_explicit_source_dates():
+    assert _source_day_month_pairs("Графік 22.10.2026 і №23")==set()
+    assert _source_day_month_pairs("Транспорт22 жовтня, потім 23 листопада")=={
+        (22,"жовт"),(23,"листопад"),
+    }
