@@ -422,6 +422,13 @@ def event_fingerprint_same_event(
     if civic_same:
         return True, civic_reason
 
+    # 2.2.19: short national repatriation announcements can have different
+    # headlines and photos but identical verified source-owned event facts.
+    from .repatriation_event_identity import repatriation_same_event
+    same_remains, remains_reason = repatriation_same_event(current, candidate)
+    if same_remains:
+        return True, remains_reason
+
     # A very short road-incident caption can omit the event facts that generic
     # news-fingerprint thresholds need. Require source-owned same crossing,
     # same named approach, accident+congestion and a bounded time window.
