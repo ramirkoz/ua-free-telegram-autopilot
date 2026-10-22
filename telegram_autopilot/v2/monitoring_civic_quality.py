@@ -110,6 +110,12 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     if "[LIVE_NOW_RC96]" not in str(channel.policy.rejection_rules or ""):
         return ""
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
+    # A local publisher's label cannot make a nationwide military return
+    # a municipal event. A verified Zaporizhzhia local outcome is exempt.
+    from .repatriation_event_identity import national_repatriation_without_local_outcome
+    if national_repatriation_without_local_outcome(article):
+        return ("MONITORING_OFF_TOPIC_NATIONAL_REPATRIATION: "
+                "загальноукраїнська репатріація без встановленого зв'язку з громадами області")
     # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
     # and the name/geography of the newsroom that forwarded it.
     if _pure_invitation_noise(original):
