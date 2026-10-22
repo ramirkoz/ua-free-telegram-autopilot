@@ -515,8 +515,34 @@ def extract_actionable_facts(article: Any) -> list[str]:
     return out[:20]
 
 
+_UK_MONTH_AFTER_GLUE = re.compile(
+    r"(?iu)(?<=[А-Яа-яІіЇїЄєҐґ])"
+    r"(?=\d{1,2}\s+(?:січ\w*|лют\w*|берез\w*|квіт\w*|"
+    r"трав\w*|черв\w*|лип\w*|серп\w*|верес\w*|"
+    r"жовт\w*|листопад\w*|груд\w*)\b)"
+)
+
+
+_UK_DAY_MONTH = re.compile(
+    r"(?iu)\b(0?[1-9]|[12]\d|3[01])\s+"
+    r"(січ|лют|берез|квіт|трав|черв|лип|серп|верес|жовт|листопад|груд)\w*\b"
+)
+
+
+def _source_day_month_pairs(text: str) -> set[tuple[int, str]]:
+    """Retain date semantics; route №23 cannot support a fabricated 23 October."""
+    clean = re.sub(r"https?://\S+", "", str(text or ""))
+    clean = _UK_MONTH_AFTER_GLUE.sub(" ", clean)
+    return {(int(day), month.casefold()) for day,month in _UK_DAY_MONTH.findall(clean)}
+
+
 def _number_tokens(text: str) -> set[str]:
     clean = re.sub(r"https?://\S+", "", str(text or ""))
+    # Telegram may join the last word of an HTML block to a date:
+    # "транспорту22 жовтня". The number is SOURCE-OWNED, not invented.
+    # Only split a glued DAY+MONTH, not arbitrary embedded model/product
+    # identifiers (GPT5, iPhone16), preserving invented-number protection.
+    clean = _UK_MONTH_AFTER_GLUE.sub(" ", clean)
     result: set[str] = set()
     for token in re.findall(r"(?<!\w)\d[\d\s.,:/-]*\d|(?<!\w)\d(?!\w)", clean):
         normalized = re.sub(r"[\s,._]", "", token).strip()
@@ -813,6 +839,17 @@ def validate_writer_output(
     invented = sorted(_number_tokens(value) - _number_tokens(source))
     if invented:
         raise ValueError("AI додав число, якого немає у джерелі: " + ", ".join(invented[:10]))
+    # A number elsewhere in the article (e.g. trolleybus №23) cannot justify
+    # a different calendar day. Compare actual day+month pairs whenever the
+    # original explicitly contains a Ukrainian named-month date.
+    source_dates = _source_day_month_pairs(source)
+    output_dates = _source_day_month_pairs(value)
+    unsupported_dates = sorted(output_dates - source_dates) if source_dates else []
+    if unsupported_dates:
+        raise ValueError(
+            "AI додав дату, якої немає у джерелі: " +
+            ", ".join(f"{day} {month}" for day,month in unsupported_dates[:5])
+        )
     # 2.1.5: The operator's published Ledger article #47923 ended midway
     # through "щоб вик". Never accept an unfinished generative fragment.
     # The source footer is appended separately; body must end on a sentence.

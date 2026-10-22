@@ -19,6 +19,21 @@ _LOSS_ROUNDUP = re.compile(r"(?iu)\b(?:жмурк\w*|двохсот\w*|двух�
 _CIVILIAN = re.compile(r"(?iu)\b(?:цивільн\w*|мирн\w*\s+жител\w*|пошкоджен\w*\s+будин\w*|житлов\w*\s+будин\w*|рятувальник\w*|постраждал\w*\s+мешканц\w*)\b")
 
 
+# National daily loss counts from the General Staff are not a civic event in
+# Zaporizhzhia merely because a local Telegram publisher forwarded them.
+# Distinct from source-owned LOCAL civilian casualty or damage reports.
+_DAILY_MILITARY_LOSS = re.compile(
+    r"(?iu)(?:\b(?:втрат\w*|ліквідаці\w*|ліквідован\w*)\b.{0,90}"
+    r"\b(?:за\s+добу|добов\w*|від\s+початку\s+війни)\b|"
+    r"\b(?:добов\w*|за\s+добу)\b.{0,90}"
+    r"\b(?:втрат\w*|ліквідаці\w*|ліквідован\w*)\b)"
+)
+_MILITARY_LOSS_TARGET = re.compile(
+    r"(?iu)\b(?:росіян\w*|російськ\w*|росі\w*|армі\w*|"
+    r"військ\w*|окупант\w*|ворог\w*|рф)\b"
+)
+
+
 _NATIONAL_NBU = re.compile(r"(?iu)\b(?:набу|національн\w*\s+банк\w*\s+україни|нбу)\b.{0,130}\b(?:обшук\w*|розслідуван\w*)|\b(?:обшук\w*|розслідуван\w*)\b.{0,130}\b(?:набу|національн\w*\s+банк\w*\s+україни|нбу)\b")
 _EU_SANCTIONS = re.compile(r"(?iu)\b(?:єс|євросоюз\w*|європейськ\w*\s+союз\w*)\b.{0,180}\b(?:пакет\w*|санкці\w*)\b.{0,120}\b(?:росі\w*|рф)\b|\b(?:санкці\w*)\b.{0,130}\b(?:єс|євросоюз\w*)\b")
 _LOCAL_ANCHOR = re.compile(r"(?iu)\b(?:запоріж\w*|запоріз\w*|мелітопол\w*|бердянськ\w*|енергодар\w*|токмак\w*|гуляйпол\w*|оріхів\w*|василів\w*|полог\w*|громад\w*\s+запорізьк\w*)\b")
@@ -115,6 +130,11 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
         return "MONITORING_TACTICAL_UPDATE: поточні зміни бойових позицій/наступу не є цивільною завершеною подією"
     if _GENERIC_VACANCY.search(original):
         return "MONITORING_OFF_TOPIC: загальна добірка вакансій без конкретної місцевої події"
+    if (_DAILY_MILITARY_LOSS.search(original)
+        and _MILITARY_LOSS_TARGET.search(original)
+        and not _LOCAL_ANCHOR.search(original)
+        and not _CIVILIAN.search(original)):
+        return "MONITORING_OFF_TOPIC_DAILY_LOSSES: загальнонаціональний підрахунок військових втрат без місцевої цивільної події"
     if _LOSS_ROUNDUP.search(original) and not _CIVILIAN.search(original):
         return "MONITORING_OFF_TOPIC: військові втрати/непідтверджена бойова хроніка без цивільного підсумку"
     return ""
