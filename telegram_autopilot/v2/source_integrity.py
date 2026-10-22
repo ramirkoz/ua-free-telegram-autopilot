@@ -11,9 +11,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 _STOP = frozenset(
-    "about after again also been being better could does each from have into more "
-    "other than that their them then there these this through time what when where "
-    "which while with would were your our question getting you some only just "
+    "about after again also been being could does each from have into more "
+    "other than that their them then there these this through what when where "
+    "which while with would were your our you some only just "
     "most still article story media news read".split()
 )
 _WORD = re.compile(r"[a-z]{4,}|[а-яіїєґ]{4,}", re.I)
