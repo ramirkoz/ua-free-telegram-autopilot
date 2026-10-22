@@ -43,7 +43,7 @@ def source(title=TITLE, raw=RAW, url="https://shots.net/news/view/question-time-
 def test_screenshot_source_rejected_before_selector_and_writer():
     row = source()
     assert "EDITORIAL_MULTI_STORY_PAGE_CARDS" in multi_story_page_cards_reason(row)
-    outcome = EditorialEngine._select_editorial(None, channel(), row)
+    outcome = EditorialEngine.select(object.__new__(EditorialEngine), channel(), row)
     assert outcome.decision == Decision.REJECT
     assert outcome.fit_score == 0
 
