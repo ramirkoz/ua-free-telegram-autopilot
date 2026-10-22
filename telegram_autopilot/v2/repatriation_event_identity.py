@@ -109,7 +109,7 @@ def repatriation_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     # new regional follow-up. Do not collapse it into a national bulletin.
     if _LOCAL.search(a) or _LOCAL.search(b):
         return False, "distinct repatriation local follow-up"
-    if _FINISHED_NEW_OUTCOME.search(a) != _FINISHED_NEW_OUTCOME.search(b):
+    if bool(_FINISHED_NEW_OUTCOME.search(a)) != bool(_FINISHED_NEW_OUTCOME.search(b)):
         return False, "distinct repatriation completed identification/hand-over"
 
     ta, tb = _time(current), _time(candidate)
