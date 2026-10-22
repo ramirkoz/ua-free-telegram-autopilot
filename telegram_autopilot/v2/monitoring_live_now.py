@@ -49,6 +49,13 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     if civic_reason:
         return civic_reason
 
+    # A "jam right now" clip is not a durable news report. This also runs
+    # immediately before Telegram send for items left READY by older builds.
+    from .traffic_incident_identity import transient_traffic_age_exclusion
+    stale_traffic = transient_traffic_age_exclusion(article)
+    if stale_traffic:
+        return stale_traffic
+
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
 
     # RC99: do not let AI invent a news item from a bare warning such as
