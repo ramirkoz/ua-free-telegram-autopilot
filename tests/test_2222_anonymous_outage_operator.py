@@ -30,7 +30,8 @@ def channel(mode=ChannelMode.MONITORING, rules="[LIVE_NOW_RC96] local monitoring
         name="ЗАПОРІЖЖЯ | ГРОМАДИ",
         telegram_chat_id="-1000",
         mode=mode,
-        policy=ChannelPolicy(channel_id=3, rejection_rules=rules),
+        policy=ChannelPolicy(channel_id=3, rejection_rules=rules,
+                             monitoring_source_policy="connected_original"),
     )
 
 
