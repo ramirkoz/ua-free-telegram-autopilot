@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 """22 October 2026 operator screenshot regression: the same dam video was posted twice.
 
 First: #73290 from ZapoLife, Telegram #3388 at 10:06:10.
@@ -9,7 +10,7 @@ DTP+jam at the dam with queue starting at the Kakhovska road ring.
 """
 from __future__ import annotations
 
-from telegram_autopilot.v2.traffic_incident_identity import traffic_incident_same_event
+from telegram_autopilot.v2.traffic_incident_identity import traffic_incident_same_event, transient_traffic_age_exclusion
 from telegram_autopilot.v2.event_dedupe_guard import event_fingerprint_same_event
 
 PUBLISHED = {
@@ -112,3 +113,54 @@ def test_municipal_transport_restriction_without_dtp_not_collapsed():
 def test_same_publisher_new_row_not_mistaken_as_cross_source_event():
     other = dict(PUBLISHED, source_id=RECURRENT["source_id"])
     assert not traffic_incident_same_event(RECURRENT, other)[0]
+
+
+def test_operator_stale_0856_jam_1049_blocked_but_first_fresh_post_allowed():
+    now = datetime.fromisoformat("2026-10-22T10:49:37+03:00")
+    assert transient_traffic_age_exclusion(RECURRENT, now=now).startswith("MONITORING_STALE_TRAFFIC")
+    earlier = datetime.fromisoformat("2026-10-22T10:06:10+03:00")
+    assert transient_traffic_age_exclusion(PUBLISHED, now=earlier)==""
+
+
+def test_official_enduring_closure_and_settled_traffic_update_are_not_expired():
+    now = datetime.fromisoformat("2026-10-22T12:30:00+03:00")
+    closure=dict(RECURRENT,raw_text=RECURRENT["raw_text"] +
+                 " Через ДТП офіційно обмежено рух транспорту; змінено маршрут автобусів.")
+    assert not transient_traffic_age_exclusion(closure,now=now)
+    reopened=dict(RECURRENT,raw_text=RECURRENT["raw_text"]+" Рух відновили після усунення аварії.")
+    assert not transient_traffic_age_exclusion(reopened,now=now)
+
+
+def test_stale_guard_does_not_ban_other_news_or_guess_timestamp():
+    now=datetime.fromisoformat("2026-10-22T12:30:00+03:00")
+    other=dict(RECURRENT,raw_text="У Запоріжжі 22 жовтня відкрили новий центр підтримки.")
+    other["title"]=other["raw_text"]
+    assert not transient_traffic_age_exclusion(other,now=now)
+    no_time=dict(RECURRENT)
+    no_time.pop("source_published_at")
+    assert not transient_traffic_age_exclusion(no_time,now=now)
+    no_tz=dict(RECURRENT,source_published_at="2026-10-22T08:56:02")
+    assert not transient_traffic_age_exclusion(no_tz,now=now)
+
+
+def test_live_now_gate_preai_and_pretelegram_accepts_fresh_rejects_old():
+    from telegram_autopilot.v2.monitoring_live_now import live_now_exclusion
+    from telegram_autopilot.v2.domain import ChannelConfig, ChannelMode, ChannelPolicy
+    channel=ChannelConfig(
+        id=3,name="ЗАПОРІЖЖЯ | ГРОМАДИ",telegram_chat_id="-1001",
+        mode=ChannelMode.MONITORING,policy=ChannelPolicy(
+            channel_id=3,rejection_rules="[LIVE_NOW_RC96]"
+        ))
+    old=dict(RECURRENT,source_published_at=(
+        datetime.now(timezone.utc)-timedelta(minutes=105)
+    ).isoformat())
+    assert "MONITORING_STALE_TRAFFIC" in live_now_exclusion(channel,old)
+    fresh=dict(RECURRENT,source_published_at=(
+        datetime.now(timezone.utc)-timedelta(minutes=5)
+    ).isoformat())
+    assert "MONITORING_STALE_TRAFFIC" not in live_now_exclusion(channel,fresh)
+    optout=ChannelConfig(
+        id=3,name="Other",telegram_chat_id="-1002",
+        mode=ChannelMode.MONITORING,policy=ChannelPolicy(channel_id=3)
+    )
+    assert not live_now_exclusion(optout,old)
