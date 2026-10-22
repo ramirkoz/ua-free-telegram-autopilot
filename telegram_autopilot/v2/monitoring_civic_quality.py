@@ -103,6 +103,35 @@ def _unanchored_speculative_meme(original: str) -> bool:
     ))
 
 
+# Exact 2.2.19 operator defect #74332: a glossary-definition image is not news.
+_GLOSSARY_OPENING = re.compile(r"(?iu)^\s*[#*_]*[«„]?[а-яіїєґ][а-яіїєґ\s-]{3,54}\s*[—–-]\s*це\s+")
+_GLOSSARY_ACTION = re.compile(
+    r"(?iu)\b(?:відкри\w*|розпоча\w*|запусти\w*|презентува\w*|провел\w*|"
+    r"створил\w*|ухвалил\w*|запровадил\w*|працюватим\w*|"
+    r"зверніт\w*|звертайт\w*|зареєстру\w*|записат\w*|"
+    r"повідомте|повідомляйт\w*|перевірте|увімкніть|"
+    r"відбудет\w*|надають|отримат\w*|інструкці\w*|адрес\w*|"
+    r"контакт\w*|телефон\w*)\b"
+)
+_GLOSSARY_LOCAL_OUTCOME = re.compile(
+    r"(?iu)\b(?:у|в|для)\s+(?:запоріжж\w*|запоріз\w*|оріх\w*|"
+    r"михайлів\w*|мелітопол\w*|бердянськ\w*|громад\w*)\b"
+)
+
+
+def _definition_only_poster(article: Any) -> bool:
+    """Short source-owned dictionary definition without useful civic information."""
+    raw = str(_value(article, "raw_text") or _value(article, "title") or "").strip()
+    compact = " ".join(raw.split())
+    if not (40 <= len(compact) <= 360 and _GLOSSARY_OPENING.search(compact)):
+        return False
+    if _GLOSSARY_ACTION.search(compact) or _GLOSSARY_LOCAL_OUTCOME.search(compact):
+        return False
+    if re.search(r"\d|https?://|www\.|[\w.+-]+@[\w.-]+\.[a-z]{2,}", compact, re.I):
+        return False
+    return len(re.findall(r"[.!?…](?:\s|$)", compact)) <= 2
+
+
 def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     """Fail closed only for a channel that has explicitly opted into the live gate."""
     if channel.mode != ChannelMode.MONITORING:
@@ -112,6 +141,8 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
     # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
     # and the name/geography of the newsroom that forwarded it.
+    if _definition_only_poster(article):
+        return "MONITORING_GLOSSARY_NO_EVENT: визначення без нової події, послуги чи практичної інструкції"
     if _pure_invitation_noise(original):
         return "MONITORING_PROMO_JOIN_BAIT: тимчасове запрошення до чату без місцевої події або послуги"
     if _unanchored_speculative_meme(original):

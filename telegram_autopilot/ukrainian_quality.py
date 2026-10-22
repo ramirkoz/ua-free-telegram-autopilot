@@ -211,6 +211,9 @@ def language_quality_issues(value: str) -> tuple[str, ...]:
 
 
 _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # LIVE #74292: a correct draft was corrupted by the final AI editor.
+    # Hard reject unknown nonsense instead of guessing an unsafe replacement.
+    (re.compile(r"(?iu)\bпередзвіри\b"), "вигадане слово «передзвіри» у фінальному тексті"),
     (re.compile(r"(?iu)\bнизькокачесн[а-яіїєґ]*\b"), "русизм «низькокачесні» замість «низької якості»"),
     (re.compile(r"\bгучний\s+гудіння\b", re.I), "порушене узгодження «гучний гудіння»"),
     (re.compile(r"\bтепловий\s+мап\b", re.I), "порушене узгодження «тепловий мап»"),
