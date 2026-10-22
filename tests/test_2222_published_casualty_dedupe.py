@@ -67,3 +67,19 @@ def test_archived_receipt_proves_delivery(tmp_path):
         con.execute("DELETE FROM publication_delivery_journal")
         con.execute("INSERT INTO delivery_receipt_archive VALUES(75211,3,'COMMITTED')")
     assert recent_community_incident_duplicate(store,3,75338,row()) == 75211
+
+def test_actual_ova_and_newsroom_wording_same_fatal_strike(tmp_path):
+    store=Store(str(tmp_path/"exact_operator.db"))
+    official="Ворог атакував Запоріжжя. Удар прийшовся по приватному будинку. Загинули двоє людей. Щирі співчуття рідним і близьким."
+    newsroom="Росіяни завдали удару по приватному сектору Запоріжжя: загинули двоє людей - ЗОВА."
+    with store.connect() as con:
+        con.execute("UPDATE articles SET title=?,raw_text=?,final_text=? WHERE id=75211",
+                    (official,official,official))
+    assert recent_community_incident_duplicate(store,3,75338,row(newsroom))==75211
+
+
+def test_unpublished_article_cannot_be_used_as_confirmation(tmp_path):
+    store=Store(str(tmp_path/"not_published.db"))
+    with store.connect() as con:
+        con.execute("UPDATE articles SET stage='READY' WHERE id=75211")
+    assert recent_community_incident_duplicate(store,3,75338,row()) == 0
