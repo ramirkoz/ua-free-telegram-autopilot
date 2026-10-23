@@ -67,7 +67,8 @@ def _location(text: str) -> str:
 
 
 def _date(row: Any) -> datetime | None:
-    for key in ("source_published_at", "published_at", "discovered_at"):
+    # Ingest/discovery time is not proof of when the underlying event occurred.
+    for key in ("source_published_at", "published_at"):
         value = _v(row, key)
         if not value:
             continue
