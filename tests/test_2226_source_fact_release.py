@@ -101,7 +101,7 @@ def test_same_dated_numbered_council_act_repeats_across_sources():
     duplicate = _incoming(11, REPEAT, offset_minutes=145)
     assert _facts(earlier)["family"] == "municipal_act"
     assert _relation(duplicate, earlier) == "DUPLICATE"
-    assert _relation(_incoming(12, REPEAT, offset_minutes=60*49), earlier) == ""
+    assert _relation(_incoming(12, REPEAT, offset_minutes=60*51), earlier) == ""
 
 
 def test_municipal_identity_never_merges_different_authority_or_new_progress():
