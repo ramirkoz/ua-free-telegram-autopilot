@@ -1439,6 +1439,15 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
                 article_id=int(_v(article, "id", 0) or 0), source_chars=len(_source_text(article)),
                 configured_min=int(p.target_min_chars), effective_min=effective_min, effective_max=effective_max,
             )
+        from .source_fact_card import build_source_fact_card
+        source_fact_card = build_source_fact_card(article, char_budget=1900)
+        event(
+            "editorial", "source fact card created", channel_id=channel.id,
+            article_id=int(_v(article, "id", 0) or 0),
+            source_quotes=len(source_fact_card.direct_quotes),
+            statistic_contexts=len(source_fact_card.statistic_contexts),
+            truncated=source_fact_card.truncated,
+        )
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
         style_memory = self.learning.style_memory_block(channel.id, article)
@@ -1469,7 +1478,11 @@ WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
 EXTRA: {p.writer_extra_prompt}
 {style_memory}
-ANGLE: {selection.angle}
+ANGLE (лише кут подачі, НЕ факти): {selection.angle}
+{source_fact_card.text}
+ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
+потім поясни його зміст простими словами, додай лише перевірені подробиці.
+Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
@@ -1563,6 +1576,8 @@ SOURCE:
             if source_context else ""
         )
         source_attribution_instruction = source_body_instruction(channel, article)
+        from .source_fact_card import build_source_fact_card
+        source_fact_card = build_source_fact_card(article, char_budget=1700)
         from .reader_first import final_reader_rules
         reader_rules = final_reader_rules(
             monitoring=channel.mode == ChannelMode.MONITORING,
@@ -1570,6 +1585,10 @@ SOURCE:
         )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
+{source_fact_card.text}
+ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
+кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
+ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
