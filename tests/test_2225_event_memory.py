@@ -158,3 +158,12 @@ def test_different_city_and_uncorroborated_change_not_merged():
     ungrounded=incoming(2,REPEAT)
     ungrounded["final_text"]="Нібито загинули троє."
     assert _relation(ungrounded,incoming(1,BASE))=="DUPLICATE"
+
+
+def test_missing_source_publication_time_is_not_freshness_proof(tmp_path):
+    store=Store(tmp_path/"missing-source-time.sqlite3")
+    store.add(30,BASE,offset=25)
+    candidate=incoming(31,REPEAT)
+    candidate["source_published_at"]=""
+    candidate["discovered_at"]=datetime.now(timezone.utc).isoformat()
+    assert find_published_event(store,candidate).relation=="NEW"
