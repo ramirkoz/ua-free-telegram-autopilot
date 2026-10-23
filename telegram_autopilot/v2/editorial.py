@@ -375,10 +375,9 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     is source sufficiency: no rewriter can manufacture missing event context.
     """
     from .editorial_hard_floor import fabricated_event_reason
-    if str(text or "").strip():
-        grounding_problem = fabricated_event_reason(article, text)
-        if grounding_problem:
-            return grounding_problem
+    # Existing monitoring safety reasons (munition routes, rumor, source denial)
+    # must retain their diagnostic priority. Semantic output issues are enforced
+    # separately at the writer and final publishing boundary.
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
     from .publication_safety import is_ai_rejection_text
@@ -1094,6 +1093,10 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     sentence_floor = two_sentence_reason(article, value)
     if sentence_floor:
         issues.append(sentence_floor)
+    from .editorial_hard_floor import fabricated_event_reason
+    extra_claim = fabricated_event_reason(article, value)
+    if extra_claim:
+        issues.append(extra_claim)
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
@@ -1157,15 +1160,15 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
-        from .editorial_hard_floor import two_sentence_reason
-        source_short = two_sentence_reason(article)
-        if source_short:
-            return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
-        # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
+        # Preserve specific verified-source rejection signatures first.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)
             if source_problem:
                 return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
+        from .editorial_hard_floor import two_sentence_reason
+        source_short = two_sentence_reason(article)
+        if source_short:
+            return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
         # Run the source-integrity veto at the shared public entry point.
         # Runtime contracts replace _select_editorial dynamically, so checks
         # confined to that inner method would otherwise be bypassed in LIVE.
