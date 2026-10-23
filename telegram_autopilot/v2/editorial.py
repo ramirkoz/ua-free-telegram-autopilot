@@ -374,10 +374,7 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     The monitoring policy may be customized with channel rules. Its invariant
     is source sufficiency: no rewriter can manufacture missing event context.
     """
-    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
-    length_problem = two_sentence_reason(article, text if str(text or "").strip() else None)
-    if length_problem:
-        return length_problem
+    from .editorial_hard_floor import fabricated_event_reason
     if str(text or "").strip():
         grounding_problem = fabricated_event_reason(article, text)
         if grounding_problem:
@@ -850,10 +847,6 @@ def validate_writer_output(
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
-    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
-    hard_problem = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
-    if hard_problem:
-        raise ValueError(hard_problem)
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
@@ -910,6 +903,10 @@ def validate_writer_output(
     hard_issues = hard_editorial_blockers(value)
     if hard_issues:
         raise ValueError("Жорсткий QA: " + "; ".join(hard_issues[:4]))
+    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
+    source_or_final = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
+    if source_or_final:
+        raise ValueError(source_or_final)
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
@@ -1091,6 +1088,12 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     critical = hard_editorial_reject(channel, article, value)
     if critical:
         issues.append(critical)
+    # Source/output sentence floor at actual final send, including old READY.
+    # Keep historical safety diagnoses from hard_editorial_reject intact.
+    from .editorial_hard_floor import two_sentence_reason
+    sentence_floor = two_sentence_reason(article, value)
+    if sentence_floor:
+        issues.append(sentence_floor)
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
