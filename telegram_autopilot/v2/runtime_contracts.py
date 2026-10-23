@@ -63,7 +63,6 @@ def _enforce_terminal_human_rejects(store) -> int:
 
 
 def _install_publisher_contract() -> None:
-    from . import editorial as editorial_mod
     from .publisher import Publisher
 
     original_can_publish_now = Publisher.can_publish_now
@@ -83,15 +82,20 @@ def _install_publisher_contract() -> None:
         approved = _human_approved(self.store, int(article_id))
         with _PUBLISH_LOCK:
             previous_force = bool(getattr(self, "_rc102_force_publish", False))
-            previous_qa = editorial_mod.prepublish_quality_issues
+            previous_approval = bool(getattr(self, "_rc102_human_approved", False))
             try:
                 self._rc102_force_publish = bool(force)
+                # An operator may waive soft style/fit QA, never source and
+                # delivery safety. Avoid global module monkeypatching: it
+                # could also disable QA in a concurrent automated publisher.
+                self._rc102_human_approved = bool(approved)
                 if approved:
-                    editorial_mod.prepublish_quality_issues = lambda _channel, _article, _text: ()
-                    event("editorial", "HUMAN_APPROVE_OVERRIDE", channel_id=int((self.store.get_article(article_id) or {"channel_id": 0})["channel_id"]), article_id=int(article_id))
+                    event("editorial", "HUMAN_APPROVE_SOFT_OVERRIDE",
+                          channel_id=int((self.store.get_article(article_id) or {"channel_id": 0})["channel_id"]),
+                          article_id=int(article_id), source_safety="mandatory")
                 result = original_publish_one(self, int(article_id), heartbeat=heartbeat)
             finally:
-                editorial_mod.prepublish_quality_issues = previous_qa
+                self._rc102_human_approved = previous_approval
                 self._rc102_force_publish = previous_force
         if approved:
             row = self.store.get_article(int(article_id))
