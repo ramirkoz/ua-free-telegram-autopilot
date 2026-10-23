@@ -58,19 +58,24 @@ _CIVIC_PROGRESS = re.compile(
 
 
 def _municipal_act_facts(text: str) -> dict[str, Any]:
-    docs = list(_CIVIC_ACT.finditer(text))
-    councils = list(_CIVIC_ISSUER.finditer(text))
+    # A source title and its body may repeat the same exact document; it
+    # remains one act. Two different documents or authorities are ambiguous.
+    docs = {
+        (m.group(1).casefold(), m.group(2), m.group(3))
+        for m in _CIVIC_ACT.finditer(text)
+    }
+    councils = {_root(m.group(1)) for m in _CIVIC_ISSUER.finditer(text)}
     if len(docs) != 1 or len(councils) != 1:
         return {}
     if not _CIVIC_ADOPTION.search(text) or _CIVIC_PROGRESS.search(text):
         return {}
-    match, issuer = docs[0], councils[0]
+    kind, document_date, document_number = next(iter(docs))
     return {
         "family": "municipal_act",
-        "place": _root(issuer.group(1)),
-        "target": match.group(1).casefold(),
-        "document_date": match.group(2),
-        "document_number": match.group(3),
+        "place": next(iter(councils)),
+        "target": kind,
+        "document_date": document_date,
+        "document_number": document_number,
     }
 
 
