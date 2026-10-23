@@ -51,6 +51,9 @@ class Store:
                 con.execute("INSERT INTO publication_delivery_journal VALUES (?,?,?)",
                             (article_id,channel,receipt))
 
+    def get_channel(self, channel_id):
+        return None
+
     def get_article(self, article_id):
         with self.connect() as con:
             return con.execute("SELECT * FROM articles WHERE id=?", (article_id,)).fetchone()
@@ -130,3 +133,28 @@ def test_event_snapshot_survives_article_retention(tmp_path):
         con.execute("DELETE FROM publication_delivery_journal")
         con.execute("DELETE FROM articles WHERE id=10")
     assert find_published_event(store,incoming(11,REPEAT)).event_id==key
+
+
+def test_actual_production_dedupe_route_blocks_and_preserves_update(tmp_path):
+    from telegram_autopilot.v2.event_dedupe_guard import EventFingerprintDedupeEngine
+
+    store=Store(tmp_path/"runtime.sqlite3")
+    store.add(75211,BASE,offset=90,receipt="COMMITTED")
+    store.add(75338,REPEAT,offset=80,receipt="FAILED")
+    store.add(75930,UPDATE,offset=2,receipt="FAILED")
+    with store.connect() as con:
+        con.execute("UPDATE articles SET stage='READY',published_at='' WHERE id IN (75338,75930)")
+    engine=EventFingerprintDedupeEngine(store)
+    repeat=engine._find_duplicate(75338,published_only=True)
+    assert repeat.relation=="DUPLICATE" and repeat.duplicate_of==75211
+    update=engine._find_duplicate(75930,published_only=True)
+    assert update.relation=="SINGLE"
+    assert store.get_article(75930)["event_key"]=="ev25:3:75211"
+
+
+def test_different_city_and_uncorroborated_change_not_merged():
+    different=REPEAT.replace("Запоріжжі","Дніпрі")
+    assert _relation(incoming(2,different),incoming(1,BASE))==""
+    ungrounded=incoming(2,REPEAT)
+    ungrounded["final_text"]="Нібито загинули троє."
+    assert _relation(ungrounded,incoming(1,BASE))=="DUPLICATE"
