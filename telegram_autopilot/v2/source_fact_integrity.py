@@ -45,13 +45,13 @@ def fatality_numbers(value: str) -> frozenset[int]:
 # about how many times more/less frequently every individual performs an action.
 # Do not let the writer create new rate multipliers absent from the source.
 _MULTIPLIER_RATE = re.compile(
-    r"(?iu)\\b(?:майже\\s+)?(?:у|в)(?:двічі|тричі)\\s+"
-    r"(?:рідше|частіше|швидше|повільніше)\\b"
+    r"(?iu)\b(?:майже\s+)?(?:у|в)(?:двічі|тричі)\s+"
+    r"(?:рідше|частіше|швидше|повільніше)\b"
 )
 _SOURCE_MULTIPLIER = re.compile(
-    r"(?iu)\\b(?:удвічі|вдвічі|утричі|втричі|"
-    r"twice|tripled|doubled|half\\s+as|two[ -]fold|three[ -]fold|"
-    r"в\\s+два\\s+рази|у\\s+два\\s+рази)\\b"
+    r"(?iu)\b(?:удвічі|вдвічі|утричі|втричі|"
+    r"twice|tripled|doubled|half\s+as|two[ -]fold|three[ -]fold|"
+    r"в\s+два\s+рази|у\s+два\s+рази)\b"
 )
 
 
@@ -70,7 +70,7 @@ def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
     # Narrow guard for percentage-participation data: a source may report
     # 28% vs 16% of people reading on an average day, which does NOT license
     # an unsourced claim that each person now reads "twice less often".
-    if (re.search(r"\\d+(?:[.,]\\d+)?\\s*%", raw)
+    if (re.search(r"\d+(?:[.,]\d+)?\s*%", raw)
             and _MULTIPLIER_RATE.search(str(final_text or ""))
             and not _SOURCE_MULTIPLIER.search(raw)):
         issues.append("FACT_UNSUPPORTED_RATE_MULTIPLIER")
