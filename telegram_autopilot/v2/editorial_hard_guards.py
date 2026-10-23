@@ -51,8 +51,14 @@ def substantive_sentences(value: str) -> tuple[str, ...]:
             continue
         line = re.sub(r"(?iu)^\s*(?:[-•*]|\d+[).])\s*", "", line).strip()
         candidates.extend(_SPLIT.split(line))
-    seen: list[set[str]] = []
+    seen: list[tuple[set[str], set[str]]] = []
     kept = []
+    def canonical(word: str) -> str:
+        alias = {"пройшла": "провед", "провели": "провед",
+                 "проведено": "провед", "відбулася": "провед"}
+        return alias.get(word, word[:7] if len(word) > 7 else word)
+    count_words = {"один", "одна", "одне", "два", "дві", "двоє",
+                   "три", "троє", "чотири", "пять", "п'ять", "пятеро"}
     for candidate in candidates:
         sentence = candidate.strip(" \t\r\n\"'«»()[]—–•🚨🔴⚠️")
         if not re.search(r"[.!?…][»”\"')\]]*$", sentence):
@@ -65,12 +71,17 @@ def substantive_sentences(value: str) -> tuple[str, ...]:
         }}
         if len(substantive) < 3 or len(sentence) < 16:
             continue
-        # Identical sentence or near-copy of a single claim does not count twice.
-        if any(len(substantive & old) / max(1, min(len(substantive),len(old))) >= .86
-               for old in seen):
+        # Distinct punctuation is not a second fact. Canonicalize simple
+        # verb variants while preserving differences in numbers/counts.
+        normalized = {canonical(w) for w in substantive}
+        quantities = {w for w in substantive if w in count_words}
+        quantities.update(re.findall(r"\\b\\d+\\b", sentence))
+        if any(quantities == old_quantities
+               and len(normalized & old_words) / max(1, min(len(normalized),len(old_words))) >= .67
+               for old_words, old_quantities in seen):
             continue
         kept.append(sentence)
-        seen.append(substantive)
+        seen.append((normalized,quantities))
     return tuple(kept)
 
 
