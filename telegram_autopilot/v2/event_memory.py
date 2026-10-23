@@ -53,7 +53,7 @@ def _source_text(row: Any) -> str:
 
 def _root(name: str) -> str:
     value = name.casefold().replace("’", "'").strip(" '")
-    for suffix in ("ами", "ями", "ях", "ах", "ою", "ею", "ом", "ем", "ів", "ові", "еві"):
+    for suffix in ("ами", "ями", "ій", "ях", "ах", "ою", "ею", "ом", "ем", "ів", "ові", "еві"):
         if len(value) > len(suffix) + 4 and value.endswith(suffix):
             return value[:-len(suffix)]
     if len(value) > 5 and value.endswith(("і", "и", "а", "я", "у", "ю", "о")):

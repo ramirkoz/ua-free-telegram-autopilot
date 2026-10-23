@@ -760,6 +760,13 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
         channel_cfg = self.store.get_channel(channel_id)
         hours = int(channel_cfg.published_dedupe_window_hours if channel_cfg else 168)
         self._sync_ledger(channel_id, hours)
+        # Only a committed Telegram delivery can enter durable event memory.
+        try:
+            from .event_memory import record_committed_event
+            record_committed_event(self.store, article_id)
+        except Exception as exc:
+            event("dedupe", "2.2.25 event-memory write failed", level=30,
+                  channel_id=channel_id, article_id=article_id, detail=str(exc)[:600])
 
     def _ledger_candidates(self, channel_id: int, article_id: int, hours: int) -> list[Any]:
         self._sync_ledger(channel_id, hours)
@@ -835,6 +842,27 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
             raise KeyError(article_id)
         channel_id = int(current["channel_id"])
         channel = self.store.get_channel(channel_id)
+        # 2.2.25: confirmed source-grounded event memory precedes broad
+        # similarity; a material count update must not be hidden by dedupe.
+        try:
+            from .event_memory import find_published_event
+            memory_match = find_published_event(self.store, current)
+            if memory_match.relation == "DUPLICATE":
+                return DedupeResult(
+                    "DUPLICATE", memory_match.prior_article_id,
+                    "2.2.25 event-memory: " + memory_match.reason,
+                )
+            if memory_match.relation == "UPDATE":
+                if str(current["event_key"] or "") != memory_match.event_id:
+                    self.store.update_article(article_id, event_key=memory_match.event_id)
+                event("dedupe", "2.2.25 material event update admitted",
+                      channel_id=channel_id, article_id=article_id,
+                      prior_article_id=memory_match.prior_article_id,
+                      event_id=memory_match.event_id)
+                return DedupeResult("SINGLE", None, "2.2.25 source-confirmed event update")
+        except Exception as exc:
+            event("dedupe", "2.2.25 event-memory read failed", level=30,
+                  channel_id=channel_id, article_id=article_id, detail=str(exc)[:600])
         if channel is not None:
             # 2.2.4: one post per named initiative per channel window (channel setting).
             initiative = find_initiative_duplicate(self.store, current, channel)
