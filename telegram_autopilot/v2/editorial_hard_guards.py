@@ -63,7 +63,7 @@ def substantive_sentences(value: str) -> tuple[str, ...]:
             "читати", "джерело", "підписатися", "підписуйтесь",
             "сьогодні", "завтра", "новини", "оновлення", "увага",
         }}
-        if len(substantive) < 4 or len(sentence) < 25:
+        if len(substantive) < 3 or len(sentence) < 16:
             continue
         # Identical sentence or near-copy of a single claim does not count twice.
         if any(len(substantive & old) / max(1, min(len(substantive),len(old))) >= .86
