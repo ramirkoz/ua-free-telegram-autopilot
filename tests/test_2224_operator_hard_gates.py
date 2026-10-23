@@ -91,3 +91,40 @@ def test_production_ingest_delegates_only_to_strict_ownership(monkeypatch):
     entries=[SimpleNamespace(post="mih_gromada/4655"),SimpleNamespace(post="mih_gromada/4656")]
     assert stitch_adjacent_telegram_media("mih_gromada",entries) is sentinel
     assert called==[("mih_gromada",entries)]
+
+
+
+def test_exact_4655_video_does_not_join_4656_own_photo():
+    from telegram_autopilot.media import encode_media
+    from telegram_autopilot.v2.ingest import TelegramEntry
+    video=TelegramEntry(post="mih_gromada/4655",text="",published="2026-10-23T09:30:00+03:00",
+                        media=[encode_media("video","https://example.test/4655.mp4")])
+    primary=TelegramEntry(post="mih_gromada/4656",
+                          text="Для переселенців працює юридичний центр. Консультації надають фахівці правозахисної організації.",
+                          published="2026-10-23T09:30:20+03:00",
+                          media=[encode_media("image","https://example.test/4656.jpg")])
+    posts=stitch_adjacent_telegram_media("mih_gromada",[video,primary])
+    assert len(posts)==1
+    assert posts[0].external_id=="mih_gromada/4656"
+    assert len(posts[0].media_urls)==1
+    assert "4656.jpg" in posts[0].media_urls[0]
+    import json
+    layout=json.loads(posts[0].article_layout_json)
+    assert layout["telegram"]["message_ids"] == ["4656"]
+
+
+def test_stale_ready_4655_video_plus_4656_photo_fails_publish_parity(monkeypatch):
+    from telegram_autopilot.v2 import telegram_media_publish_guard as guard
+    from types import SimpleNamespace
+    events=[]
+    store=SimpleNamespace(publication_backoff=lambda article_id,**kwargs:events.append((article_id,kwargs)))
+    pub=SimpleNamespace(store=store)
+    check=SimpleNamespace(outcome="confirmed",expected_photos=1,video_expected=False,
+        media=["image4656"],photo_signal="photo_wrap",video_signal="",reason="exact_post_media_confirmed")
+    monkeypatch.setattr(guard,"check_exact_telegram_media",lambda url:check)
+    bundle=SimpleNamespace(source_message_ids=["4655","4656"],encoded_items=["video4655","image4656"],count=2)
+    result=guard.enforce_source_media_parity(pub,SimpleNamespace(id=3),76242,
+               {"media_json":"[]"} ,bundle,"https://t.me/mih_gromada/4656")
+    assert result=="MEDIA_CROSS_POST_CONTAMINATION"
+    assert events[0][0]==76242
+    assert events[0][1]["error_code"]=="MEDIA_CROSS_POST_CONTAMINATION"
