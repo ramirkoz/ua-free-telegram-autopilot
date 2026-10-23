@@ -1,6 +1,6 @@
 """P0 overnight acceptance cases from source operator 2026-10-23."""
 from telegram_autopilot.v2.editorial_hard_floor import facts,two_sentence_reason,fabricated_event_reason
-from telegram_autopilot.v2.editorial import hard_editorial_reject, EditorialEngine
+from telegram_autopilot.v2.editorial import prepublish_quality_issues, EditorialEngine
 from telegram_autopilot.v2.domain import ChannelConfig, ChannelMode, ChannelPolicy, Decision
 
 def row(raw, title=""):
@@ -11,7 +11,7 @@ def ch(mode=ChannelMode.MONITORING):
 
 def test_short_one_sentence_no_inventing_another():
     assert two_sentence_reason(row("Через міст пролетіла реактива.")) == "EDITORIAL_MIN_TWO_SENTENCES: source"
-    assert hard_editorial_reject(ch(),row("Через міст пролетіла реактива.")) == "EDITORIAL_MIN_TWO_SENTENCES: source"
+    assert "EDITORIAL_MIN_TWO_SENTENCES: source" in prepublish_quality_issues(ch(),row("Через міст пролетіла реактива."),"Через міст пролетіла реактива.")
     assert EditorialEngine.select(object.__new__(EditorialEngine),ch(),row("Через міст пролетіла реактива.")).decision==Decision.REJECT
 
 def test_source_and_final_gates_separate():
