@@ -374,6 +374,14 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     The monitoring policy may be customized with channel rules. Its invariant
     is source sufficiency: no rewriter can manufacture missing event context.
     """
+    from .editorial_hard_guards import minimum_sentence_reason, unsupported_event_claims
+    sentence_problem = minimum_sentence_reason(article, text if str(text or "").strip() else None)
+    if sentence_problem:
+        return sentence_problem
+    if str(text or "").strip() and channel.mode == ChannelMode.MONITORING:
+        claim_problem = unsupported_event_claims(article, text)
+        if claim_problem:
+            return claim_problem[0]
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
     from .publication_safety import is_ai_rejection_text
@@ -688,6 +696,8 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     source = _source_text(article).casefold()
     text = str(value or "")
     issues: list[str] = list(_source_grounding_night_issues(article, text))
+    from .editorial_hard_guards import unsupported_event_claims
+    issues.extend(unsupported_event_claims(article, text))
     # Do not summarize different phases of a rapidly changing situation as
     # simultaneous facts. Ask editor to keep the current settled status only.
     low_output = text.casefold()
@@ -839,6 +849,10 @@ def validate_writer_output(
     # language or factual validation. This mirrors the upstream anti-ai-slop
     # architecture but keeps all runtime work local and dependency-free.
     value = apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip()
+    from .editorial_hard_guards import minimum_sentence_reason
+    sentence_problem = minimum_sentence_reason(article, value)
+    if sentence_problem:
+        raise ValueError(sentence_problem)
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
@@ -1142,6 +1156,12 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # Global operator hard floor applies before any AI selection/provider.
+        # Title/link/emoji and repeated padding cannot manufacture two facts.
+        from .editorial_hard_guards import minimum_sentence_reason
+        sentence_problem = minimum_sentence_reason(article)
+        if sentence_problem:
+            return EditorialOutcome(Decision.REJECT, reason=sentence_problem, fit_score=0)
         # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)

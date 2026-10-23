@@ -16,71 +16,12 @@ from . import strict_ingest
 
 
 def stitch_adjacent_telegram_media(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
-    ordered = sorted(
-        entries,
-        key=lambda entry: (
-            base._post_number(entry.post) is None,
-            base._post_number(entry.post) if base._post_number(entry.post) is not None else 10**18,
-        ),
-    )
-    entry_by_id = {
-        int(post_id): entry
-        for entry in ordered
-        if (post_id := base._post_number(entry.post)) is not None
-    }
+    """Use exact Telegram media ownership, never just consecutive post IDs.
 
-    def media_only(entry: base.TelegramEntry) -> bool:
-        return not str(entry.text or "").strip() and strict_ingest._strict_media_bearing(entry)
-
-    articles: list[CollectedArticle] = []
-    i = 0
-    while i < len(ordered):
-        current = ordered[i]
-
-        if media_only(current):
-            run = [current]
-            j = i + 1
-            while j < len(ordered) and media_only(ordered[j]) and base._adjacent(run[-1], ordered[j]):
-                run.append(ordered[j])
-                j += 1
-            if j < len(ordered):
-                primary = ordered[j]
-                if str(primary.text or "").strip() and base._adjacent(run[-1], primary):
-                    attached = list(run)
-                    k = j + 1
-                    previous = primary
-                    while k < len(ordered) and media_only(ordered[k]) and base._adjacent(previous, ordered[k]):
-                        attached.append(ordered[k])
-                        previous = ordered[k]
-                        k += 1
-                    article = base._to_article(username, primary, attached)
-                    articles.append(strict_ingest._upgrade_strict_article(username, article, entry_by_id))
-                    i = k
-                    continue
-            i = j
-            continue
-
-        if str(current.text or "").strip():
-            attached: list[base.TelegramEntry] = []
-            j = i + 1
-            previous = current
-            while j < len(ordered) and media_only(ordered[j]) and base._adjacent(previous, ordered[j]):
-                attached.append(ordered[j])
-                previous = ordered[j]
-                j += 1
-
-            if not current.media and not attached and j >= len(ordered) and base._held(current):
-                i = j
-                continue
-
-            article = base._to_article(username, current, attached)
-            articles.append(strict_ingest._upgrade_strict_article(username, article, entry_by_id))
-            i = j
-            continue
-
-        i += 1
-
-    return articles
+    Older adjacent 4655-video + 4656-text/photo would create a false album.
+    The strict stitcher only allows explicit grouped/reply/source-video links.
+    """
+    return strict_ingest.strict_stitch_telegram(username, entries)
 
 
 def collect_telegram_current(source: Source) -> list[CollectedArticle]:

@@ -58,6 +58,17 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
 
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
 
+    # Operator #76065 / #76105 / #76110: colloquial "реактив" is an
+    # ambiguous ongoing airborne track, not proof of a civilian road closure
+    # or a jet airplane. Do not ask AI to make it a settled news event.
+    if (re.search(r"(?iu)\bреактив\w*\b", low)
+            and re.search(r"(?iu)\b(?:через|повз|кружл\w*|вилеті\w*|"
+                          r"полеті\w*|літа\w*|рух\w*|йдуть|"
+                          r"мост\w*|напрям\w*)\b", low)
+            and not re.search(r"(?iu)\b(?:загинул\w*|поранен\w*|"
+                              r"пошкоджен\w*|збит\w*|знешкоджен\w*)\b", low)):
+        return "MONITORING_AMBIGUOUS_ACTIVE_AERIAL_ROUTE"
+
     # RC99: do not let AI invent a news item from a bare warning such as
     # "Новомиколаївка, уважно". A monitoring item must contain an actual event,
     # action, consequence or scheduled change before it reaches generative AI.
