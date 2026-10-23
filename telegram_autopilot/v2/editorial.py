@@ -1561,6 +1561,7 @@ SOURCE:
     def _final_edit(
         self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int,
         hard_max_chars: int | None = None, trusted_only: bool = False, fail_closed: bool = False,
+        repair_focus: str = "",
     ) -> str:
         p = channel.policy
         source_name = source_context_name(channel, article)
@@ -1586,6 +1587,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {source_fact_card.text}
+{repair_focus}
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
@@ -1646,6 +1648,58 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
+        # 2.2.28: when a READY publication failed mandatory factual QA, retain
+        # its successful story selection and repair the *specific* bad claim.
+        # The candidate MUST pass both mandatory source QA and normal editorial
+        # QA again before returning to READY. Never reuse a failed candidate.
+        from .focused_rewrite import focused_rewrite_instructions
+        repair_focus = focused_rewrite_instructions(article)
+        if repair_focus:
+            previous = str(_v(article, "final_text", "") or "").strip()
+            body_limit = source_body_hard_limit(
+                channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
+            )
+            lo, hi, hard = _monitoring_limits(channel, article, body_limit)
+            try:
+                fixed = self._final_edit(
+                    channel, article, previous, min_chars=lo, max_chars=hi,
+                    hard_max_chars=hard, trusted_only=True, fail_closed=True,
+                    repair_focus=repair_focus,
+                )
+                from .source_fact_integrity import non_overridable_quality_issues
+                hard_issues = non_overridable_quality_issues(channel, article, fixed)
+                soft_issues = prepublish_quality_issues(channel, article, fixed)
+                if hard_issues or soft_issues:
+                    raise ValueError("TARGETED_REPAIR_QA: " + "; ".join(
+                        (*hard_issues, *soft_issues)[:8]
+                    ))
+                self.store.update_article(
+                    article_id, stage=str(Stage.QA_PASSED),
+                    draft_text=previous, final_text=fixed,
+                    status_detail="TARGETED_QA_REPAIR_FROM_ORIGINAL_SOURCE",
+                )
+                self.store.mark_ready(article_id)
+                event(
+                    "editorial", "targeted source factual rewrite repaired READY",
+                    article_id=article_id, channel_id=channel.id,
+                    previous_error_code=str(_v(article, "last_error_code", "")),
+                    original_length=len(previous), repaired_length=len(fixed),
+                )
+                return EditorialOutcome(
+                    Decision.PUBLISH, reason="TARGETED_QA_REPAIR_FROM_SOURCE",
+                    draft_text=previous, final_text=fixed,
+                    provider=str(_v(article, "ai_provider", "") or ""),
+                    model=str(_v(article, "ai_model", "") or ""),
+                )
+            except (GatewayExhausted, ValueError) as exc:
+                # Preserve existing bounded retry limits and continue the
+                # standard writer only when the trusted one-pass correction
+                # cannot satisfy source-owned facts.
+                event(
+                    "editorial", "targeted source rewrite insufficient",
+                    level=30, article_id=article_id, channel_id=channel.id,
+                    error=type(exc).__name__, detail=str(exc)[:350],
+                )
         selection = self.select(channel, article)
         if heartbeat is not None:
             try: heartbeat()
