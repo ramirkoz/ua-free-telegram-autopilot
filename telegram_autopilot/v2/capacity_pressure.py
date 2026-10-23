@@ -63,4 +63,16 @@ def capacity_window(
         "overloaded": overloaded,
         "pending_selection": "FRESHNESS_FIRST" if overloaded else "RESCUE_NEAR_TTL",
         "preserves_operator_interval": True,
+        # Diagnostic only: pending items are *selection jobs*, NOT 1:1
+        # publishable posts. Never change cadence or silently delete articles.
+        "selection_jobs_per_possible_post_slot": round(
+            max(0, int(pending_jobs)) / max(1, slots), 2,
+        ),
+        "selection_pressure": (
+            "HIGH" if overloaded else (
+                "ELEVATED" if int(pending_jobs) > slots else "NORMAL"
+            )
+        ),
+        "jobs_are_not_posts": True,
+        "automatic_drop_or_interval_change": False,
     }

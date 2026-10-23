@@ -33,16 +33,64 @@ def enforce_source_media_parity(publisher, channel, article_id: int, article, bu
     # A bundle containing an extra neighbour's video/photo is not made valid
     # merely by marking itself stitched. Exact primary-post media MUST appear;
     # additional items require separately verified ownership (not available here).
-    if check.outcome in {"confirmed", "text_only", "video_recovered"} and check.media and bundle.count > len(check.media):
-        reason = "MEDIA_CROSS_POST_CONTAMINATION"
-        publisher.store.publication_backoff(
-            article_id, blocked_by=BlockedBy.MEDIA, error_code=reason,
-            detail=f"exact={len(check.media)} bundle={bundle.count}",
-            retry_seconds=1800, count_attempt=False,
-        )
-        event("media", "cross-post media mismatch blocked", level=30,
-              channel_id=channel.id, article_id=article_id, code=reason)
-        return reason
+    if check.outcome in {"confirmed", "video_recovered"} and check.media and bundle.count > len(check.media):
+        # 2.2.27: the exact Telegram post is now a POSITIVE independent source
+        # of media truth. Earlier versions blocked forever on contaminated
+        # stitched galleries even when all correct images were available.
+        # Repair by keeping ONLY verified exact-post media and removing
+        # unverified media blocks; never publish a neighbouring attachment.
+        try:
+            patched = dict(article)
+            layout = json.loads(str(patched.get("article_layout_json") or "{}"))
+            if not isinstance(layout, dict):
+                layout = {}
+            exact_media = list(dict.fromkeys(check.media))[:24]
+            exact = set(exact_media)
+            blocks = layout.get("blocks")
+            if isinstance(blocks, list):
+                from ..media import encode_media
+                layout["blocks"] = [
+                    b for b in blocks
+                    if not isinstance(b, dict)
+                    or str(b.get("type") or "") != "media"
+                    or encode_media(str(b.get("kind") or "image"), str(b.get("url") or "")) in exact
+                ]
+            tg = dict(layout.get("telegram") or {})
+            tg["media_count"] = len(exact_media)
+            tg["source_media_parity"] = "exact_post_repair_2227"
+            layout["telegram"] = tg
+            patched["media_json"] = json.dumps(exact_media, ensure_ascii=False)
+            patched["article_layout_json"] = json.dumps(layout, ensure_ascii=False)
+            repaired = build_publication_media_bundle(channel, patched)
+            if (repaired.count == len(exact_media)
+                    and set(repaired.encoded_items) == exact
+                    and not source_media_shortfall(check, repaired.encoded_items)):
+                publisher.store.update_article(
+                    article_id, media_json=patched["media_json"],
+                    article_layout_json=patched["article_layout_json"],
+                )
+                article, bundle = patched, repaired
+                event(
+                    "media", "exact Telegram contaminated gallery safely repaired",
+                    channel_id=channel.id, article_id=article_id,
+                    exact_media=len(exact_media), removed_neighbour_media=True,
+                )
+        except Exception as exc:
+            event(
+                "media", "exact Telegram media repair unsafe; staying blocked",
+                level=30, channel_id=channel.id, article_id=article_id,
+                error=type(exc).__name__,
+            )
+        if bundle.count > len(check.media):
+            reason = "MEDIA_CROSS_POST_CONTAMINATION"
+            publisher.store.publication_backoff(
+                article_id, blocked_by=BlockedBy.MEDIA, error_code=reason,
+                detail=f"exact={len(check.media)} bundle={bundle.count}",
+                retry_seconds=1800, count_attempt=False,
+            )
+            event("media", "cross-post media mismatch blocked", level=30,
+                  channel_id=channel.id, article_id=article_id, code=reason)
+            return reason
     stitched = len(bundle.source_message_ids) > 1
     encoded = bundle.encoded_items
     if check.media and (
