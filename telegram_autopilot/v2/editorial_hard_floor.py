@@ -52,7 +52,7 @@ def two_sentence_reason(article: Any, final_text: str | None = None) -> str:
 
 
 _AIR_ALERT = re.compile(
-    r"(?iu)\b(?:реактив(?:н\w*)?|реактиви|мопед(?:и|ів|ами)?|"
+    r"(?iu)\b(?:реактив\w*|мопед(?:и|ів|ами)?|"
     r"бандерол\w*|шахед\w*|бпла|дрон\w*|ппо|"
     r"ракет\w*|літак\w*)\b"
 )
