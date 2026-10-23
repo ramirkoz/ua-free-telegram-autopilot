@@ -354,6 +354,22 @@ CREATE TRIGGER IF NOT EXISTS preserve_delivery_receipt_on_article_delete
     FROM publication_delivery_journal WHERE article_id=OLD.id;
  END;
 
+-- 2.2.25 durable event snapshots survive article retention. Populate only
+-- after verified COMMITTED Telegram receipts, never from READY or UNKNOWN.
+CREATE TABLE IF NOT EXISTS event_registry (
+ event_id TEXT PRIMARY KEY,channel_id INTEGER NOT NULL,
+ first_article_id INTEGER NOT NULL,latest_article_id INTEGER NOT NULL,
+ event_family TEXT NOT NULL,location_key TEXT NOT NULL,site_key TEXT NOT NULL,
+ latest_facts_json TEXT NOT NULL,last_published_at TEXT NOT NULL,
+ created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_publication_history (
+ article_id INTEGER PRIMARY KEY,event_id TEXT NOT NULL,channel_id INTEGER NOT NULL,
+ title TEXT NOT NULL,raw_text TEXT NOT NULL,source_published_at TEXT NOT NULL,
+ published_at TEXT NOT NULL,facts_json TEXT NOT NULL,committed INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_ev25_channel_time ON event_publication_history(channel_id,published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ev25_group ON event_publication_history(event_id);
 CREATE TABLE IF NOT EXISTS dedupe_shadow_candidates (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
