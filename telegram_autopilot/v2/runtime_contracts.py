@@ -90,7 +90,7 @@ def _install_publisher_contract() -> None:
                 # could also disable QA in a concurrent automated publisher.
                 self._rc102_human_approved = bool(approved)
                 if approved:
-                    event("editorial", "HUMAN_APPROVE_SOFT_OVERRIDE",
+                    event("editorial", "HUMAN_APPROVE_OVERRIDE",
                           channel_id=int((self.store.get_article(article_id) or {"channel_id": 0})["channel_id"]),
                           article_id=int(article_id), source_safety="mandatory")
                 result = original_publish_one(self, int(article_id), heartbeat=heartbeat)
