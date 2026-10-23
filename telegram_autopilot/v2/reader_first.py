@@ -61,3 +61,12 @@ def final_reader_rules(*, monitoring: bool, commercial: bool) -> str:
         COMMERCIAL_READER_RULES if commercial else ""
     )
     return FINAL_READER_REVIEW + ("\n" + extra if extra else "")
+
+
+def requires_final_reader_copyedit(*, monitoring: bool, legacy_quality_risk: bool) -> bool:
+    """Every editorial article gets final copyedit; community notices keep the
+    existing risk-based pass to avoid doubling AI traffic for the large feed.
+
+    This uses only already configured provider routes and budget limits.
+    """
+    return not monitoring or legacy_quality_risk
