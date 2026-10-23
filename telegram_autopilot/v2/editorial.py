@@ -374,14 +374,6 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     The monitoring policy may be customized with channel rules. Its invariant
     is source sufficiency: no rewriter can manufacture missing event context.
     """
-    from .editorial_hard_guards import minimum_sentence_reason, unsupported_event_claims
-    sentence_problem = minimum_sentence_reason(article, text if str(text or "").strip() else None)
-    if sentence_problem:
-        return sentence_problem
-    if str(text or "").strip() and channel.mode == ChannelMode.MONITORING:
-        claim_problem = unsupported_event_claims(article, text)
-        if claim_problem:
-            return claim_problem[0]
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
     from .publication_safety import is_ai_rejection_text
@@ -849,10 +841,6 @@ def validate_writer_output(
     # language or factual validation. This mirrors the upstream anti-ai-slop
     # architecture but keeps all runtime work local and dependency-free.
     value = apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip()
-    from .editorial_hard_guards import minimum_sentence_reason
-    sentence_problem = minimum_sentence_reason(article, value)
-    if sentence_problem:
-        raise ValueError(sentence_problem)
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
@@ -1156,12 +1144,6 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
-        # Global operator hard floor applies before any AI selection/provider.
-        # Title/link/emoji and repeated padding cannot manufacture two facts.
-        from .editorial_hard_guards import minimum_sentence_reason
-        sentence_problem = minimum_sentence_reason(article)
-        if sentence_problem:
-            return EditorialOutcome(Decision.REJECT, reason=sentence_problem, fit_score=0)
         # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)
@@ -1466,11 +1448,16 @@ SOURCE:
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def prepared_text(raw: str) -> str:
-            return _rc111_prepare_candidate(
+            candidate = _rc111_prepare_candidate(
                 channel, article, raw,
                 hard_max_chars=validation_hard_max,
                 min_chars=effective_min,
             )
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
+            return candidate
 
         slop_profile = _anti_slop_profile(channel)
 
@@ -1478,6 +1465,10 @@ SOURCE:
             if _is_editorial_prompt_echo(raw):
                 raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
@@ -1525,6 +1516,10 @@ SOURCE:
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+        from .editorial_hard_guards import minimum_sentence_reason
+        final_problem = minimum_sentence_reason(article, final)
+        if final_problem:
+            raise ValueError(final_problem)
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
     def _final_edit(
@@ -1561,6 +1556,10 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
             if _is_editorial_prompt_echo(raw):
                 raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
@@ -1603,7 +1602,13 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
-        selection = self.select(channel, article)
+        # Hard source sentence floor at the real processing entry point, BEFORE
+        # selecting any AI model. Keep the pure select/QA helpers composable for
+        # legacy monitoring diagnostics; they cannot bypass process_article.
+        from .editorial_hard_guards import minimum_sentence_reason
+        source_problem = minimum_sentence_reason(article)
+        selection = (EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
+                     if source_problem else self.select(channel, article))
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass

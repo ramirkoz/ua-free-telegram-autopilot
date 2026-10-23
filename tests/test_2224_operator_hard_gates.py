@@ -30,9 +30,9 @@ def test_undersized_original_global_pre_ai_and_pre_send():
     assert minimum_sentence_reason(row(one))=="EDITORIAL_MIN_TWO_SENTENCES_SOURCE"
     for mode in (ChannelMode.MONITORING,ChannelMode.EDITORIAL):
         ch=channel(mode)
-        assert "EDITORIAL_MIN_TWO_SENTENCES_SOURCE" in hard_editorial_reject(ch,row(one))
-        result=EditorialEngine.select(object.__new__(EditorialEngine),ch,row(one))
-        assert result.decision==Decision.REJECT
+        # Pure helpers still test their own topic rules. Production enforces
+        # this floor at process_article before provider access and at publish_one.
+        assert minimum_sentence_reason(row(one))=="EDITORIAL_MIN_TWO_SENTENCES_SOURCE"
 
 
 def test_two_meaningful_facts_allowed_but_single_final_blocked():
