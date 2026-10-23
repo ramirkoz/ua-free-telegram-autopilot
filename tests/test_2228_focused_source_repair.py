@@ -111,6 +111,9 @@ def test_failed_focused_edit_does_not_bypass_hard_qa(monkeypatch):
     monkeypatch.setattr(editorial, "_monitoring_limits", lambda *args: (150, 700, 800))
     monkeypatch.setattr(EditorialEngine, "_final_edit", lambda *args, **kw: PRIOR)
     monkeypatch.setattr(source_integrity, "non_overridable_quality_issues", lambda *a: ("MONITORING_SOURCE_POLARITY_FLIP",))
+    # The hard guard must stop this draft before production policy inspection;
+    # mock only the unrelated per-channel soft policy (fake channel has none).
+    monkeypatch.setattr(editorial, "prepublish_quality_issues", lambda *a: ())
     called = []
     monkeypatch.setattr(EditorialEngine, "select", lambda *a: called.append(True) or EditorialOutcome(Decision.REJECT, reason="fallback", fit_score=0))
     result = engine.process_article(77337)
