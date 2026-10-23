@@ -374,6 +374,14 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     The monitoring policy may be customized with channel rules. Its invariant
     is source sufficiency: no rewriter can manufacture missing event context.
     """
+    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
+    length_problem = two_sentence_reason(article, text if str(text or "").strip() else None)
+    if length_problem:
+        return length_problem
+    if str(text or "").strip():
+        grounding_problem = fabricated_event_reason(article, text)
+        if grounding_problem:
+            return grounding_problem
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
     from .publication_safety import is_ai_rejection_text
@@ -842,6 +850,10 @@ def validate_writer_output(
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
+    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
+    hard_problem = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
+    if hard_problem:
+        raise ValueError(hard_problem)
     if len(value) < max(80, int(min_chars) * 2 // 3):
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
@@ -1142,6 +1154,10 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        from .editorial_hard_floor import two_sentence_reason
+        source_short = two_sentence_reason(article)
+        if source_short:
+            return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
         # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)

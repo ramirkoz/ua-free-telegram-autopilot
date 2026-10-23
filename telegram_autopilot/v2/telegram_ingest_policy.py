@@ -97,7 +97,9 @@ def collect_telegram_current(source: Source) -> list[CollectedArticle]:
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
     entries = [strict_ingest._hydrate_exact_video_post(username, entry) for entry in parser.entries]
-    items = stitch_adjacent_telegram_media(username, entries)
+    # Post adjacency is not media ownership. Use explicit group/reply binding
+    # from the strict source parser, never stitch arbitrary nearby posts.
+    items = strict_ingest.strict_stitch_telegram(username, entries)
     if not items:
         raise collector.CollectorError("Не вдалося прочитати Telegram-канал")
     return items[-40:]
