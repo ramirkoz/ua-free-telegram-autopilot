@@ -1456,8 +1456,14 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if channel.mode == ChannelMode.MONITORING else ""
         )
         named_source_style = source_body_instruction(channel, article)
+        from .reader_first import writer_reader_rules
+        reader_rules = writer_reader_rules(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+        )
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
+{reader_rules}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -1505,7 +1511,11 @@ SOURCE:
         )
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
         needs_trusted_editor = (
-            quality.needs_second_candidate
+            # All reader-facing editorial output needs a genuine independent
+            # source-grounded copyedit; structural QA alone missed incoherent
+            # trend essays and disconnected brand/statistic lists in LIVE.
+            channel.mode == ChannelMode.EDITORIAL
+            or quality.needs_second_candidate
             or bool(language_quality_issues(draft))
             or bool(human_style_issues(draft))
             or needs_grammar_polish(draft)
@@ -1553,7 +1563,13 @@ SOURCE:
             if source_context else ""
         )
         source_attribution_instruction = source_body_instruction(channel, article)
+        from .reader_first import final_reader_rules
+        reader_rules = final_reader_rules(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+        )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
+{reader_rules}
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
