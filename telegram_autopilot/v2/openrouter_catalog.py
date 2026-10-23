@@ -32,10 +32,18 @@ _CATALOG_AT = 0.0
 _TTL = 6 * 60 * 60
 _SKIP = ("image", "embedding", "rerank", "audio", "speech", "tts", "transcription", "video")
 _UNSUPPORTED_ROUTE_SUFFIXES = (":batch",)  # Batch-only adapters cannot serve chat/completions.
+# 2.2.28: OpenRouter ScaleDown has special-purpose endpoints: summarize
+# explicitly rejects response_format, extract requires a custom entity schema.
+# Neither can act as our generic writer/selector/final-editor chat route.
+_SPECIALIZED_NON_CHAT_IDS = frozenset({
+    "scaledown/extract",
+    "scaledown/summarize",
+})
 
 
 def _chat_compatible_id(model_id: str) -> bool:
-    return bool(model_id) and not model_id.casefold().endswith(_UNSUPPORTED_ROUTE_SUFFIXES)
+    value = str(model_id or "").strip().casefold()
+    return bool(value) and value not in _SPECIALIZED_NON_CHAT_IDS and not value.endswith(_UNSUPPORTED_ROUTE_SUFFIXES)
 
 
 

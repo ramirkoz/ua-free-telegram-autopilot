@@ -383,9 +383,15 @@ class AIGateway:
                     purpose=str(purpose or "content"), detail=str(exc)[:700],
                 )
                 models = ()
+        eligible = tuple(model_id for model_id in models if _chat_compatible_id(model_id))
+        if len(eligible) != len(models):
+            event(
+                "ai", "specialized OpenRouter endpoints excluded from chat routing",
+                purpose=str(purpose), filtered=len(models) - len(eligible),
+            )
         return [
             legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter")
-            for index, model_id in enumerate(models, start=1)
+            for index, model_id in enumerate(eligible, start=1)
         ]
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
