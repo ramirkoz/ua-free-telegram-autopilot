@@ -38,6 +38,42 @@ _SEPARATE = re.compile(r"(?iu)\b(?:ще\s+один|інший|новий|пов�
 _CORRECTION = re.compile(r"(?iu)\b(?:уточнил\w*|виправил\w*|спростувал\w*|скоригувал\w*)")
 
 
+# 2.2.26: another HIGH-CONFIDENCE family only, not generic topic similarity.
+# Require a single dated/numbered municipal act, named issuing council and an
+# actual issuance/adoption announcement. A report about IMPLEMENTING the act
+# is a new event and must not be silenced merely for mentioning its number.
+_CIVIC_ACT = re.compile(
+    r"(?iu)\b(рішенн\w*|розпоряджен\w*)\s+від\s+"
+    r"(\d{1,2}\.\d{1,2}\.\d{4})\s*№\s*(\d[\d/-]{0,12})\b"
+)
+_CIVIC_ISSUER = re.compile(
+    r"\b([А-ЯІЇЄҐ][а-яіїєґ'-]{4,})\s+"
+    r"(?:міськ\w*|сільськ\w*|селищн\w*)\s+рад\w*\b"
+)
+_CIVIC_ADOPTION = re.compile(r"(?iu)\b(?:ухвал\w*|прийня\w*|затверд\w*|видал\w*|оприлюдн\w*)\b")
+_CIVIC_PROGRESS = re.compile(
+    r"(?iu)\b(?:розпочал\w*|розпочат\w*|стартувал\w*|почал\w*|"
+    r"виконал\w*|виплат\w*|отримал\w*|реалізаці\w*|завершил\w*)\b"
+)
+
+
+def _municipal_act_facts(text: str) -> dict[str, Any]:
+    docs = list(_CIVIC_ACT.finditer(text))
+    councils = list(_CIVIC_ISSUER.finditer(text))
+    if len(docs) != 1 or len(councils) != 1:
+        return {}
+    if not _CIVIC_ADOPTION.search(text) or _CIVIC_PROGRESS.search(text):
+        return {}
+    match, issuer = docs[0], councils[0]
+    return {
+        "family": "municipal_act",
+        "place": _root(issuer.group(1)),
+        "target": match.group(1).casefold(),
+        "document_date": match.group(2),
+        "document_number": match.group(3),
+    }
+
+
 def _v(row: Any, key: str) -> str:
     try:
         value = row[key]
@@ -83,6 +119,9 @@ def _date(row: Any) -> datetime | None:
 
 def _facts(row: Any) -> dict[str, Any]:
     text = _source_text(row)
+    civic = _municipal_act_facts(text)
+    if civic:
+        return civic
     fatal = _fatal_count(text)
     if fatal is None or not _ATTACK.search(text):
         return {}
@@ -106,6 +145,13 @@ def _relation(now_row: Any, prior_row: Any) -> str:
         return ""
     if (now["place"], now["target"]) != (prior["place"], prior["target"]):
         return ""
+    if now["family"] == "municipal_act":
+        if (now["document_date"], now["document_number"]) != (
+            prior["document_date"], prior["document_number"]
+        ):
+            return ""
+        a, b = _date(now_row), _date(prior_row)
+        return ("DUPLICATE" if a and b and abs(a - b) <= timedelta(hours=48) else "")
     if now["separate_attack"]:
         return ""
     if now["street"] and prior["street"] and now["street"] != prior["street"]:
@@ -210,7 +256,7 @@ def find_published_event(store: Any, current: Any, *, window_hours: int = 48) ->
             continue
         known = _v(candidate, "event_id")
         event_id = known if known.startswith("ev25:") else f"ev25:{channel_id}:{previous_id}"
-        return EventMatch(relation, previous_id, event_id, "verified source-grounded fatal incident history")
+        return EventMatch(relation, previous_id, event_id, "verified source-grounded event identity")
     return EventMatch()
 
 
