@@ -906,6 +906,10 @@ def validate_writer_output(
     source_or_final = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
     if source_or_final:
         raise ValueError(source_or_final)
+    from .source_fact_integrity import source_fact_issues
+    factual_discrepancies = source_fact_issues(article, value)
+    if factual_discrepancies:
+        raise ValueError("; ".join(factual_discrepancies))
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
@@ -1097,6 +1101,8 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     extra_claim = fabricated_event_reason(article, value)
     if extra_claim:
         issues.append(extra_claim)
+    from .source_fact_integrity import source_fact_issues
+    issues.extend(source_fact_issues(article, value))
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
@@ -1450,8 +1456,14 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if channel.mode == ChannelMode.MONITORING else ""
         )
         named_source_style = source_body_instruction(channel, article)
+        from .reader_first import writer_reader_rules
+        reader_rules = writer_reader_rules(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+        )
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
+{reader_rules}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -1498,11 +1510,15 @@ SOURCE:
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
-        needs_trusted_editor = (
-            quality.needs_second_candidate
-            or bool(language_quality_issues(draft))
-            or bool(human_style_issues(draft))
-            or needs_grammar_polish(draft)
+        from .reader_first import requires_final_reader_copyedit
+        needs_trusted_editor = requires_final_reader_copyedit(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            legacy_quality_risk=(
+                quality.needs_second_candidate
+                or bool(language_quality_issues(draft))
+                or bool(human_style_issues(draft))
+                or needs_grammar_polish(draft)
+            ),
         )
         if needs_trusted_editor:
             event(
@@ -1547,7 +1563,13 @@ SOURCE:
             if source_context else ""
         )
         source_attribution_instruction = source_body_instruction(channel, article)
+        from .reader_first import final_reader_rules
+        reader_rules = final_reader_rules(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+        )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
+{reader_rules}
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:

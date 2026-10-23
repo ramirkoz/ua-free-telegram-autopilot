@@ -688,7 +688,24 @@ class Publisher:
                       channel_id=channel_id, article_id=article_id,
                       duplicate_of=incident_duplicate)
                 return "DUPLICATE_PUBLISHED"
-        qa_issues = prepublish_quality_issues(channel, article, current_text)
+        # 2.2.26: never let a human approval (or force-publish) bypass
+        # source ownership, factual certainty, casualties or source floor.
+        # This is local per-publication state: no mutable global QA monkeypatch.
+        from .source_fact_integrity import non_overridable_quality_issues
+        hard_source_issues = non_overridable_quality_issues(channel, article, current_text)
+        if hard_source_issues:
+            detail = "; ".join(hard_source_issues[:6])
+            outcome = self.store.requeue_quality_rewrite(
+                article_id, error_code="PREPUBLISH_SOURCE_SAFETY",
+                detail=detail, max_attempts=3,
+            )
+            event("publish", "non-overridable source safety blocked READY article",
+                  level=40, channel_id=channel_id, article_id=article_id,
+                  human_approved=bool(getattr(self, "_rc102_human_approved", False)),
+                  outcome=outcome, detail=detail[:1200])
+            return outcome
+        qa_issues = (() if bool(getattr(self, "_rc102_human_approved", False))
+                     else prepublish_quality_issues(channel, article, current_text))
         if qa_issues:
             detail = "; ".join(qa_issues[:6])
             outcome = self.store.requeue_quality_rewrite(
