@@ -75,7 +75,7 @@ def substantive_sentences(value: str) -> tuple[str, ...]:
         # verb variants while preserving differences in numbers/counts.
         normalized = {canonical(w) for w in substantive}
         quantities = {w for w in substantive if w in count_words}
-        quantities.update(re.findall(r"\\b\\d+\\b", sentence))
+        quantities.update(re.findall(r"\b\d+\b", sentence))
         if any(quantities == old_quantities
                and len(normalized & old_words) / max(1, min(len(normalized),len(old_words))) >= .67
                for old_words, old_quantities in seen):
