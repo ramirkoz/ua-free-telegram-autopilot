@@ -374,6 +374,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     The monitoring policy may be customized with channel rules. Its invariant
     is source sufficiency: no rewriter can manufacture missing event context.
     """
+    from .editorial_hard_floor import fabricated_event_reason
+    # Existing monitoring safety reasons (munition routes, rumor, source denial)
+    # must retain their diagnostic priority. Semantic output issues are enforced
+    # separately at the writer and final publishing boundary.
     if _EDITORIAL_META_LEAK_RE.search(str(text or "")):
         return "EDITORIAL_META_LEAK"
     from .publication_safety import is_ai_rejection_text
@@ -898,6 +902,10 @@ def validate_writer_output(
     hard_issues = hard_editorial_blockers(value)
     if hard_issues:
         raise ValueError("Жорсткий QA: " + "; ".join(hard_issues[:4]))
+    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
+    source_or_final = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
+    if source_or_final:
+        raise ValueError(source_or_final)
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
@@ -1079,6 +1087,16 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     critical = hard_editorial_reject(channel, article, value)
     if critical:
         issues.append(critical)
+    # Source/output sentence floor at actual final send, including old READY.
+    # Keep historical safety diagnoses from hard_editorial_reject intact.
+    from .editorial_hard_floor import two_sentence_reason
+    sentence_floor = two_sentence_reason(article, value)
+    if sentence_floor:
+        issues.append(sentence_floor)
+    from .editorial_hard_floor import fabricated_event_reason
+    extra_claim = fabricated_event_reason(article, value)
+    if extra_claim:
+        issues.append(extra_claim)
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
@@ -1142,11 +1160,15 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
-        # Guard the public entrypoint: LIVE may wrap the inner monitoring selector.
+        # Preserve specific verified-source rejection signatures first.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)
             if source_problem:
                 return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
+        from .editorial_hard_floor import two_sentence_reason
+        source_short = two_sentence_reason(article)
+        if source_short:
+            return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
         # Run the source-integrity veto at the shared public entry point.
         # Runtime contracts replace _select_editorial dynamically, so checks
         # confined to that inner method would otherwise be bypassed in LIVE.

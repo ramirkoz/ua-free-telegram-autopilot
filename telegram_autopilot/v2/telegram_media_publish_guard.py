@@ -30,6 +30,19 @@ def enforce_source_media_parity(publisher, channel, article_id: int, article, bu
         reason=check.reason,
     )
 
+    # A bundle containing an extra neighbour's video/photo is not made valid
+    # merely by marking itself stitched. Exact primary-post media MUST appear;
+    # additional items require separately verified ownership (not available here).
+    if check.outcome in {"confirmed", "text_only", "video_recovered"} and check.media and bundle.count > len(check.media):
+        reason = "MEDIA_CROSS_POST_CONTAMINATION"
+        publisher.store.publication_backoff(
+            article_id, blocked_by=BlockedBy.MEDIA, error_code=reason,
+            detail=f"exact={len(check.media)} bundle={bundle.count}",
+            retry_seconds=1800, count_attempt=False,
+        )
+        event("media", "cross-post media mismatch blocked", level=30,
+              channel_id=channel.id, article_id=article_id, code=reason)
+        return reason
     stitched = len(bundle.source_message_ids) > 1
     encoded = bundle.encoded_items
     if check.media and (
