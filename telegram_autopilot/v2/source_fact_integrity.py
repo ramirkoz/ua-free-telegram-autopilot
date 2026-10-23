@@ -7,6 +7,7 @@ or a neighboring Telegram post as evidence for the original facts.
 from __future__ import annotations
 
 from typing import Any
+import re
 
 from .editorial_hard_floor import fabricated_event_reason, two_sentence_reason
 from .incident_guard import _FATAL_CONTEXT, _FATAL_NUMBER_WORDS
@@ -40,6 +41,20 @@ def fatality_numbers(value: str) -> frozenset[int]:
     return frozenset(result)
 
 
+# A percentage-of-respondents statistic does not, by itself, support a claim
+# about how many times more/less frequently every individual performs an action.
+# Do not let the writer create new rate multipliers absent from the source.
+_MULTIPLIER_RATE = re.compile(
+    r"(?iu)\\b(?:майже\\s+)?(?:у|в)(?:двічі|тричі)\\s+"
+    r"(?:рідше|частіше|швидше|повільніше)\\b"
+)
+_SOURCE_MULTIPLIER = re.compile(
+    r"(?iu)\\b(?:удвічі|вдвічі|утричі|втричі|"
+    r"twice|tripled|doubled|half\\s+as|two[ -]fold|three[ -]fold|"
+    r"в\\s+два\\s+рази|у\\s+два\\s+рази)\\b"
+)
+
+
 def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
     """Guard explicit fatality-count substitutions in any channel.
 
@@ -49,9 +64,17 @@ def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
     raw = _value(article, "raw_text").strip() or _value(article, "title").strip()
     source_counts = fatality_numbers(raw)
     outgoing_counts = fatality_numbers(final_text)
+    issues: list[str] = []
     if source_counts and outgoing_counts - source_counts:
-        return ("FACT_UNSUPPORTED_FATALITY_COUNT",)
-    return ()
+        issues.append("FACT_UNSUPPORTED_FATALITY_COUNT")
+    # Narrow guard for percentage-participation data: a source may report
+    # 28% vs 16% of people reading on an average day, which does NOT license
+    # an unsourced claim that each person now reads "twice less often".
+    if (re.search(r"\\d+(?:[.,]\\d+)?\\s*%", raw)
+            and _MULTIPLIER_RATE.search(str(final_text or ""))
+            and not _SOURCE_MULTIPLIER.search(raw)):
+        issues.append("FACT_UNSUPPORTED_RATE_MULTIPLIER")
+    return tuple(issues)
 
 
 def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) -> tuple[str, ...]:
