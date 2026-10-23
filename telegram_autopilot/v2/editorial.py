@@ -906,6 +906,10 @@ def validate_writer_output(
     source_or_final = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
     if source_or_final:
         raise ValueError(source_or_final)
+    from .source_fact_integrity import source_fact_issues
+    factual_discrepancies = source_fact_issues(article, value)
+    if factual_discrepancies:
+        raise ValueError("; ".join(factual_discrepancies))
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
@@ -1097,6 +1101,8 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     extra_claim = fabricated_event_reason(article, value)
     if extra_claim:
         issues.append(extra_claim)
+    from .source_fact_integrity import source_fact_issues
+    issues.extend(source_fact_issues(article, value))
     postfactum = _postfactum_security_policy(channel, article)
     if postfactum:
         issues.append(postfactum)
