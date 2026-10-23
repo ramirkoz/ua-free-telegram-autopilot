@@ -1510,15 +1510,15 @@ SOURCE:
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
-        needs_trusted_editor = (
-            # All reader-facing editorial output needs a genuine independent
-            # source-grounded copyedit; structural QA alone missed incoherent
-            # trend essays and disconnected brand/statistic lists in LIVE.
-            channel.mode == ChannelMode.EDITORIAL
-            or quality.needs_second_candidate
-            or bool(language_quality_issues(draft))
-            or bool(human_style_issues(draft))
-            or needs_grammar_polish(draft)
+        from .reader_first import requires_final_reader_copyedit
+        needs_trusted_editor = requires_final_reader_copyedit(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            legacy_quality_risk=(
+                quality.needs_second_candidate
+                or bool(language_quality_issues(draft))
+                or bool(human_style_issues(draft))
+                or needs_grammar_polish(draft)
+            ),
         )
         if needs_trusted_editor:
             event(
