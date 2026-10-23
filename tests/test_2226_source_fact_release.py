@@ -119,3 +119,21 @@ def test_municipal_requires_unambiguous_act_council_and_document_date():
     two_acts = ACT + " Ухвалено рішення від 23.10.2026 №105."
     assert _facts(_incoming(1, unknown)) == {}
     assert _facts(_incoming(2, two_acts)) == {}
+
+
+def test_percentage_participation_not_recast_as_new_reading_frequency_multiplier():
+    source = _row("In 2004, 28% of Americans read for pleasure on an average day. "
+                  "The proportion was 16% in 2023.")
+    misleading = ("Американці читають удвічі рідше, ніж у 2004-му. "
+                  "Частка людей, які читають задля задоволення, знизилася з 28% до 16%.")
+    precise = ("Частка американців, які читали для задоволення у типовий день, "
+               "зменшилася з 28% у 2004 році до 16% у 2023 році.")
+    assert "FACT_UNSUPPORTED_RATE_MULTIPLIER" in source_fact_issues(source, misleading)
+    assert not source_fact_issues(source, precise)
+
+
+def test_ratio_language_not_blocked_if_original_explicitly_supports_it():
+    source = _row("For an average day, 12% in 2004 and 6% in 2023. "
+                  "This means people read for pleasure twice less often.")
+    final = "Люди стали читати вдвічі рідше. За даними дослідження, частка впала з 12% до 6%."
+    assert "FACT_UNSUPPORTED_RATE_MULTIPLIER" not in source_fact_issues(source, final)
