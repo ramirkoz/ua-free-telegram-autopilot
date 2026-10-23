@@ -65,7 +65,7 @@ def test_real_avatar_without_direct_media_marker_never_published():
     assert entries[0].media == []
 
 
-def test_media_in_next_separate_post_still_stitches():
+def test_media_in_next_unlinked_post_does_not_stitch():
     html = """
     <div class="tgme_widget_message" data-post="osypenko_stg/500">
       <div class="tgme_widget_message_text">Відбулася зустріч громади</div>
@@ -77,4 +77,4 @@ def test_media_in_next_separate_post_still_stitches():
     </div>"""
     articles = stitch_adjacent_telegram_media("osypenko_stg", _parse(html))
     assert len(articles) == 1
-    assert len(articles[0].media_urls) == 1
+    assert len(articles[0].media_urls) == 0
