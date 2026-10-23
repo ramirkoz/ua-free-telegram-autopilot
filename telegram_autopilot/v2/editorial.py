@@ -688,6 +688,8 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     source = _source_text(article).casefold()
     text = str(value or "")
     issues: list[str] = list(_source_grounding_night_issues(article, text))
+    from .editorial_hard_guards import unsupported_event_claims
+    issues.extend(unsupported_event_claims(article, text))
     # Do not summarize different phases of a rapidly changing situation as
     # simultaneous facts. Ask editor to keep the current settled status only.
     low_output = text.casefold()
@@ -1446,11 +1448,16 @@ SOURCE:
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def prepared_text(raw: str) -> str:
-            return _rc111_prepare_candidate(
+            candidate = _rc111_prepare_candidate(
                 channel, article, raw,
                 hard_max_chars=validation_hard_max,
                 min_chars=effective_min,
             )
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
+            return candidate
 
         slop_profile = _anti_slop_profile(channel)
 
@@ -1458,6 +1465,10 @@ SOURCE:
             if _is_editorial_prompt_echo(raw):
                 raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
@@ -1505,6 +1516,10 @@ SOURCE:
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+        from .editorial_hard_guards import minimum_sentence_reason
+        final_problem = minimum_sentence_reason(article, final)
+        if final_problem:
+            raise ValueError(final_problem)
         return EditorialOutcome(Decision.PUBLISH, reason=selection.reason, angle=selection.angle, fit_score=selection.fit_score, editorial_value_score=selection.editorial_value_score, draft_text=draft, final_text=final, provider=result.provider, model=result.model)
 
     def _final_edit(
@@ -1541,6 +1556,10 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
             if _is_editorial_prompt_echo(raw):
                 raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
+            from .editorial_hard_guards import minimum_sentence_reason
+            reason = minimum_sentence_reason(article, candidate)
+            if reason:
+                raise ValueError(reason)
             if channel.mode == ChannelMode.MONITORING:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
@@ -1583,7 +1602,13 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
-        selection = self.select(channel, article)
+        # Hard source sentence floor at the real processing entry point, BEFORE
+        # selecting any AI model. Keep the pure select/QA helpers composable for
+        # legacy monitoring diagnostics; they cannot bypass process_article.
+        from .editorial_hard_guards import minimum_sentence_reason
+        source_problem = minimum_sentence_reason(article)
+        selection = (EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
+                     if source_problem else self.select(channel, article))
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass

@@ -52,7 +52,7 @@ def test_text_album_not_touched_by_alert_policy():
     ]
     result = stitch_adjacent_telegram_media("community", rows)
     assert len(result) == 1
-    assert len(result[0].media_urls) == 1
+    assert len(result[0].media_urls) == 0
 
 
 def test_ai_selector_reason_reject_overrides_structured_publish():

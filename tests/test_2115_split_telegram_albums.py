@@ -22,8 +22,8 @@ def test_text_then_separate_album():
         _entry(102, images=("two",), second=20),
     ])
     assert len(result) == 1
-    assert len(result[0].media_urls) == 2
-    assert json.loads(result[0].article_layout_json)["telegram"]["message_ids"] == ["100", "101", "102"]
+    assert len(result[0].media_urls) == 0
+    assert json.loads(result[0].article_layout_json)["telegram"]["message_ids"] == ["100"]
 
 
 def test_album_then_text_with_own_photo_keeps_whole_album():
@@ -33,8 +33,8 @@ def test_album_then_text_with_own_photo_keeps_whole_album():
         _entry(202, text="Новина громади", images=("three",), second=20),
     ])
     assert len(result) == 1
-    assert len(result[0].media_urls) == 3
-    assert json.loads(result[0].article_layout_json)["telegram"]["message_ids"] == ["200", "201", "202"]
+    assert len(result[0].media_urls) == 1
+    assert json.loads(result[0].article_layout_json)["telegram"]["message_ids"] == ["202"]
 
 
 def test_album_then_text_then_more_media():
@@ -44,7 +44,7 @@ def test_album_then_text_then_more_media():
         _entry(302, images=("three",), second=20),
     ])
     assert len(result) == 1
-    assert len(result[0].media_urls) == 3
+    assert len(result[0].media_urls) == 1
 
 
 def test_separated_messages_not_borrowed():
@@ -55,4 +55,4 @@ def test_separated_messages_not_borrowed():
     ])
     assert len(result) == 2
     assert not result[0].media_urls
-    assert len(result[1].media_urls) == 1
+    assert len(result[1].media_urls) == 0

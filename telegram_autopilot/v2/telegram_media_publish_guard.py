@@ -32,6 +32,22 @@ def enforce_source_media_parity(publisher, channel, article_id: int, article, bu
 
     stitched = len(bundle.source_message_ids) > 1
     encoded = bundle.encoded_items
+    # #76242: exact 4656 owns ONE photo. A video borrowed from 4655 does not
+    # become authorized merely because legacy ingest labelled it "stitched".
+    # Fail closed for older READY records imported from pre-2.2.24 builds.
+    if (check.outcome in {"confirmed", "text_only"}
+            and (bundle.count > len(check.media)
+                 or (stitched and bool(check.media) and bundle.count != len(check.media)))):
+        code = "MEDIA_CROSS_POST_CONTAMINATION"
+        publisher.store.publication_backoff(
+            article_id, blocked_by=BlockedBy.MEDIA,
+            error_code=code,
+            detail=f"exact post media={len(check.media)} bundled={bundle.count}; ids={list(bundle.source_message_ids)}",
+            retry_seconds=1800, count_attempt=False,
+        )
+        event("media", "cross-post media ownership rejected", level=30,
+              channel_id=channel.id, article_id=article_id, code=code)
+        return code
     if check.media and (
         not bundle.count or len(check.media) > bundle.count
         or (not stitched and len(check.media) == bundle.count and list(check.media) != encoded)

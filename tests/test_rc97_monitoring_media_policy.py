@@ -8,7 +8,7 @@ from telegram_autopilot.v2.runtime_hardening import HardenedReadyStore
 from telegram_autopilot.v2.telegram_ingest_policy import stitch_adjacent_telegram_media
 
 
-def test_adjacent_media_only_message_is_stitched_to_following_text() -> None:
+def test_adjacent_media_only_message_is_not_borrowed_without_ownership() -> None:
     media = base.TelegramEntry(
         post="vasgromada/100",
         text="",
@@ -26,10 +26,9 @@ def test_adjacent_media_only_message_is_stitched_to_following_text() -> None:
 
     assert len(items) == 1
     assert items[0].external_id == "vasgromada/101"
-    assert len(items[0].media_urls) == 1
+    assert len(items[0].media_urls) == 0
     layout = json.loads(items[0].article_layout_json)
-    assert layout["telegram"]["stitched"] is True
-    assert layout["telegram"]["message_ids"] == ["100", "101"]
+    assert layout["telegram"]["message_ids"] == ["101"]
 
 
 def test_non_adjacent_media_is_not_borrowed() -> None:

@@ -662,7 +662,14 @@ class Publisher:
         # Non-retryable hard stop. A model refusal, a one-word caption or
         # an active threat must never become a public post after an AI retry.
         from .editorial import hard_editorial_reject, prepublish_quality_issues
-        critical = hard_editorial_reject(channel, article, current_text)
+        from .editorial_hard_guards import minimum_sentence_reason, unsupported_event_claims
+        # Last hard stop after body/URL/media text normalization. Older READY
+        # rows and manual retries cannot bypass source/final hard floors.
+        critical = minimum_sentence_reason(article, current_text)
+        if not critical and channel.mode == ChannelMode.MONITORING:
+            critical = next(iter(unsupported_event_claims(article, current_text)), "")
+        if not critical:
+            critical = hard_editorial_reject(channel, article, current_text)
         if critical:
             self.store.reject_editorial_article(article_id, "2.1.0 editorial hard stop: " + critical)
             event(
