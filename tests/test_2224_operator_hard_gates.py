@@ -128,3 +128,24 @@ def test_stale_ready_4655_video_plus_4656_photo_fails_publish_parity(monkeypatch
     assert result=="MEDIA_CROSS_POST_CONTAMINATION"
     assert events[0][0]==76242
     assert events[0][1]["error_code"]=="MEDIA_CROSS_POST_CONTAMINATION"
+
+
+
+def test_real_process_article_short_source_never_calls_ai_selector():
+    from types import SimpleNamespace
+    source=row("У Запоріжжі повідомили про перекриття мосту.")
+    source["channel_id"]=3
+    source["canonical_source_url"]="https://t.me/zaborzp/155221"
+    writes=[]
+    store=SimpleNamespace(
+        get_article=lambda article_id: source,
+        get_channel=lambda channel_id: channel(),
+        update_article=lambda article_id,**fields:writes.append(fields),
+    )
+    engine=object.__new__(EditorialEngine)
+    engine.store=store
+    engine.select=lambda *args: pytest.fail("AI selector called despite source hard veto")
+    result=engine.process_article(76105)
+    assert result.decision==Decision.REJECT
+    assert result.reason=="EDITORIAL_MIN_TWO_SENTENCES_SOURCE"
+    assert any(x.get("reject_reason")=="EDITORIAL_MIN_TWO_SENTENCES_SOURCE" for x in writes)
