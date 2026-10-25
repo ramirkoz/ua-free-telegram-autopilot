@@ -449,7 +449,7 @@ def _explicit_same_channel_video_links(username: str, text: str) -> set[str]:
 def _explicit_same_channel_media_links(username: str, text: str) -> set[str]:
     """Source-linked photo/video messages are ownership evidence, not adjacency."""
     value = str(text or "")
-    target = re.compile(r"https?://t\\.me/([A-Za-z0-9_]+)/(\\d+)(?:[?#][^\\s]*)?", re.I)
+    target = re.compile(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#][^\s]*)?", re.I)
     media_words = re.compile(
         r"(?iu)(?:фото|світлин|знімк|галере|зображен|відео|photo|images?|gallery|videos?)"
     )
