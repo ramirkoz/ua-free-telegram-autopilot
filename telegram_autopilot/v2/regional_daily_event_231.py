@@ -69,7 +69,10 @@ def _get(row: Any, name: str) -> str:
 
 def _source(row: Any) -> str:
     # Ignore AI-created final_text and editorial labels.
-    return _URL.sub(" ", (_get(row, "title") + " " + _get(row, "raw_text"))[:12000]).casefold()
+    # Raw original body takes precedence. Joining a truncated title to the body
+    # can fabricate adjacent tokens (e.g. a date becomes a casualty count).
+    source = _get(row, "raw_text") or _get(row, "title")
+    return _URL.sub(" ", source[:12000]).casefold()
 
 
 def _source_time(row: Any) -> datetime | None:
