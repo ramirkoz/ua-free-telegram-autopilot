@@ -561,17 +561,25 @@ class DirectDriveTelemetry:
             raise DriveTelemetryError(f"Google Drive did not return file id for {name}")
         return file_id
 
-    def upload_path(self, path: Path, *, name: str | None = None) -> str:
-        source = Path(path)
-        folder_id = self._ensure_folder()
+    def upload_bytes(self, name: str, payload: bytes) -> str:
+        """Upload a stable supervisor snapshot, not a file changing mid-request.
+
+        Transport remains outbound-only; no remote command handling or new
+        credential, source, and sharing logic is introduced.
+        """
         try:
-            file_id = self._upload_bytes(name or source.name, source.read_bytes(), folder_id)
+            folder_id = self._ensure_folder()
+            file_id = self._upload_bytes(str(name), bytes(payload), folder_id)
             self._last_ok_at = self._now_iso()
             self._last_error = ""
             return file_id
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"[:1200]
             raise
+
+    def upload_path(self, path: Path, *, name: str | None = None) -> str:
+        source = Path(path)
+        return self.upload_bytes(name or source.name, source.read_bytes())
 
     def status(self) -> dict[str, object]:
         return {
