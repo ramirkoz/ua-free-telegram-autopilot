@@ -51,6 +51,7 @@ class BoundedTelemetryPump:
         self._last_error: dict[str, str] = {}
         self._last_mode: dict[str, str] = {}
         self._last_attempt: dict[str, str] = {}
+        self._last_served: dict[str, float] = {}
 
     def start(self) -> None:
         with self._lock:
@@ -88,14 +89,19 @@ class BoundedTelemetryPump:
     def _ready(self) -> tuple[str, int, bytes] | None:
         now = time.monotonic()
         with self._lock:
-            for name in TELEMETRY_NAMES:
-                task = self._pending.get(name)
-                if task is not None and self._next_due.get(name, 0.0) <= now:
-                    seq, data = task
-                    del self._pending[name]
-                    self._last_attempt[name] = _stamp()
-                    return name, seq, data
-        return None
+            ready = [
+                name for name in TELEMETRY_NAMES
+                if name in self._pending and self._next_due.get(name, 0.0) <= now
+            ]
+            if not ready:
+                return None
+            # Fairness: a constantly refreshed status file must not starve
+            # incident/recent_events when individual Drive uploads run slowly.
+            name = min(ready, key=lambda n: self._last_served.get(n, 0.0))
+            seq, data = self._pending.pop(name)
+            self._last_served[name] = now
+            self._last_attempt[name] = _stamp()
+            return name, seq, data
 
     def _loop(self) -> None:
         while not self._stop.is_set():
