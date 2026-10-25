@@ -56,7 +56,7 @@ def test_actual_three_sources_have_same_day_and_facts():
     first, second, third = (regional_daily_facts(row(i, s))
                             for i, s in enumerate((POLICE, NEWSROOM, AGGREGATE), 1))
     assert all(f["report_day"] == "2026-10-24" for f in (first, second, third))
-    assert first["injured"] == second["injured"] == third["injured"] == 4
+    assert first["injured"] == second["injured"] == third["injured"] == 4, (first, second, third)
     assert first["strikes"] is None
     assert second["strikes"] == third["strikes"] == 832
     assert first["ages"] == second["ages"] == [14, 43, 60, 61]
