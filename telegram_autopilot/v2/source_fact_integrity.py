@@ -97,6 +97,12 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
         if reason:
             issues.append(reason)
     if channel.mode == ChannelMode.MONITORING:
+        # Human approval / force-publish never overrides immutable source stance.
+        # A rhetorical source question is not a confirmed event or motive.
+        from .monitoring_editorial_stance_232 import monitoring_source_stance_reason
+        stance = monitoring_source_stance_reason(article, final_text)
+        if stance:
+            issues.append(stance)
         original = _value(article, "raw_text") or _value(article, "title")
         source_id = _value(article, "source_url") or _value(article, "id") or "unknown"
         issues.extend(v.code for v in verify_source_polarity(original, final_text, source_id=source_id))
