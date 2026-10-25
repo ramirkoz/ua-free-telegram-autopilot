@@ -9,6 +9,7 @@ from telegram_autopilot.v2.monitoring_editorial_stance_232 import (
     monitoring_editorial_question_reason,
     monitoring_source_stance_reason,
     monitoring_unattributed_sarcasm_reason,
+    monitoring_unattributed_editorial_money_reason,
 )
 from telegram_autopilot.v2.source_fact_integrity import non_overridable_quality_issues
 
@@ -137,3 +138,31 @@ def test_exact_plain_numerical_fact_does_not_trigger_stance_guard():
     assert monitoring_source_stance_reason(
         article(), "Мунварта склала 41 адміністративний протокол за тиждень."
     ) == ""
+
+
+def test_opinionated_source_budget_is_not_independently_verified():
+    clean_but_unverified = (
+        "Мунварта склала 41 протокол за тиждень. "
+        "Робота муніципальної варти коштує понад 16 млн грн на рік."
+    )
+    assert monitoring_unattributed_editorial_money_reason(
+        article(), clean_but_unverified
+    ) == "MONITORING_SOURCE_EDITORIAL_MONEY_AS_FACT"
+
+
+def test_source_budget_commentary_remains_attributed_as_claim():
+    attributed = (
+        "Мунварта склала 41 протокол. "
+        "Редакція пише про понад 16 млн грн на рік, "
+        "але ця цифра не підтверджена наведеним документом."
+    )
+    assert monitoring_unattributed_editorial_money_reason(article(), attributed) == ""
+
+
+def test_independent_nonsarcastic_source_budget_statement_is_not_blocked():
+    raw = (
+        "За затвердженим бюджетом на утримання варти передбачено 16 млн грн. "
+        + SOURCE
+    )
+    final = "На утримання муніципальної варти передбачено 16 млн грн на рік."
+    assert monitoring_unattributed_editorial_money_reason(article(raw), final) == ""
