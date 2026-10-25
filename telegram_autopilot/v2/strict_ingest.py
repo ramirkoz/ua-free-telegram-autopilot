@@ -4,6 +4,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -591,6 +592,31 @@ def _entry_has_video(entry: base.TelegramEntry) -> bool:
     return False
 
 
+# A bounded, process-local negative cache. Never cache network failures:
+# a missing video can become available after Telegram finishes uploading it.
+_EXACT_VIDEO_NEGATIVE_LOCK = Lock()
+_EXACT_VIDEO_NEGATIVE_UNTIL: dict[tuple[str, int], float] = {}
+_EXACT_VIDEO_NEGATIVE_TTL_S = 600.0
+_EXACT_VIDEO_NEGATIVE_LIMIT = 512
+
+
+def _exact_video_negative_cached(key: tuple[str, int]) -> bool:
+    with _EXACT_VIDEO_NEGATIVE_LOCK:
+        return _EXACT_VIDEO_NEGATIVE_UNTIL.get(key, 0.0) > time.monotonic()
+
+
+def _remember_exact_video_absence(key: tuple[str, int]) -> None:
+    with _EXACT_VIDEO_NEGATIVE_LOCK:
+        now = time.monotonic()
+        for old, expiry in list(_EXACT_VIDEO_NEGATIVE_UNTIL.items()):
+            if expiry <= now:
+                _EXACT_VIDEO_NEGATIVE_UNTIL.pop(old, None)
+        if len(_EXACT_VIDEO_NEGATIVE_UNTIL) >= _EXACT_VIDEO_NEGATIVE_LIMIT:
+            oldest = min(_EXACT_VIDEO_NEGATIVE_UNTIL, key=_EXACT_VIDEO_NEGATIVE_UNTIL.get)
+            _EXACT_VIDEO_NEGATIVE_UNTIL.pop(oldest, None)
+        _EXACT_VIDEO_NEGATIVE_UNTIL[key] = now + _EXACT_VIDEO_NEGATIVE_TTL_S
+
+
 def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.TelegramEntry:
     """Resolve the exact Telegram video outcome and emit one explicit telemetry event.
 
@@ -614,6 +640,19 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
         return entry
 
     if not (bool(getattr(entry, "video_attachment_seen", False)) or int(getattr(entry, "discarded_video_thumb", 0) or 0) > 0):
+        return entry
+
+    cache_key = (username.casefold(), int(post_id))
+    if _exact_video_negative_cached(cache_key):
+        entry.video_recovery = (
+            "poster_fallback" if str(getattr(entry, "video_poster_url", "") or "")
+            else "no_video"
+        )
+        event(
+            "ingest", "exact Telegram video probe cache hit",
+            source=username, post_id=post_id, mode=entry.video_recovery,
+            retry_after_seconds=_EXACT_VIDEO_NEGATIVE_TTL_S,
+        )
         return entry
 
     try:
@@ -643,6 +682,8 @@ def _hydrate_exact_video_post(username: str, entry: base.TelegramEntry) -> base.
                 discarded_video_thumb=int(getattr(entry, "discarded_video_thumb", 0) or 0),
             )
             return exact
+        if exact is not None:
+            _remember_exact_video_absence(cache_key)
     except Exception as exc:
         event(
             "ingest", "telegram exact video hydration failed", level=30, source=username,
