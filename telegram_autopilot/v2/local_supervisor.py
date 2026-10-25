@@ -17,6 +17,7 @@ from .fileio import atomic_copy
 from . import V2_VERSION
 from .telemetry_supervisor import TelemetryProductionSupervisorService
 from .drive_api_telemetry import DirectDriveTelemetry
+from .outbound_telemetry_233 import BoundedTelemetryPump
 from ..secrets_store import load_secrets
 from .commercial_profile_audit import audit_commercial_profiles
 from .operator_data_snapshot import export_operator_data_snapshot
@@ -80,6 +81,9 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         # filesystem mirror remains fallback-only for machines where OAuth is
         # intentionally unavailable. Core runtime work never depends on either.
         self.reload_drive_transport()
+        # Google Drive and OAuth requests are never run on V2-Supervisor thread.
+        # At most one newest pending payload per allowlisted JSON file.
+        self._telemetry_pump = BoundedTelemetryPump(self._deliver_telemetry_payload)
         self._operator_snapshot_next_at = time.monotonic() + 600.0
         self._operator_snapshot_running = False
         self._operator_snapshot_status: dict[str, object] = {"status":"scheduled","interval_minutes":60,"redacted":True}
@@ -184,31 +188,26 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         self._rc55_mirror_targets_checked_at = now
         return []
 
-    def _mirror_file(self, source, name: str) -> None:
-        """Send passive telemetry through Drive API, with local-sync fallback only."""
-        name = str(name or "")
-        if name not in _OUTBOUND_TELEMETRY_FILES:
-            return
-        source = Path(source)
-        if not self._rc55_valid_telemetry_source(source, name):
-            self._mirror_last_error = f"refused invalid telemetry payload for {name}"
-            event("supervisor", "refused invalid telemetry mirror payload", level=40, file=name, path=str(source))
-            return
+    def _deliver_telemetry_payload(self, name: str, payload: bytes) -> str:
+        """Background-only Drive transport; one canonical local fallback.
 
-        api_error = ""
+        Original source file is used by atomic_copy only if the Google Drive
+        Desktop fallback is needed. In that case we deliberately copy the
+        *newest* local snapshot instead of resurrecting an older packet.
+        """
         try:
-            self._drive_api.upload_path(source, name=name)
+            self._drive_api.upload_bytes(name, payload)
             from .storage import now_iso
             self._mirror_last_ok_at = now_iso()
             self._mirror_last_error = ""
-            return
+            return "google_drive_api"
         except Exception as exc:
-            api_error = f"Drive API: {type(exc).__name__}: {exc}"[:1000]
-            event("supervisor", "Drive API telemetry failed; trying local fallback", level=30, file=name, detail=api_error)
+            api_error = f"Drive API: {type(exc).__name__}: {exc}"[:500]
+            event(
+                "supervisor", "Drive API telemetry failed; trying local fallback",
+                level=30, file=name, detail=api_error,
+            )
 
-        # Migration fallback only. This path is deliberately secondary so a missing
-        # or stale Google Drive Desktop mount can never make cloud telemetry vanish
-        # when OAuth is available.
         targets = self._rc55_existing_live_targets(force=False)
         if not targets:
             try:
@@ -216,19 +215,59 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
             except Exception:
                 pass
             targets = self._rc55_existing_live_targets(force=True)
-        errors: list[str] = []
         for target_dir in targets[:1]:
             try:
-                target_dir.mkdir(parents=True, exist_ok=True)
+                source = self.root / name
+                if not self._rc55_valid_telemetry_source(source, name):
+                    raise ValueError("source changed or invalid during fallback")
                 atomic_copy(source, target_dir / name)
                 from .storage import now_iso
                 self._mirror_last_ok_at = now_iso()
                 self._mirror_last_error = ""
-                return
+                return "local_fallback"
             except Exception as exc:
-                errors.append(f"{target_dir}: {type(exc).__name__}: {exc}")
-        local_error = "; ".join(errors)[:800] if errors else "local Drive Desktop fallback not found"
-        self._mirror_last_error = f"{api_error}; fallback: {local_error}"[:1200]
+                local_error = f"{type(exc).__name__}: {exc}"[:500]
+                self._mirror_last_error = f"{api_error}; fallback: {local_error}"
+                raise RuntimeError(self._mirror_last_error) from exc
+        self._mirror_last_error = (
+            f"{api_error}; fallback: canonical local Drive folder unavailable"
+        )
+        raise RuntimeError(self._mirror_last_error)
+
+    def _mirror_file(self, source, name: str) -> None:
+        """Queue only an immutable, validated JSON payload; no network here.
+
+        Historical atomic_copy fallback runs via _deliver_telemetry_payload,
+        not on the supervisor heartbeat/publishing thread.
+        """
+        name = str(name or "")
+        if name not in _OUTBOUND_TELEMETRY_FILES:
+            return
+        source = Path(source)
+        if not self._rc55_valid_telemetry_source(source, name):
+            self._mirror_last_error = f"refused invalid telemetry payload for {name}"
+            event(
+                "supervisor", "refused invalid telemetry mirror payload",
+                level=40, file=name, path=str(source),
+            )
+            return
+        try:
+            # Serialize before enqueueing: subsequent supervisor ticks may
+            # atomically replace the file before the sender has time to act.
+            self._telemetry_pump.submit(name, source.read_bytes())
+        except Exception as exc:
+            self._mirror_last_error = (
+                f"telemetry queue rejected {name}: {type(exc).__name__}: {exc}"
+            )[:600]
+            event(
+                "supervisor", "telemetry queue failed",
+                level=40, file=name, detail=self._mirror_last_error,
+            )
+
+    def stop(self, timeout: float = 4.0) -> None:
+        # No long Google timeout during a deliberate Windows operator stop.
+        self._telemetry_pump.stop(timeout=0.2)
+        super().stop(timeout=timeout)
 
     def build_snapshot(self) -> dict[str, Any]:
         snapshot = super().build_snapshot()
@@ -251,6 +290,7 @@ class LocalOnlyProductionSupervisorService(TelemetryProductionSupervisorService)
         except Exception as exc:
             snapshot["commercial_profile_audit"] = {"healthy": False, "error": f"{type(exc).__name__}: {exc}"[:500]}
         transport = dict(snapshot.get("transport") or {})
+        transport["outbound_pump"] = self._telemetry_pump.status()
         drive_api = self._drive_api.status()
         snapshot["transport"] = {
             **transport,
