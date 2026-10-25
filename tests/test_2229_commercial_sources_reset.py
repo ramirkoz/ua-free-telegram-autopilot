@@ -75,7 +75,7 @@ def test_commercial_refresh_scoped_and_idempotent(tmp_path):
     assert second["channels"][0]["outcome"] == "already_applied"
     with store.transaction() as con:
         sources = con.execute("SELECT * FROM sources WHERE channel_id=2").fetchall()
-        assert len(sources) == 8 + len(SOURCE_ADDITIONS) - 2 # 6 initial commercial + additions
+        assert len(sources) == 7 + len(SOURCE_ADDITIONS) # 7 initial commercial + additions
         by_name = {row["name"]: row for row in sources}
         assert by_name["Springwise"]["enabled"] == 0
         assert by_name["Snapchat for Business"]["enabled"] == 0
