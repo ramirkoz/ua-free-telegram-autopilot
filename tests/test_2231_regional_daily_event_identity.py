@@ -217,3 +217,27 @@ def test_no_cross_channel_or_missing_receipt_authority(tmp_path):
     assert find_published_event(store, row(79198, NEWSROOM, channel=2)).relation == "NEW"
     store.insert(row(79195, AGGREGATE, channel=3, when="2026-10-25T11:30:53+02:00"), receipt="FAILED")
     assert find_published_event(store, row(79196, NEWSROOM, channel=3)).prior_article_id == 79194
+
+
+def test_engine_pre_ai_blocks_real_cross_source_but_not_next_day(tmp_path, monkeypatch):
+    # Reproduce both worker-stage candidate lookup and its generic fallback.
+    # The prior row is not COMMITTED, so only the pre-AI matcher may act here.
+    store = SqliteEventStore(tmp_path / "pre-ai.sqlite3")
+    store.insert(row(79194, POLICE), receipt=None)
+    store.insert(row(79198, NEWSROOM), receipt=None)
+    store.insert(row(79199, AGGREGATE.replace("24 жовтня", "23 жовтня")), receipt=None)
+    engine = EventFingerprintDedupeEngine(store)
+    monkeypatch.setattr(engine, "_candidate_rows", lambda channel, article, hours: [store.get_article(79194)])
+    same = engine._find_duplicate(79198, published_only=False)
+    assert same.relation == "DUPLICATE" and same.duplicate_of == 79194
+    next_day = engine._find_duplicate(79199, published_only=False)
+    assert next_day.relation == "SINGLE"
+
+
+def test_engine_prepublication_uses_only_committed_source_history(tmp_path):
+    store = SqliteEventStore(tmp_path / "prepublish.sqlite3")
+    store.insert(row(79194, POLICE), receipt="COMMITTED", archive=True)
+    store.insert(row(79198, NEWSROOM), receipt=None)
+    engine = EventFingerprintDedupeEngine(store)
+    result = engine._find_duplicate(79198, published_only=True)
+    assert result.relation == "DUPLICATE" and result.duplicate_of == 79194
