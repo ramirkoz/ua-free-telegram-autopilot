@@ -8,14 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ..network import NetworkError, fetch_url
-from ..paths import runtime_dir
-from ..secrets_store import load_secrets, save_secrets
+from ..secrets_store import load_secrets
 
-_CONTENT_HEADER = b"UA_FREE_PORTABLE_AESGCM_V1\n"
-_CONTENT_AAD = b"UA_FREE_Content_Tool_portable_config_v1"
 _DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
@@ -50,7 +46,7 @@ def _own_credentials() -> DriveCredentials | None:
         client_secret=str(getattr(cfg, "google_client_secret", "") or "").strip(),
         refresh_token=refresh_token,
         account_email=str(getattr(cfg, "google_account_email", "") or "").strip(),
-        source="autopilot-secrets",
+        source=str(getattr(cfg, "google_credential_origin", "") or "legacy-unverified"),
     )
 
 
@@ -68,183 +64,24 @@ def _environment_credentials() -> DriveCredentials | None:
     )
 
 
-def _portable_content_config(config_path: Path) -> DriveCredentials | None:
-    key_path = config_path.with_name("portable.key")
-    if not config_path.is_file() or not key_path.is_file():
-        return None
-    encrypted = config_path.read_bytes()
-    if not encrypted.startswith(_CONTENT_HEADER):
-        return None
-    key = key_path.read_bytes()
-    if len(key) != 32:
-        return None
-    payload = encrypted[len(_CONTENT_HEADER):]
-    if len(payload) < 13:
-        return None
-    nonce, ciphertext = payload[:12], payload[12:]
-    try:
-        raw = AESGCM(key).decrypt(nonce, ciphertext, _CONTENT_AAD)
-        data = json.loads(raw.decode("utf-8"))
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
-    client_id = str(data.get("google_client_id") or "").strip()
-    refresh_token = str(data.get("google_refresh_token") or "").strip()
-    if not client_id or not refresh_token:
-        return None
-    return DriveCredentials(
-        client_id=client_id,
-        client_secret=str(data.get("google_client_secret") or "").strip(),
-        refresh_token=refresh_token,
-        account_email=str(data.get("google_account_email") or "").strip(),
-        source=f"content-tool:{config_path.parent.parent}",
-    )
-
-
-def _content_config_candidates() -> list[Path]:
-    candidates: list[Path] = []
-    explicit_data = str(os.environ.get("UA_FREE_CONTENT_DATA") or "").strip()
-    if explicit_data:
-        candidates.append(Path(explicit_data).expanduser() / "config.portable")
-    explicit_root = str(os.environ.get("UA_FREE_CONTENT_TOOL_ROOT") or "").strip()
-    if explicit_root:
-        candidates.append(Path(explicit_root).expanduser() / "Data" / "config.portable")
-
-    root = runtime_dir()
-    bases = [
-        root.parent,
-        root.parent.parent,
-        Path.home() / "Desktop",
-        Path.home() / "Downloads",
-        Path.home() / "OneDrive" / "Desktop",
-        Path.home() / "OneDrive" / "Робочий стіл",
-    ]
-    seen: set[str] = set()
-    out: list[Path] = []
-    # Search at most two directory levels. This covers Desktop/Downloads folders
-    # such as "актуальні програми/UA_FREE_Content_Tool..." without walking an
-    # entire drive or the user's profile tree.
-    for base in bases:
-        try:
-            resolved = str(base.expanduser().absolute())
-        except Exception:
-            resolved = str(base)
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        try:
-            if not base.is_dir():
-                continue
-            first_level = []
-            for item in list(base.iterdir())[:240]:
-                try:
-                    if not item.is_dir():
-                        continue
-                except OSError:
-                    continue
-                first_level.append(item)
-                name = item.name.casefold()
-                if name.startswith("ua_free_content_tool"):
-                    out.append(item / "Data" / "config.portable")
-            for parent in first_level[:120]:
-                try:
-                    for item in list(parent.iterdir())[:160]:
-                        try:
-                            if not item.is_dir():
-                                continue
-                        except OSError:
-                            continue
-                        if item.name.casefold().startswith("ua_free_content_tool"):
-                            out.append(item / "Data" / "config.portable")
-                except OSError:
-                    continue
-        except OSError:
-            continue
-
-    out.extend(candidates)
-    unique: dict[str, Path] = {}
-    for path in out:
-        unique[str(path)] = path
-    values = list(unique.values())
-    values.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0, reverse=True)
-    return values
-
-
 def _credential_candidates() -> list[DriveCredentials]:
-    """Return all usable credential sources without assuming the first token is valid.
-
-    RC103 previously preferred Autopilot's stored refresh token forever. If Google
-    revoked that token, the valid companion Content Tool credentials were never
-    tried. Keep the list small, deterministic and de-duplicated.
-    """
+    """Only credentials expressly configured for Autopilot; never scan other apps."""
     out: list[DriveCredentials] = []
     seen: set[tuple[str, str]] = set()
-
-    for getter in (_environment_credentials, _own_credentials):
-        value = getter()
-        if value is None or not value.ready:
-            continue
-        key = (value.client_id, value.refresh_token)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(value)
-
-    for config_path in _content_config_candidates():
-        value = _portable_content_config(config_path)
-        if value is None or not value.ready:
-            continue
-        key = (value.client_id, value.refresh_token)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(value)
-    return out
-
-
-def _persist_drive_credentials(value: DriveCredentials) -> None:
-    """Persist a verified working companion credential set for the next restart."""
-    try:
-        cfg = load_secrets()
-        cfg.google_client_id = value.client_id
-        cfg.google_client_secret = value.client_secret
-        cfg.google_refresh_token = value.refresh_token
-        cfg.google_account_email = value.account_email
-        save_secrets(cfg)
-    except Exception:
-        pass
-
-
-def discover_drive_credentials(*, persist_companion: bool = True) -> DriveCredentials | None:
     for getter in (_own_credentials, _environment_credentials):
         value = getter()
         if value is not None and value.ready:
-            return value
+            key = (value.client_id, value.refresh_token)
+            if key not in seen:
+                out.append(value)
+                seen.add(key)
+    return out
 
-    for config_path in _content_config_candidates():
-        value = _portable_content_config(config_path)
-        if value is None or not value.ready:
-            continue
-        if persist_companion:
-            try:
-                cfg = load_secrets()
-                cfg.google_client_id = value.client_id
-                cfg.google_client_secret = value.client_secret
-                cfg.google_refresh_token = value.refresh_token
-                cfg.google_account_email = value.account_email
-                save_secrets(cfg)
-                return DriveCredentials(
-                    client_id=value.client_id,
-                    client_secret=value.client_secret,
-                    refresh_token=value.refresh_token,
-                    account_email=value.account_email,
-                    source=value.source + ":persisted",
-                )
-            except Exception:
-                pass
-        return value
-    return None
+
+def discover_drive_credentials(*, persist_companion: bool = False) -> DriveCredentials | None:
+    """Compatibility signature; the old Content Tool import is permanently disabled."""
+    candidates = _credential_candidates()
+    return candidates[0] if candidates else None
 
 
 def _post_form(url: str, fields: dict[str, str], *, timeout: float = 30.0) -> dict:
@@ -278,9 +115,8 @@ def _post_form(url: str, fields: dict[str, str], *, timeout: float = 30.0) -> di
 class DirectDriveTelemetry:
     """Outbound-only Google Drive transport for passive supervisor telemetry.
 
-    It never reads commands and never changes sharing. OAuth credentials are taken
-    from Autopilot secrets, environment variables, or the sibling portable Content
-    Tool configuration already authorized by the same Windows user.
+    It never reads commands and never changes sharing. OAuth credentials are exclusively from Autopilot secrets or explicit
+    Autopilot environment variables. Other applications are never scanned.
     """
 
     def __init__(self, folder_name: str, *, folder_id: str = "") -> None:
@@ -311,9 +147,9 @@ class DirectDriveTelemetry:
         if not force and now - self._last_credential_probe < 15.0:
             raise DriveTelemetryError(self._last_error or "Google Drive credentials not found")
         self._last_credential_probe = now
-        value = discover_drive_credentials(persist_companion=True)
+        value = discover_drive_credentials()
         if value is None:
-            self._last_error = "Google Drive OAuth credentials not found; connect Drive in Content Tool or set UA_FREE_GOOGLE_*"
+            self._last_error = "Autopilot Google Drive not configured. Connect in Autopilot Drive settings."
             raise DriveTelemetryError(self._last_error)
         self._credentials = value
         self._credential_source = value.source
@@ -337,8 +173,7 @@ class DirectDriveTelemetry:
 
         if not candidates:
             self._last_error = (
-                "Google Drive OAuth credentials not found; connect Drive in Content Tool "
-                "or set UA_FREE_GOOGLE_*"
+                "Autopilot Google Drive credentials absent. Connect inside Autopilot."
             )
             raise DriveTelemetryError(self._last_error)
 
@@ -364,9 +199,6 @@ class DirectDriveTelemetry:
             self._credential_source = creds.source
             self._access_token = token
             self._last_error = ""
-            if str(creds.source).startswith("content-tool:"):
-                _persist_drive_credentials(creds)
-                self._credential_source = creds.source + ":verified-persisted"
             return token
 
         self._credentials = None
