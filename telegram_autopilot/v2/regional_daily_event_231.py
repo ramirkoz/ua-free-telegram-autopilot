@@ -47,7 +47,7 @@ _NUMBER = r"(?:\d{1,2}|" + "|".join(re.escape(k) for k in _COUNT_WORDS) + r")"
 _CASUALTIES = re.compile(
     r"(?iu)\b(?:" + _NUMBER + r")\b(?:\s+\w+){0,4}\s+"
     r"(?:поран\w*|постраждал\w*|дістал\w*\s+поранен\w*)\b|"
-    r"\b(?:поранен\w*|постраждал\w*)\s+(?:" + _NUMBER + r")\b"
+    r"\b(?:поранен\w*|постраждал\w*)\s+(?:" + _NUMBER + r")\b(?![-–‑]річн)"
 )
 _NUMBER_FIRST = re.compile(r"(?iu)^\s*(" + _NUMBER + r")\b")
 _NUMBER_LAST = re.compile(r"(?iu)\b(" + _NUMBER + r")\s*$")
