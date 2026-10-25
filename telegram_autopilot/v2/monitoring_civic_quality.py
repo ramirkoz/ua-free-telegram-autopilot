@@ -195,6 +195,10 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
         return "MONITORING_PROMO_JOIN_BAIT: тимчасове запрошення до чату без місцевої події або послуги"
     if _unanchored_speculative_meme(original):
         return "MONITORING_NONLOCAL_MEME: вигаданий інтернет-сюжет без факту чи події громади"
+    from .monitoring_source_voice_230 import original_global_commentary_reason
+    global_commentary = original_global_commentary_reason(article)
+    if global_commentary:
+        return global_commentary
     if (_GLOBAL_LEADER_CHAT.search(original) and _KREMLIN_INTERLOCUTOR.search(original)
         and not _LOCAL_ANCHOR.search(original)):
         return "MONITORING_OFF_TOPIC_GLOBAL_CLIP: дипломатичний кліп без джерельного факту про громади регіону"
