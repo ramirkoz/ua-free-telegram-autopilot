@@ -24,7 +24,7 @@ def _verified_split_media(article: dict, bundle, source_url: str, channel) -> bo
     from .domain import ChannelMode
     if getattr(channel, "mode", None) != ChannelMode.MONITORING:
         return False
-    match = re.fullmatch(r"https?://t\\.me/([A-Za-z0-9_]+)/(\\d+)(?:[?#].*)?", str(source_url or ""))
+    match = re.fullmatch(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#].*)?", str(source_url or ""))
     if not match:
         return False
     try:
