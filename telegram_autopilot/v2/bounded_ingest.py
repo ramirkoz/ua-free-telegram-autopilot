@@ -57,9 +57,21 @@ class BoundedStrictIngestService(StrictIngestService):
 
         self._repair_legacy_budget_cooldowns(channel_id)
 
+        # A source-owned override can request direct HTML even when this
+        # channel normally prefers public feeds. Used for broken/stale feeds;
+        # no hardcoded commercial channel or publisher names.
+        page_first_source_ids: set[int] = set()
         sources: list[Source] = []
         for row in self.store.sources_for_channel(channel_id, enabled_only=True):
             beat()
+            try:
+                source_settings = json.loads(str(row["legacy_config_json"] or "{}"))
+            except (ValueError, TypeError):
+                source_settings = {}
+            if isinstance(source_settings, dict):
+                override = source_settings.get("commercial_sources_229")
+                if isinstance(override, dict) and override.get("force_page_first") is True:
+                    page_first_source_ids.add(int(row["id"]))
             source = Source(
                 id=int(row["id"]), channel_id=int(row["channel_id"]), kind=str(row["kind"]),
                 name=str(row["name"]), url=str(row["url"]), enabled=bool(row["enabled"]),
@@ -87,7 +99,7 @@ class BoundedStrictIngestService(StrictIngestService):
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:
             started = time.monotonic()
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
-                items = collect_strict(source, page_prefer_feed=bool(getattr(cfg,"page_prefer_feed",False)), page_candidate_scan_limit=int(getattr(cfg,"page_candidate_scan_limit",24)), page_fetch_limit=int(getattr(cfg,"page_fetch_limit",8)))
+                items = collect_strict(source, page_prefer_feed=bool(getattr(cfg,"page_prefer_feed",False)) and source.id not in page_first_source_ids, page_candidate_scan_limit=int(getattr(cfg,"page_candidate_scan_limit",24)), page_fetch_limit=int(getattr(cfg,"page_fetch_limit",8)))
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:

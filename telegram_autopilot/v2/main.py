@@ -182,6 +182,17 @@ def main() -> int:
                 return 0
 
             store = HardenedV2Store(v2_database_path())
+            # 2.2.29: apply the one-time, channel-scoped commercial source
+            # refresh AFTER first-run Data import, BEFORE any collector starts.
+            # Retire known low-yield feeds without deleting their article history;
+            # no custom sources, other channels or operator cadence is touched.
+            try:
+                from .commercial_sources_229 import apply_commercial_sources_229
+                source_reset = apply_commercial_sources_229(store)
+                event("ingest", "2.2.29 source portfolio handoff", **source_reset)
+            except Exception as exc:
+                event("ingest", "2.2.29 source portfolio update failed; existing Data retained",
+                      level=40, detail=str(exc)[:1200])
             # 2.0.10: the RC103 fast-start hook skips normal maintenance.
             # Retire the old queue synchronously BEFORE workers/UI can publish.
             # Failing here must stop launch rather than leak pre-cutover posts.
