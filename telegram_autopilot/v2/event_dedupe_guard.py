@@ -415,6 +415,21 @@ def event_fingerprint_same_event(
     combines generic scientific names, concepts, rare terms, proper names, actions
     and normalized facts.
     """
+    # 2.2.31: daily regional summaries use original-report day, totals and
+    # independently reported victims, not English title overlap or AI captions.
+    from .regional_daily_event_231 import regional_daily_relation
+    daily_relation = regional_daily_relation(current, candidate)
+    if daily_relation == "DUPLICATE":
+        return True, "2.2.31 source-owned regional daily digest identity"
+    if daily_relation == "UPDATE":
+        return False, "2.2.31 confirmed regional daily update"
+    # Two independently confirmed daily digests with different report dates,
+    # victim counts or strike totals must not be collapsed by the generic
+    # topic/semantic fallback. The absence of equivalence is meaningful here.
+    from .regional_daily_event_231 import regional_daily_facts
+    if regional_daily_facts(current) and regional_daily_facts(candidate):
+        return False, "2.2.31 distinct or unverified regional daily reports"
+
     # 2.2.10: civic site + action + stage can identify one local event across
     # Ukrainian-language sources before generic English-centric title heuristics.
     from .municipal_event_identity import municipal_same_event
@@ -893,6 +908,22 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                     continue
             except Exception:
                 pass
+            # Material new confirmed aggregate facts are updates, not same
+            # event replays; skip older-family fuzzy matcher for this pair.
+            from .regional_daily_event_231 import regional_daily_relation
+            daily_relation = regional_daily_relation(current, candidate)
+            if daily_relation == "UPDATE":
+                continue
+            if daily_relation == "DUPLICATE":
+                return DedupeResult(
+                    "DUPLICATE", int(candidate["id"]),
+                    "2.2.31 original-source daily regional event identity",
+                )
+            # Fail open for distinct dated regional reports: generic similarity
+            # must not overrule concrete source-owned day/count differences.
+            from .regional_daily_event_231 import regional_daily_facts
+            if regional_daily_facts(current) and regional_daily_facts(candidate):
+                continue
             same, match_reason = event_fingerprint_same_event(
                 current, candidate,
                 scientific_names=scientific_names,

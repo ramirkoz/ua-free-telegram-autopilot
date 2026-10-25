@@ -1,4 +1,4 @@
-"""2.2.25 durable, delivery-grounded event memory.
+"""2.2.25+ durable, delivery-grounded event memory.
 
 An event is never inferred from a topic, photograph or model-written caption.
 Only independently verified source-side incident anchors can authorize a merge.
@@ -127,6 +127,12 @@ def _facts(row: Any) -> dict[str, Any]:
     civic = _municipal_act_facts(text)
     if civic:
         return civic
+    # 2.2.31: a daily regional digest may have no named attack site; its
+    # original-source report date, strike totals and victim ages are anchors.
+    from .regional_daily_event_231 import regional_daily_facts
+    daily = regional_daily_facts(row)
+    if daily:
+        return daily
     fatal = _fatal_count(text)
     if fatal is None or not _ATTACK.search(text):
         return {}
@@ -150,6 +156,9 @@ def _relation(now_row: Any, prior_row: Any) -> str:
         return ""
     if (now["place"], now["target"]) != (prior["place"], prior["target"]):
         return ""
+    if now["family"] == "regional_daily_attacks":
+        from .regional_daily_event_231 import regional_daily_relation
+        return regional_daily_relation(now_row, prior_row)
     if now["family"] == "municipal_act":
         if (now["document_date"], now["document_number"]) != (
             prior["document_date"], prior["document_number"]
