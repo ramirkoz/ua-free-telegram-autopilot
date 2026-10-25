@@ -182,7 +182,8 @@ _EDITORIAL_META_LEAK_RE = re.compile(
     r"не\s+публікувати\b|не\s+підходить\s+для\s+публікації|"
     r"немає\s+нового\s+повідомлення\s+для\s+публікації|"
     r"за\s+наданим\s+контекстом|ось\s+(?:готовий|переписаний)\s+(?:текст|пост))"
-    r"|\b(?:as\s+an\s+ai|i\s+cannot\s+comply)\b)"
+    r"|\b(?:as\s+an\s+ai|i\s+cannot\s+comply)\b"
+    r"|(?m:^[ \t*_#>]*(?:текст[ \t]+(?:поста|публікації)|готовий[ \t]+(?:текст|пост))[ \t*]*[:：]))"
 )
 _BARE_ALERT_RE = re.compile(
     r"(?iu)(?:^|\s)(?:гучно[!. ]*|знову[!. ]*|ще[!. ]*|каби[!. ]*|"
@@ -401,6 +402,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    from .monitoring_source_voice_230 import source_voice_output_reason
+    voice_issue = source_voice_output_reason(article, text)
+    if voice_issue:
+        return voice_issue
     source = _source_text(article).strip()
     official_gate = _monitoring_official_context_reject(article, channel)
     if official_gate:
@@ -1465,6 +1470,8 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if channel.mode == ChannelMode.MONITORING else ""
         )
         named_source_style = source_body_instruction(channel, article)
+        from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
+        source_voice_instruction = SOURCE_VOICE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
         from .reader_first import writer_reader_rules
         reader_rules = writer_reader_rules(
             monitoring=channel.mode == ChannelMode.MONITORING,
@@ -1473,6 +1480,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{source_voice_instruction}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -1579,6 +1587,8 @@ SOURCE:
         source_attribution_instruction = source_body_instruction(channel, article)
         from .source_fact_card import build_source_fact_card
         source_fact_card = build_source_fact_card(article, char_budget=1700)
+        from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
+        source_voice_instruction = SOURCE_VOICE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
         from .reader_first import final_reader_rules
         reader_rules = final_reader_rules(
             monitoring=channel.mode == ChannelMode.MONITORING,
@@ -1586,6 +1596,7 @@ SOURCE:
         )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
+{source_voice_instruction}
 {source_fact_card.text}
 {repair_focus}
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
