@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import statistics
+from datetime import datetime
 import threading
 import webbrowser
 import tkinter as tk
@@ -1537,11 +1538,17 @@ class MainWindow(tk.Tk):
             origin = str(getattr(load_secrets(), "google_credential_origin", "") or "legacy-unverified")
         except Exception:
             origin = "unavailable"
+        try:
+            last_cloud_age_s = (datetime.now().astimezone() - datetime.fromisoformat(api_ok)).total_seconds() if api_ok else float("inf")
+        except (TypeError, ValueError, OverflowError):
+            last_cloud_age_s = float("inf")
         if hasattr(self, "drive_quick_status"):
             if api_error:
                 self.drive_quick_status.set("Drive: ПОМИЛКА · " + api_error[:105])
             elif origin != "autopilot-oauth":
                 self.drive_quick_status.set("Drive: старий/невідомий OAuth · ПЕРЕПІДКЛЮЧИТИ")
+            elif api_ok and last_cloud_age_s > 300:
+                self.drive_quick_status.set(f"Drive: немає свіжого запису >5 хв · {api_ok}")
             elif api_ok:
                 self.drive_quick_status.set("Drive: API OK · " + api_ok)
             else:
@@ -1549,7 +1556,7 @@ class MainWindow(tk.Tk):
         if hasattr(self, "sup_drive_status"):
             folder_id = str((transport.get("drive_api") or {}).get("configured_folder_id") or "")
             account = self.sup_google_account.get().strip() if hasattr(self, "sup_google_account") else ""
-            if api_ok:
+            if api_ok and not api_error and last_cloud_age_s <= 300:
                 self.sup_drive_status.set(
                     f"✅ Drive API OK · {api_ok} · {account or api_source or 'акаунт'} · folder={folder_id}"
                 )
