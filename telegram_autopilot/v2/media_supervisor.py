@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .production_supervisor import ProductionSupervisorService
+from .monitoring_media_audit_235 import summarize_monitoring_media_provenance
 from .supervisor import Incident, SupervisorConfig
 
 
@@ -29,7 +30,7 @@ class MediaAwareProductionSupervisorService(ProductionSupervisorService):
                 )
                 raw = content = filtered = 0
                 rows = con.execute(
-                    "SELECT article_layout_json FROM articles WHERE channel_id=? AND discovered_at>=? ORDER BY id DESC LIMIT 300",
+                    "SELECT id,source_url,article_layout_json FROM articles WHERE channel_id=? AND discovered_at>=? ORDER BY id DESC LIMIT 300",
                     (channel_id, cut60),
                 ).fetchall()
                 for row in rows:
@@ -47,6 +48,7 @@ class MediaAwareProductionSupervisorService(ProductionSupervisorService):
                 stats["telegram_filtered_articles_60m"] = filtered
                 stats["telegram_raw_candidates_60m"] = raw
                 stats["telegram_content_media_60m"] = content
+                stats["telegram_media_provenance_60m"] = summarize_monitoring_media_provenance(rows)
         return out
 
     @staticmethod
