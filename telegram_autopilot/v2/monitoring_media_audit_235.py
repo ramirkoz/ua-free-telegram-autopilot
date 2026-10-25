@@ -56,11 +56,15 @@ def summarize_monitoring_media_provenance(
         if len(examples) >= max(0, sample_limit):
             continue
         item = distinct[0]
+        try:
+            media_count = max(0, int(item.get("media_count") or 0))
+        except (ValueError, TypeError):
+            media_count = 0
         examples.append({
             "article_id": article_id,
             "source_url": source_url,
             "nearby_post": str(item.get("post") or "")[:120],
-            "media_count": max(0, int(item.get("media_count") or 0)),
+            "media_count": media_count,
             "video_seen": bool(item.get("video_seen")),
             "seconds_apart": item.get("seconds_apart"),
             "reason": "UNVERIFIED_NEARBY_MEDIA_NOT_ATTACHED",
