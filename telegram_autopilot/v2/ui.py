@@ -1562,6 +1562,14 @@ class MainWindow(tk.Tk):
                 )
             elif api_error:
                 self.sup_drive_status.set(f"❌ Drive API · {api_error[:260]} · folder={folder_id}")
+        provenance = [
+            stats.get("telegram_media_provenance_60m") or {}
+            for cid, stats in (snap.get("channel_stats") or {}).items()
+            if (snap.get("channel_settings") or {}).get(str(cid), {}).get("mode") == "monitoring"
+        ]
+        unresolved = sum(int(p.get("unverified_articles_60m") or 0) for p in provenance)
+        verified = sum(int(p.get("verified_split_articles_60m") or 0) for p in provenance)
+        media_context = f"Моніторинг медіа: підтверджено {verified}, поруч без зв’язку {unresolved}"
         incident_text = "; ".join(f"{i.get('severity')} {i.get('code')}: {i.get('title')}" for i in incidents) or "немає"
         local_report = dict(snap.get("local_telegram_report") or {})
         report_status = str(local_report.get("status") or "не перевірено")
@@ -1571,7 +1579,7 @@ class MainWindow(tk.Tk):
             f"Supervisor thread: {'працює' if summary.get('thread_alive') else 'не працює'} · "
             f"Drive telemetry: {telemetry} · Telegram report: {telegram_text} · "
             f"AI {ai.get('healthy', 0)}/{ai.get('total', 0)} · active jobs {q.get('active', 0)} · "
-            f"last publish {q.get('last_publish') or 'немає'} · incidents: {incident_text} · "
+            f"last publish {q.get('last_publish') or 'немає'} · {media_context} · incidents: {incident_text} · "
             f"mirror: {cfg.get('mirror_dir') or 'не задано'}"
         )
 
