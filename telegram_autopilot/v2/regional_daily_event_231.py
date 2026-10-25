@@ -152,7 +152,7 @@ def regional_daily_facts(row: Any) -> dict[str, Any]:
 def regional_daily_relation_facts(now: dict[str, Any], prior: dict[str, Any]) -> str:
     if not now or not prior:
         return ""
-    if now.get("family") != "regional_daily_attacks" or prior.get("family") != "regional_daily_attacks"):
+    if now.get("family") != "regional_daily_attacks" or prior.get("family") != "regional_daily_attacks":
         return ""
     if (now["place"], now["report_day"]) != (prior["place"], prior["report_day"]):
         return ""
