@@ -406,6 +406,11 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     voice_issue = source_voice_output_reason(article, text)
     if voice_issue:
         return voice_issue
+    if text:
+        from .monitoring_editorial_stance_232 import monitoring_source_stance_reason
+        stance_issue = monitoring_source_stance_reason(article, text)
+        if stance_issue:
+            return stance_issue
     source = _source_text(article).strip()
     official_gate = _monitoring_official_context_reject(article, channel)
     if official_gate:
@@ -1472,6 +1477,8 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         named_source_style = source_body_instruction(channel, article)
         from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
         source_voice_instruction = SOURCE_VOICE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
+        from .monitoring_editorial_stance_232 import MONITORING_STANCE_INSTRUCTION
+        source_stance_instruction = MONITORING_STANCE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
         from .reader_first import writer_reader_rules
         reader_rules = writer_reader_rules(
             monitoring=channel.mode == ChannelMode.MONITORING,
@@ -1481,6 +1488,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
 {source_voice_instruction}
+{source_stance_instruction}
 CHANNEL PURPOSE: {p.purpose}
 WRITING RULES: {p.writing_rules}
 STYLE RULES: {p.style_rules}
@@ -1517,6 +1525,10 @@ SOURCE:
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
                     raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
+                from .monitoring_editorial_stance_232 import monitoring_source_stance_reason
+                stance = monitoring_source_stance_reason(article, candidate)
+                if stance:
+                    raise ValueError("Monitoring source stance QA: " + stance)
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
@@ -1589,6 +1601,8 @@ SOURCE:
         source_fact_card = build_source_fact_card(article, char_budget=1700)
         from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
         source_voice_instruction = SOURCE_VOICE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
+        from .monitoring_editorial_stance_232 import MONITORING_STANCE_INSTRUCTION
+        source_stance_instruction = MONITORING_STANCE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
         from .reader_first import final_reader_rules
         reader_rules = final_reader_rules(
             monitoring=channel.mode == ChannelMode.MONITORING,
@@ -1597,6 +1611,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {source_voice_instruction}
+{source_stance_instruction}
 {source_fact_card.text}
 {repair_focus}
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
@@ -1621,6 +1636,10 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                 grounding = _monitoring_grounding_blockers(article, candidate)
                 if grounding:
                     raise ValueError("Monitoring grounding QA: " + "; ".join(grounding))
+                from .monitoring_editorial_stance_232 import monitoring_source_stance_reason
+                stance = monitoring_source_stance_reason(article, candidate)
+                if stance:
+                    raise ValueError("Monitoring source stance QA: " + stance)
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
