@@ -567,6 +567,9 @@ class MainWindow(tk.Tk):
         top.pack(fill="x", padx=10, pady=8)
         self.status = tk.StringVar(value="Автопілот зупинено")
         ttk.Label(top, textvariable=self.status).pack(side="left")
+        self.drive_quick_status = tk.StringVar(value="Drive: перевірте власне підключення")
+        ttk.Label(top, textvariable=self.drive_quick_status, width=56).pack(side="left", padx=(20, 6))
+        ttk.Button(top, text="Google Drive: підключити / перевірити", command=self.open_drive_settings).pack(side="left", padx=4)
         self.start_button = ttk.Button(top, text="Старт", command=self.start_runtime)
         self.start_button.pack(side="right")
         ttk.Button(top, text="Стоп", command=self.stop_runtime).pack(side="right", padx=5)
@@ -592,6 +595,15 @@ class MainWindow(tk.Tk):
         self.supervisor.start()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(800, self.refresh_all)
+
+    def open_drive_settings(self):
+        """Make Autopilot's own OAuth controls reachable without hunting in tabs."""
+        self.book.select(self.tabs["supervisor"])
+        self.sup_drive_status.set(
+            "Власна авторизація Autopilot. Для ізоляції використайте окремий "
+            "Google OAuth Desktop Client ID. Натисніть «Підключити / змінити акаунт», "
+            "а потім «Перевірити доступ»."
+        )
 
     def _build_home(self):
         self.home_text = tk.Text(self.tabs["home"], wrap="word", state="disabled", font=("TkDefaultFont", 11))
@@ -1304,6 +1316,11 @@ class MainWindow(tk.Tk):
             value=str(getattr(secret_cfg, "google_drive_folder_id", "") or CANONICAL_LIVE_FEED_FOLDER_ID)
         )
         self.sup_drive_status = tk.StringVar(value="Google Drive: очікує перевірки")
+        ttk.Label(drive, text=(
+            "Власний Google OAuth Autopilot. Підключення Content Tool НЕ імпортується. "
+            "Старий токен зберігається лише для безпечного переходу: "
+            "перепідключіть Google через окремий OAuth Desktop Client ID."
+        ), wraplength=1050, justify="left").grid(row=6, column=0, columnspan=4, sticky="w", padx=8, pady=(5, 8))
         ttk.Label(drive, text="OAuth Client ID").grid(row=0, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(drive, textvariable=self.sup_google_client_id, width=68).grid(row=0, column=1, columnspan=3, sticky="ew", padx=8, pady=4)
         ttk.Label(drive, text="OAuth Client Secret").grid(row=1, column=0, sticky="w", padx=8, pady=4)
@@ -1359,6 +1376,7 @@ class MainWindow(tk.Tk):
                 cfg.google_client_secret = client_secret
                 cfg.google_refresh_token = auth.refresh_token
                 cfg.google_account_email = auth.account_email
+                cfg.google_credential_origin = "autopilot-oauth"
                 cfg.google_drive_folder_id = self.sup_google_folder_id.get().strip() or CANONICAL_LIVE_FEED_FOLDER_ID
                 save_secrets(cfg)
                 self.supervisor.reload_drive_transport()
@@ -1513,6 +1531,21 @@ class MainWindow(tk.Tk):
             telemetry = f"fallback ERROR: {mirror_error[:160]}"
         else:
             telemetry = "очікує першого успішного API heartbeat"
+        # A stored OAuth token predating this release may have been copied from
+        # Content Tool. Do not silently call it independent until explicitly reauthorized.
+        try:
+            origin = str(getattr(load_secrets(), "google_credential_origin", "") or "legacy-unverified")
+        except Exception:
+            origin = "unavailable"
+        if hasattr(self, "drive_quick_status"):
+            if api_error:
+                self.drive_quick_status.set("Drive: ПОМИЛКА · " + api_error[:105])
+            elif origin != "autopilot-oauth":
+                self.drive_quick_status.set("Drive: старий/невідомий OAuth · ПЕРЕПІДКЛЮЧИТИ")
+            elif api_ok:
+                self.drive_quick_status.set("Drive: API OK · " + api_ok)
+            else:
+                self.drive_quick_status.set("Drive: очікує підтвердження запису")
         if hasattr(self, "sup_drive_status"):
             folder_id = str((transport.get("drive_api") or {}).get("configured_folder_id") or "")
             account = self.sup_google_account.get().strip() if hasattr(self, "sup_google_account") else ""
