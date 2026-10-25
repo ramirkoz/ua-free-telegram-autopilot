@@ -27,6 +27,11 @@ _OUTPUT_EDITORIAL_VOICE = re.compile(
     r"(?iu)\bоце\s+так\b|\bд[уУ]{3,}же\b|"
     r"\b(?:ну\s+і|дивовижн[а-яіїєґ]*\s+робот[а-яіїєґ]*)\b"
 )
+_MONEY_CLAIM = re.compile(
+    r"(?iu)\b(\d{1,4}(?:[,.]\d{1,2})?)\s*"
+    r"(?:млн|мільйон[а-яіїєґ]*|тис[а-яіїєґ]*)\s*"
+    r"(?:грн|грив[а-яіїєґ]*)\b"
+)
 # Explicit *reporting of the publisher's question or commentary* is different
 # from the bot independently asserting its premise.
 _ATTRIBUTION = re.compile(
@@ -111,10 +116,43 @@ def monitoring_unattributed_sarcasm_reason(article: Any, final_text: str) -> str
     return ""
 
 
+def monitoring_unattributed_editorial_money_reason(article: Any, final_text: str) -> str:
+    """Do not promote an ironic newsroom budget claim into confirmed funding.
+
+    This only covers a numeric sum that appears inside the source publisher's
+    sarcastic sentence, with no independent nonsarcastic source declaration.
+    """
+    source_parts = _parts(_value(article, "raw_text")[:12000])
+    ironic = [
+        p for p in source_parts if _SOURCE_SARCASM.search(p) and _MONEY_CLAIM.search(p)
+    ]
+    if not ironic:
+        return ""
+    plain = [p for p in source_parts if not _SOURCE_SARCASM.search(p) and "?" not in p]
+    for out in _parts(str(final_text or "")):
+        if _ATTRIBUTION.search(out):
+            continue
+        for match in _MONEY_CLAIM.finditer(out):
+            amount = match.group(1).replace(",", ".")
+            if not any(
+                x.group(1).replace(",", ".") == amount
+                for p in ironic for x in _MONEY_CLAIM.finditer(p)
+            ):
+                continue
+            if any(
+                x.group(1).replace(",", ".") == amount
+                for p in plain for x in _MONEY_CLAIM.finditer(p)
+            ):
+                continue
+            return "MONITORING_SOURCE_EDITORIAL_MONEY_AS_FACT"
+    return ""
+
+
 def monitoring_source_stance_reason(article: Any, final_text: str) -> str:
     return (
         monitoring_editorial_question_reason(article, final_text)
         or monitoring_unattributed_sarcasm_reason(article, final_text)
+        or monitoring_unattributed_editorial_money_reason(article, final_text)
     )
 
 
