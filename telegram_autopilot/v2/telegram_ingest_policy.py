@@ -97,6 +97,35 @@ def collect_telegram_current(source: Source) -> list[CollectedArticle]:
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
     entries = [strict_ingest._hydrate_exact_video_post(username, entry) for entry in parser.entries]
+    # A text post can explicitly link to a distinct photo/video message which
+    # Telegram omitted from its bounded /s listing. Fetch only that exact ID.
+    # Unlinked neighboring posts are never eligible.
+    available = {entry.post for entry in entries}
+    missing = sorted({
+        post for entry in entries if str(entry.text or "").strip()
+        for post in strict_ingest._explicit_same_channel_media_links(username, entry.text)
+        if post not in available
+    })[:3]
+    for post in missing:
+        post_id = base._post_number(post)
+        if post_id is None:
+            continue
+        try:
+            exact_response = collector._source_fetch(
+                f"https://t.me/{username}/{post_id}?embed=1&mode=tme",
+                max_bytes=8 * 1024 * 1024,
+                allowed_content_types={"text/html", "application/xhtml+xml"},
+                timeout=20,
+            )
+            exact_parser = strict_ingest.StrictTelegramParser(username)
+            exact_parser.feed(exact_response.body.decode("utf-8", errors="replace"))
+            exact_parser.close()
+            exact = next((item for item in exact_parser.entries if item.post == post), None)
+            if exact is not None and not str(exact.text or "").strip() and strict_ingest._strict_media_bearing(exact):
+                entries.append(strict_ingest._hydrate_exact_video_post(username, exact))
+        except Exception:
+            # An unavailable exact source is not permission to borrow a neighbor.
+            continue
     # Post adjacency is not media ownership. Use explicit group/reply binding
     # from the strict source parser, never stitch arbitrary nearby posts.
     items = strict_ingest.strict_stitch_telegram(username, entries)

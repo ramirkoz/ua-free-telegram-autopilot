@@ -7,11 +7,62 @@ article media. Never re-send an article in a committed delivery state.
 from __future__ import annotations
 
 import json
+import re
 
 from .domain import BlockedBy
 from .loghub import event
 from .media_pipeline import build_publication_media_bundle
 from .telegram_post_preflight import check_exact_telegram_media, source_media_shortfall
+
+
+def _verified_split_media(article: dict, bundle, source_url: str, channel) -> bool:
+    """Allow only source-verified cross-post media in monitoring.
+    
+    A source message record is insufficient alone; every extra post must have
+    explicit ownership via reply/album or a nearby photo/video link.
+    """
+    from .domain import ChannelMode
+    if getattr(channel, "mode", None) != ChannelMode.MONITORING:
+        return False
+    match = re.fullmatch(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#].*)?", str(source_url or ""))
+    if not match:
+        return False
+    try:
+        layout = json.loads(str(article.get("article_layout_json") or "{}"))
+        tg = layout.get("telegram") if isinstance(layout, dict) else None
+        records = tg.get("source_message_records_v1") if isinstance(tg, dict) else None
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(records, list) or len(records) < 2 or not bundle.count:
+        return False
+    owner_post = f"{match.group(1)}/{match.group(2)}"
+    owner = next((r for r in records if isinstance(r, dict) and r.get("post") == owner_post), None)
+    if not owner or not str(owner.get("text") or "").strip():
+        return False
+    from .strict_ingest import _explicit_same_channel_media_links
+    references = _explicit_same_channel_media_links(match.group(1), str(owner.get("text") or ""))
+    available: set[str] = set()
+    found_linked = False
+    for record in records:
+        if not isinstance(record, dict):
+            return False
+        post = str(record.get("post") or "")
+        media = record.get("media")
+        if not isinstance(media, list):
+            return False
+        if post != owner_post:
+            bound = (
+                str(record.get("reply_to_post") or "") == owner_post
+                or str(owner.get("reply_to_post") or "") == post
+                or (bool(record.get("grouped_id"))
+                    and str(record.get("grouped_id")) == str(owner.get("grouped_id") or ""))
+                or post in references
+            )
+            if not bound:
+                return False
+            found_linked = found_linked or bool(media)
+        available.update(str(item) for item in media if isinstance(item, str))
+    return found_linked and set(bundle.encoded_items).issubset(available)
 
 
 def enforce_source_media_parity(publisher, channel, article_id: int, article, bundle, source_url: str):
@@ -33,7 +84,9 @@ def enforce_source_media_parity(publisher, channel, article_id: int, article, bu
     # A bundle containing an extra neighbour's video/photo is not made valid
     # merely by marking itself stitched. Exact primary-post media MUST appear;
     # additional items require separately verified ownership (not available here).
-    if check.outcome in {"confirmed", "video_recovered"} and check.media and bundle.count > len(check.media):
+    if (check.outcome in {"confirmed", "video_recovered"} and check.media
+            and bundle.count > len(check.media)
+            and not _verified_split_media(article, bundle, source_url, channel)):
         # 2.2.27: the exact Telegram post is now a POSITIVE independent source
         # of media truth. Earlier versions blocked forever on contaminated
         # stitched galleries even when all correct images were available.

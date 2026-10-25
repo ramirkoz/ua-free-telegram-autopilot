@@ -446,6 +446,26 @@ def _explicit_same_channel_video_links(username: str, text: str) -> set[str]:
     return {f"{username}/{number}" for channel, number in links if channel.casefold() == username.casefold()}
 
 
+def _explicit_same_channel_media_links(username: str, text: str) -> set[str]:
+    """Source-linked photo/video messages are ownership evidence, not adjacency."""
+    value = str(text or "")
+    target = re.compile(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#][^\s]*)?", re.I)
+    media_words = re.compile(
+        r"(?iu)(?:фото|світлин|знімк|галере|зображен|відео|photo|images?|gallery|videos?)"
+    )
+    found = set()
+    for match in target.finditer(value):
+        if match.group(1).casefold() != username.casefold():
+            continue
+        # Scope the media label to THIS link. A preceding external link
+        # labeled "video" cannot grant ownership to a later bare URL.
+        prefix = re.split(r"https?://[^\s]+", value[max(0, match.start()-110):match.start()])[-1]
+        suffix = re.split(r"https?://[^\s]+", value[match.end():match.end()+45])[0]
+        if media_words.search(prefix[-70:]) or media_words.search(suffix[:40]):
+            found.add(f"{username}/{match.group(2)}")
+    return found
+
+
 def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> list[CollectedArticle]:
     """Build articles only from the exact Telegram post that owns the text/media.
 
@@ -492,6 +512,9 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
                 or str(getattr(text_entry, "reply_to_post", "") or "") == media_entry.post
             ):
                 owners.add(text_entry.post)
+        for text_entry in ordered:
+            if media_entry.post in _explicit_same_channel_media_links(username, text_entry.text):
+                owners.add(text_entry.post)
         media_owners[media_entry.post] = owners
 
     articles: list[CollectedArticle] = []
@@ -509,7 +532,8 @@ def strict_stitch_telegram(username: str, entries: list[base.TelegramEntry]) -> 
             and _strict_media_bearing(candidate)
             and media_owners.get(candidate.post) == {entry.post}
             and (
-                (
+                candidate.post in _explicit_same_channel_media_links(username, entry.text)
+                or                 (
                     candidate.post in _explicit_same_channel_video_links(username, entry.text)
                     and _entry_has_video(candidate)
                 )
