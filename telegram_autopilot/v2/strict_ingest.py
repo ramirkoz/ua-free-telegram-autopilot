@@ -457,8 +457,11 @@ def _explicit_same_channel_media_links(username: str, text: str) -> set[str]:
     for match in target.finditer(value):
         if match.group(1).casefold() != username.casefold():
             continue
-        neighborhood = value[max(0, match.start()-110):min(len(value), match.end()+65)]
-        if media_words.search(neighborhood):
+        # Scope the media label to THIS link. A preceding external link
+        # labeled "video" cannot grant ownership to a later bare URL.
+        prefix = re.split(r"https?://[^\\s]+", value[max(0, match.start()-110):match.start()])[-1]
+        suffix = re.split(r"https?://[^\\s]+", value[match.end():match.end()+45])[0]
+        if media_words.search(prefix[-70:]) or media_words.search(suffix[:40]):
             found.add(f"{username}/{match.group(2)}")
     return found
 
