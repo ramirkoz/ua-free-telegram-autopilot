@@ -44,6 +44,7 @@ class SecretConfig:
     google_client_secret: str = ""
     google_refresh_token: str = ""
     google_account_email: str = ""
+    google_credential_origin: str = ""
     google_drive_folder_id: str = ""
     facebook_app_id: str = ""
     facebook_app_secret: str = ""
@@ -95,6 +96,7 @@ class SecretConfig:
             google_client_secret=str(self.google_client_secret or "").strip(),
             google_refresh_token=str(self.google_refresh_token or "").strip(),
             google_account_email=str(self.google_account_email or "").strip(),
+            google_credential_origin=str(self.google_credential_origin or "").strip()[:80],
             google_drive_folder_id=str(self.google_drive_folder_id or "").strip(),
             facebook_app_id=str(self.facebook_app_id or "").strip(),
             facebook_app_secret=str(self.facebook_app_secret or "").strip(),
