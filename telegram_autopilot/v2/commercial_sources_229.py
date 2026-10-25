@@ -138,6 +138,7 @@ def apply_commercial_sources_229(store: Any) -> dict[str, Any]:
                         extras["commercial_sources_229"] = {
                             "previous_kind": str(row["kind"]), "previous_url": current_url,
                             "reason": "RSS showed no new articles while public homepage had new campaigns",
+                            "force_page_first": True,
                         }
                         con.execute(
                             "UPDATE sources SET kind='page',url=?,priority=10,initialized=0,"
