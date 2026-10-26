@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from telegram_autopilot.v2.provider_api import ProviderAPIError
+from telegram_autopilot.v2.ai_gateway import _rc111_qa_signature
 from telegram_autopilot.v2.qa_route_efficiency_238 import (
     clipped_final_clause,
     conservative_completed_tail,
@@ -74,3 +75,11 @@ def test_local_cpu_fallback_timeout_is_bounded_without_changing_probe_timeouts()
     assert bounded_local_timeout(120, caller_timeout=20) == 120
     assert bounded_local_timeout(90, caller_timeout=90) == 90
     assert bounded_local_timeout(300, caller_timeout=200) == 300
+
+
+def test_two_unrecoverable_truncated_routes_are_same_deterministic_qa_class():
+    a = ValueError("Редакційний QA: незавершене речення або обірваний текст")
+    b = ValueError("Останнє речення обірване")
+    assert _rc111_qa_signature(a) == "truncated_tail"
+    assert _rc111_qa_signature(b) == "truncated_tail"
+    assert _rc111_qa_signature(ValueError("MONITORING_SOURCE_POLARITY_FLIP")) == ""
