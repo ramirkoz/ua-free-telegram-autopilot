@@ -12,6 +12,7 @@ from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
 from .strict_ingest import StrictIngestService, collect_strict
+from .commercial_yield_237 import prioritize_commercial_sources
 
 
 class BoundedStrictIngestService(StrictIngestService):
@@ -95,6 +96,27 @@ class BoundedStrictIngestService(StrictIngestService):
                 "skipped_cooldown": skipped, "timed_out_sources": timed_out,
                 "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
             }
+
+        # 2.2.37: commercial source queue runs high-yield, lower-latency feeds
+        # sooner. Every eligible source is still collected once. Operator
+        # source selection, cooldowns, editorial policy and quotas are unchanged.
+        if str(getattr(cfg, "editorial_runtime_profile", "")) == "commercial_editorial":
+            with self.store.connect() as con:
+                health_rows = con.execute(
+                    """SELECT source_id,last_added,last_duration_ms,last_outcome
+                       FROM source_health
+                       WHERE source_id IN (SELECT id FROM sources WHERE channel_id=?)""",
+                    (int(channel_id),),
+                ).fetchall()
+            original_ids = [source.id for source in sources]
+            sources = prioritize_commercial_sources(sources, health_rows)
+            if original_ids != [source.id for source in sources]:
+                event(
+                    "ingest", "commercial fast-first collection order",
+                    channel_id=channel_id, source_count=len(sources),
+                    first_sources=[source.name for source in sources[:4]],
+                    unmodified_source_set=True, cooldowns_preserved=True,
+                )
 
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:
             started = time.monotonic()
