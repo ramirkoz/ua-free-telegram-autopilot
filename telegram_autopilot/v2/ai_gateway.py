@@ -265,6 +265,8 @@ def _rc111_qa_signature(error: Exception) -> str:
     low=str(error or "").casefold()
     if "понад жорсткий ліміт" in low or "надто довго" in low:
         return "length"
+    if "незавершене речення або обірваний текст" in low or "останнє речення обірване" in low:
+        return "truncated_tail"
     if "ai додав число" in low:
         return "invented_number"
     if "source-body qa" in low or "атрибуц" in low or "джерело має лишатися тільки у footer" in low:
