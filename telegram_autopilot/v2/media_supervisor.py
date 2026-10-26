@@ -7,6 +7,7 @@ from typing import Any
 
 from .production_supervisor import ProductionSupervisorService
 from .monitoring_media_audit_235 import summarize_monitoring_media_provenance
+from .commercial_yield_237 import commercial_source_funnel_24h
 from .supervisor import Incident, SupervisorConfig
 
 
@@ -49,6 +50,30 @@ class MediaAwareProductionSupervisorService(ProductionSupervisorService):
                 stats["telegram_raw_candidates_60m"] = raw
                 stats["telegram_content_media_60m"] = content
                 stats["telegram_media_provenance_60m"] = summarize_monitoring_media_provenance(rows)
+
+        # Commercial source-to-publication funnel is cohort-scoped and read-only.
+        # Cache expensive article aggregation for 90s on the supervisor instance;
+        # no source is auto-disabled, migrated or re-enabled.
+        cache = getattr(self, "_commercial_funnel_cache_237", {})
+        now_mono = time.monotonic()
+        for cid, stats in out.items():
+            channel = self.store.get_channel(int(cid))
+            if str(getattr(channel, "editorial_runtime_profile", "")) != "commercial_editorial":
+                continue
+            cached = cache.get(str(cid)) if isinstance(cache, dict) else None
+            if cached and now_mono - cached[0] < 90:
+                funnel = cached[1]
+            else:
+                try:
+                    funnel = commercial_source_funnel_24h(self.store, int(cid))
+                except Exception as exc:
+                    # Telemetry query failure must never stop Telegram publication
+                    # or corrupt the main supervisor heartbeat.
+                    funnel = {"scope": "commercial_source_cohort_24h_read_only",
+                              "error": str(exc)[:160], "sources": []}
+                cache[str(cid)] = (now_mono, funnel)
+            stats["commercial_source_funnel_24h"] = funnel
+        self._commercial_funnel_cache_237 = cache
         return out
 
     @staticmethod
