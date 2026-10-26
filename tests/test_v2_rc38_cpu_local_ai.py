@@ -35,7 +35,7 @@ def test_local_call_is_real_full_writer_fallback(monkeypatch) -> None:
     assert text == "готовий текст"
     assert model == "qwen3:4b"
     assert captured["max_output_tokens"] == 720
-    assert captured["timeout_seconds"] == 300
+    assert captured["timeout_seconds"] == 120  # v2.2.38 task-relative CPU fallback cap
     assert len(captured["prompt"]) <= 5600
 
 
@@ -50,7 +50,7 @@ def test_local_medium_task_keeps_requested_budget(monkeypatch) -> None:
     )
     gateway._call_slot(slot, cfg, "x" * 5000, max_output_tokens=340, timeout_seconds=25)
     assert captured["max_output_tokens"] == 340
-    assert captured["timeout_seconds"] == 300
+    assert captured["timeout_seconds"] == 120  # v2.2.38 task-relative CPU fallback cap
     assert len(captured["prompt"]) <= 5600
 
 
