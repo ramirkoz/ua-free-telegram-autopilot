@@ -16,6 +16,7 @@ from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
 from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
+from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
 from .storage import V2Store, now_iso
 
 
@@ -718,7 +719,7 @@ class AIGateway:
                     prompt=local_prompt,
                     max_output_tokens=local_budget,
                     temperature=0.0,
-                    timeout_seconds=local_timeout,
+                    timeout_seconds=bounded_local_timeout(local_timeout, caller_timeout=timeout_seconds),
                 )
             except LocalAIRuntimeError as exc:
                 low = str(exc).casefold()
@@ -860,51 +861,73 @@ class AIGateway:
                     try:
                         validator(output)
                     except Exception as first_error:
-                        validation_failures += 1
-                        signature=_rc111_qa_signature(first_error)
-                        if signature:
-                            validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
-                        self._mark_task_failure(provider, runtime_model, first_error)
-                        # Local is our last-resort deterministic engine. One bounded
-                        # repair turn is cheaper than throwing the article back into
-                        # WAITING_AI for another full queue cycle.
-                        if provider == "local":
+                        # v2.2.38: delete only a short, incomplete trailing clause,
+                        # then rerun the unchanged FULL editorial/source validator.
+                        # A rejection of unsupported facts/polarity can never be
+                        # repaired by clipping or promoted to a publication.
+                        original_length = len(output)
+                        salvaged = conservative_completed_tail(output, first_error)
+                        repaired_ok = False
+                        if salvaged:
                             try:
-                                repaired, repaired_model, repaired_label = self._repair_local_candidate(
-                                    cfg,
-                                    prompt=text_prompt,
-                                    bad_output=output,
-                                    error=first_error,
-                                    max_output_tokens=max_output_tokens,
-                                )
-                                validator(repaired)
-                                output, runtime_model, label = repaired, repaired_model, repaired_label
-                                event("ai", "local candidate repaired", provider="local", model=runtime_model)
-                            except Exception as repair_error:
-                                failures.append(f"{label}: QA: {first_error}; repair: {repair_error}")
+                                validator(salvaged)
+                            except Exception:
+                                pass
+                            else:
+                                output = salvaged
+                                repaired_ok = True
                                 event(
-                                    "ai", "local candidate rejected after repair", provider="local", model=runtime_model,
-                                    elapsed=round(time.monotonic() - started, 2), detail=str(repair_error)[:600],
+                                    "ai", "truncated AI tail rescued by full QA",
+                                    provider=provider, model=runtime_model,
+                                    removed_chars=original_length - len(output),
+                                    purpose=str(purpose or "content"),
                                 )
+                        if not repaired_ok:
+                            validation_failures += 1
+                            signature=_rc111_qa_signature(first_error)
+                            if signature:
+                                validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
+                            self._mark_task_failure(provider, runtime_model, first_error)
+                            # Local is our last-resort deterministic engine. One bounded
+                            # repair turn is cheaper than throwing the article back into
+                            # WAITING_AI for another full queue cycle.
+                            if provider == "local":
+                                try:
+                                    repaired, repaired_model, repaired_label = self._repair_local_candidate(
+                                        cfg,
+                                        prompt=text_prompt,
+                                        bad_output=output,
+                                        error=first_error,
+                                        max_output_tokens=max_output_tokens,
+                                    )
+                                    validator(repaired)
+                                    output, runtime_model, label = repaired, repaired_model, repaired_label
+                                    event("ai", "local candidate repaired", provider="local", model=runtime_model)
+                                except Exception as repair_error:
+                                    failures.append(f"{label}: QA: {first_error}; repair: {repair_error}")
+                                    event(
+                                        "ai", "local candidate rejected after repair", provider="local", model=runtime_model,
+                                        elapsed=round(time.monotonic() - started, 2), detail=str(repair_error)[:600],
+                                    )
+                                    continue
+                            else:
+                                failures.append(f"{label}: QA: {first_error}")
+                                event(
+                                    "ai", "candidate rejected by QA", provider=provider, model=runtime_model,
+                                    elapsed=round(time.monotonic() - started, 2), detail=str(first_error)[:600],
+                                )
+                                # RC111: if two independent reviewed routes hit the same
+                                # deterministic QA class, a third/fourth model is usually
+                                # pure token burn. Stop this gateway cycle and let the
+                                # bounded job retry policy decide whether another cycle is warranted.
+                                if signature and validation_signatures.get(signature,0)>=2:
+                                    event(
+                                        "ai","deterministic QA fail-fast",
+                                        purpose=str(purpose or "content"),signature=signature,
+                                        failures=int(validation_signatures.get(signature,0)),
+                                    )
+                                    break
                                 continue
-                        else:
-                            failures.append(f"{label}: QA: {first_error}")
-                            event(
-                                "ai", "candidate rejected by QA", provider=provider, model=runtime_model,
-                                elapsed=round(time.monotonic() - started, 2), detail=str(first_error)[:600],
-                            )
-                            # RC111: if two independent reviewed routes hit the same
-                            # deterministic QA class, a third/fourth model is usually
-                            # pure token burn. Stop this gateway cycle and let the
-                            # bounded job retry policy decide whether another cycle is warranted.
-                            if signature and validation_signatures.get(signature,0)>=2:
-                                event(
-                                    "ai","deterministic QA fail-fast",
-                                    purpose=str(purpose or "content"),signature=signature,
-                                    failures=int(validation_signatures.get(signature,0)),
-                                )
-                                break
-                            continue
 
                 self._mark_success(provider, slot.model, runtime_model)
                 summary = self._refresh_provider_summary(provider, cfg)
@@ -923,6 +946,13 @@ class AIGateway:
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
                 if scope == "provider":
                     provider_suppressed.add(provider)
+                if suppress_reasoning_only_route(provider, exc):
+                    # A second Cloudflare model with the same reasoning-only
+                    # response contract wastes tokens in THIS task. The next
+                    # article may try Cloudflare again; saved health unchanged.
+                    provider_suppressed.add(provider)
+                    event("ai", "reasoning-only Cloudflare route skipped for this task",
+                          provider=provider, model=slot.model, purpose=str(purpose or "content"))
                 event("ai", "route failed", provider=provider, model=slot.model, state=str(state), purpose=str(purpose or "content"), detail=str(exc)[:600])
                 continue
 
