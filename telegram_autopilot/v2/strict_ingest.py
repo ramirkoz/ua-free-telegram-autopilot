@@ -18,6 +18,24 @@ from .evidence_ledger import extract_source_evidence
 from .unresolved_media import observe_nearby_unowned_media
 
 
+# Verified source-post recovery: 2.2.36
+_REPLY_TARGET_236 = re.compile(
+    r"^(?:(?:https?://t\.me/)|/)(?:s/)?([A-Za-z0-9_]+)/([1-9][0-9]*)(?:[?#].*)?$",
+    flags=re.IGNORECASE,
+)
+
+
+def _verified_reply_post_236(username: str, href: str) -> str:
+    """Only exact post identifiers for the current channel grant reply ownership."""
+    candidate = str(href or "").strip()
+    if re.fullmatch(r"[1-9][0-9]*", candidate):
+        return f"{username}/{candidate}"
+    match = _REPLY_TARGET_236.fullmatch(candidate)
+    if not match or match.group(1).casefold() != username.casefold():
+        return ""
+    return f"{username}/{match.group(2)}"
+
+
 class StrictTelegramParser(base.TelegramParser):
     """Exact Telegram message ownership without throwing away real post media.
 
@@ -150,12 +168,11 @@ class StrictTelegramParser(base.TelegramParser):
         # An explicit same-channel reply link is ownership evidence. Mere
         # adjacent message numbers or timestamps are not.
         if self.current is not None and low_tag == "a":
-            href_value = str(values.get("href") or "")
             reply_markup = any("tgme_widget_message_reply" in c for c in path_local)
             if reply_markup:
-                target = re.search(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)(?:[?#]|$)", href_value)
-                if target and target.group(1).casefold() == self.username.casefold():
-                    self.current["reply_to_post"] = f"{self.username}/{target.group(2)}"
+                target = _verified_reply_post_236(self.username, str(values.get("href") or ""))
+                if target:
+                    self.current["reply_to_post"] = target
 
         # Telegram frequently renders operational links as ``<a href=...>посиланням</a>``.
         # The base parser keeps only visible text, which silently destroys the target.
@@ -192,6 +209,12 @@ class StrictTelegramParser(base.TelegramParser):
                 )
                 if re.fullmatch(r"[A-Za-z0-9_:.-]{1,80}", explicit_group):
                     self.current["grouped_id"] = explicit_group
+                for field in ("data-reply-to-post", "data-reply-to"):
+                    if values.get(field):
+                        target = _verified_reply_post_236(self.username, values[field])
+                        if target:
+                            self.current["reply_to_post"] = target
+                            break
         finally:
             self._strict_candidate_classes = set()
             self._strict_element_classes = set()
@@ -357,7 +380,7 @@ def _upgrade_strict_article(username: str, article: CollectedArticle, entry_by_i
         tg = {}
         layout["telegram"] = tg
     tg["media_filter_version"] = 7
-    tg["stitch_policy"] = "adjacent_media_only_v2"
+    tg["stitch_policy"] = "explicit_reply_group_or_source_link_v236"
 
     mids = tg.get("message_ids") if isinstance(tg.get("message_ids"), list) else []
     group = [entry_by_id.get(int(mid)) for mid in mids if str(mid).isdigit()]
@@ -722,26 +745,54 @@ def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
     parser.feed(response.body.decode("utf-8", errors="replace"))
     parser.close()
     entries = [_hydrate_exact_video_post(username, entry) for entry in parser.entries]
-    # Recover up to two explicitly linked same-channel video posts absent
-    # from the public /s listing. Every embed result must match the exact ID.
+    # v2.2.36: Recover only exact source-authored media links and explicit
+    # reply targets omitted from t.me/s. Never search adjacent IDs or timestamps.
     available = {entry.post for entry in entries}
-    missing_links = sorted({
-        linked
-        for entry in entries if str(entry.text or "").strip()
-        for linked in _explicit_same_channel_video_links(username, entry.text)
-        if linked not in available
-    })[:2]
+    references: set[str] = set()
+    for entry in entries:
+        if not str(entry.text or "").strip():
+            continue
+        references.update(_explicit_same_channel_media_links(username, entry.text))
+        references.update(_explicit_same_channel_video_links(username, entry.text))
+        reply = str(getattr(entry, "reply_to_post", "") or "")
+        prefix = f"{username}/"
+        if reply.casefold().startswith(prefix.casefold()) and (number := base._post_number(reply)) is not None:
+            references.add(f"{username}/{number}")
+    missing_links = sorted(
+        (post for post in references if post not in available),
+        key=lambda post: (base._post_number(post) is None, base._post_number(post) or 0),
+    )[:3]  # Strict upper bound on exact HTTP requests per channel cycle.
     for linked in missing_links:
-        candidate = base.TelegramEntry(
-            post=linked, text="", published=None, video_attachment_seen=True,
-        )
-        recovered = _hydrate_exact_video_post(username, candidate)
-        if recovered.post == linked and _entry_has_video(recovered):
+        post_id = base._post_number(linked)
+        if post_id is None:
+            continue
+        try:
+            response_exact = collector._source_fetch(
+                f"https://t.me/{username}/{post_id}?embed=1&mode=tme",
+                max_bytes=8 * 1024 * 1024,
+                allowed_content_types={"text/html", "application/xhtml+xml"},
+                timeout=20,
+            )
+            parser_exact = StrictTelegramParser(username)
+            parser_exact.feed(response_exact.body.decode("utf-8", errors="replace"))
+            parser_exact.close()
+            recovered = next((e for e in parser_exact.entries if e.post == linked), None)
+            if recovered is None or str(recovered.text or "").strip() or not _strict_media_bearing(recovered):
+                continue
+            recovered = _hydrate_exact_video_post(username, recovered)
+            if recovered.post != linked or not _strict_media_bearing(recovered):
+                continue
             entries.append(recovered)
+            available.add(linked)
             event(
-                "ingest", "linked video recovered by exact post",
-                source=username, post_id=base._post_number(linked),
-                media_count=len(recovered.media),
+                "ingest", "verified linked split media recovered by exact post",
+                source=username, post_id=post_id, media_count=len(recovered.media),
+                link_scope="same_channel_exact_post", ownership="source_reply_or_explicit_media_url",
+            )
+        except Exception as exc:
+            event(
+                "ingest", "exact split media retrieval unavailable", level=30,
+                source=username, post_id=post_id, detail=str(exc)[:250],
             )
     items = strict_stitch_telegram(username, entries)
     if not items:
