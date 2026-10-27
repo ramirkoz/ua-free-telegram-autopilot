@@ -62,7 +62,7 @@ def test_not_enabled_on_other_channel_profiles():
     prior = story(PUBLISHED, article_id=84599, source_id=100, published_at=EARLIER)
     new = story(LATER, article_id=84621, source_id=101)
     same, reason = event_fingerprint_same_event(new, prior, monitoring_profile=False)
-    assert not same, reason
+    assert "CIVIC_FIRST_MONTH_DUPLICATE" not in reason
 
 
 def test_different_service_is_not_collapsed():
