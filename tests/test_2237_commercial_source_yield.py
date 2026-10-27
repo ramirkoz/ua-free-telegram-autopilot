@@ -45,7 +45,7 @@ class _FakeStore:
         self.con.executescript("""
         CREATE TABLE sources(id INTEGER PRIMARY KEY,channel_id INTEGER,name TEXT,url TEXT,enabled INTEGER,priority INTEGER);
         CREATE TABLE source_health(source_id INTEGER,last_duration_ms INTEGER,last_outcome TEXT,last_added INTEGER,cooldown_until TEXT);
-        CREATE TABLE articles(id INTEGER PRIMARY KEY,channel_id INTEGER,source_id INTEGER,discovered_at TEXT,decision TEXT,stage TEXT,published_at TEXT,blocked_by TEXT);
+        CREATE TABLE articles(id INTEGER PRIMARY KEY,channel_id INTEGER,source_id INTEGER,discovered_at TEXT,decision TEXT,stage TEXT,published_at TEXT,blocked_by TEXT,reject_reason TEXT NOT NULL DEFAULT '');
         """)
         self.con.executemany(
             "INSERT INTO sources VALUES(?,?,?,?,?,?)",
@@ -57,7 +57,7 @@ class _FakeStore:
         recent = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         old = (datetime.now(timezone.utc) - timedelta(days=3)).astimezone().isoformat(timespec="seconds")
         self.con.executemany(
-            "INSERT INTO articles VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO articles(id,channel_id,source_id,discovered_at,decision,stage,published_at,blocked_by) VALUES(?,?,?,?,?,?,?,?)",
             [(1,2,10,recent,"PUBLISH","PUBLISHED",recent,"NONE"),
              (2,2,10,recent,"REJECT","COLLECTED","","NONE"),
              (3,2,11,recent,"PUBLISH","READY","","MEDIA"),
