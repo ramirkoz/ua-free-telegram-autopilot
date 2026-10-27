@@ -28,7 +28,10 @@ def _verified_split_media(article: dict, bundle, source_url: str, channel) -> bo
     if not match:
         return False
     try:
-        layout = json.loads(str(article.get("article_layout_json") or "{}"))
+        # V2Store.get_article returns sqlite3.Row (Mapping-like without .get).
+        # The LIVE 83163 crash happened after successful exact-post preflight.
+        # Access the same key through [] for both sqlite3.Row and dict.
+        layout = json.loads(str(article["article_layout_json"] or "{}"))
         tg = layout.get("telegram") if isinstance(layout, dict) else None
         records = tg.get("source_message_records_v1") if isinstance(tg, dict) else None
     except (ValueError, TypeError):

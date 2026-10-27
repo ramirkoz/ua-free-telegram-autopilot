@@ -17,6 +17,7 @@ from .loghub import event
 from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
+from .qa_adjacent_word_239 import repair_adjacent_repeated_word
 from .storage import V2Store, now_iso
 
 
@@ -267,6 +268,8 @@ def _rc111_qa_signature(error: Exception) -> str:
         return "length"
     if "незавершене речення або обірваний текст" in low or "останнє речення обірване" in low:
         return "truncated_tail"
+    if "жорсткий qa: сусіднє слово повторено двічі" in low:
+        return "repeated_word"
     if "ai додав число" in low:
         return "invented_number"
     if "source-body qa" in low or "атрибуц" in low or "джерело має лишатися тільки у footer" in low:
@@ -884,6 +887,27 @@ class AIGateway:
                                     removed_chars=original_length - len(output),
                                     purpose=str(purpose or "content"),
                                 )
+                        # 2.2.39: duplicate-word hard QA triggered expensive
+                        # cascades across 8+ models in LIVE. Propose a strictly
+                        # local one-word deduplication ONLY for the exact error
+                        # and only if the original full source/editorial QA passes.
+                        # An unchanged/unsupported factual claim remains rejected.
+                        if not repaired_ok:
+                            word_candidate = repair_adjacent_repeated_word(output, first_error)
+                            if word_candidate:
+                                try:
+                                    validator(word_candidate)
+                                except Exception:
+                                    pass
+                                else:
+                                    removed = len(output) - len(word_candidate)
+                                    output = word_candidate
+                                    repaired_ok = True
+                                    event(
+                                        "ai", "adjacent repeated word repaired by full QA",
+                                        provider=provider, model=runtime_model,
+                                        removed_chars=removed, purpose=str(purpose or "content"),
+                                    )
                         if not repaired_ok:
                             validation_failures += 1
                             signature=_rc111_qa_signature(first_error)
