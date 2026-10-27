@@ -55,7 +55,7 @@ def test_science_rules_strong_not_global():
     assert SCIENCE_PLAIN_READER_RULES not in common
     assert SCIENCE_PLAIN_READER_RULES not in monitoring
     assert SCIENCE_PLAIN_READER_RULES in science
-    assert "дві наукові статті" in science
+    assert "автор експерименту" in science.lower()
     assert SCIENCE_FINAL_READER_REVIEW in final_science
     assert SCIENCE_FINAL_READER_REVIEW not in final_commercial
     assert "не додавай" in final_science.lower()
