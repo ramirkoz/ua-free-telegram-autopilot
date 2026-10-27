@@ -24,6 +24,7 @@ from .loghub import event
 from .learning import LearningEngine
 from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
+from .science_broad_audience_242 import is_science_general_channel, broad_science_value_rejection
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
@@ -1312,9 +1313,18 @@ SOURCE:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
+        science_audience_instruction = (
+            "SCIENCE FOR GENERAL READERS: A microcontroller, chip, power, firmware, "
+            "clock-frequency or benchmark tweak without a demonstrated broad outcome "
+            "is a weak_audience_hook, NOT science news. A real discovery can matter "
+            "without near-term commercialization. Judge reader value outside the "
+            "engineer niche using only source facts. Never invent applications.\n"
+            if is_science_general_channel(channel) else ""
+        )
         prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
+{science_audience_instruction}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
 Якщо decision="reject", reject_code — РІВНО один із: off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other.
@@ -1362,10 +1372,16 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             value["reason"] = _clean(fit.get("reason"), 420)
             event("ai", "CPU local fit/value combined", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
         else:
-            value = self._value_gate(article)
+            value = self._value_gate(article, science_broad=is_science_general_channel(channel))
         allowed, code, value_score = self._value_allowed(value, score, _editorial_thresholds(channel))
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
+        if is_science_general_channel(channel):
+            broad_reason = broad_science_value_rejection(value)
+            if broad_reason:
+                return EditorialOutcome(Decision.REJECT, reason=broad_reason,
+                                        fit_score=score, editorial_value_score=value_score,
+                                        provider=fit_result.provider, model=fit_result.model)
         return EditorialOutcome(Decision.PUBLISH, reason=f"EDITORIAL_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
 
     def _sold_value_gate(self, article: Any) -> dict[str, Any]:
@@ -1407,9 +1423,17 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             return True, "mechanism_case", score
         return False, "below_sold_value", max(score, broad_score)
 
-    def _value_gate(self, article: Any) -> dict[str, Any]:
+    def _value_gate(self, article: Any, *, science_broad: bool = False) -> dict[str, Any]:
+        extra = (
+            "ДЛЯ НАУКОВО-ТЕХНОЛОГІЧНИХ НОВИН: reader_payoff і retellability означають "
+            "цікавість людини ПОЗА професією розробника. consequence_or_insight і concrete_stakes "
+            "мають ґрунтуватися на SOURCE, а не на припущеннях про застосування. "
+            "Висока novelty не виправдовує новий вольтаж, частоту, бенчмарк чи прошивку. "
+            "Фундаментальне відкриття може бути значущим без готового продукту.\n"
+            if science_broad else ""
+        )
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true для старих ігрових портів, одиничних експериментів, нішевих хобі та саморобок без доведеного широкого результату; не прирівнюй технічну новизну до значущості.
-SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
+{extra}SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
