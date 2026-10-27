@@ -1433,7 +1433,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if science_broad else ""
         )
         prompt = f"""Ти UNIVERSAL EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit. Оціни 0..100: novelty, consequence_or_insight, mechanism, reader_payoff, retellability, concrete_stakes, why_now. curiosity_only=true для старих ігрових портів, одиничних експериментів, нішевих хобі та саморобок без доведеного широкого результату; не прирівнюй технічну новизну до значущості.
-SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
+{extra}SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Поверни ТІЛЬКИ JSON: {{"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
