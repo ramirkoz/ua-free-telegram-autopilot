@@ -46,6 +46,24 @@ def test_do_not_block_source_grounded_named_discovery():
     assert science_plain_language_issue(text) == ""
 
 
+
+def test_opaque_genetics_abbreviation_without_explanation_is_blocked():
+    text = (
+        "Генетики відтворили історію заселення островів за зразками ДНК. "
+        "Дослідники вивчили спільних предків методом IBD."
+    )
+    assert science_plain_language_issue(text).startswith("SCIENCE_READER_ACRONYM: IBD")
+
+
+def test_familiar_science_names_and_explained_acronyms_are_allowed():
+    assert science_plain_language_issue(
+        "NASA представила нові знімки планети."
+    ) == ""
+    assert science_plain_language_issue(
+        "Вчені застосували метод IBD (порівняння спільних ділянок ДНК)."
+    ) == ""
+
+
 def test_science_rules_strong_not_global():
     common = writer_reader_rules(monitoring=False, commercial=False)
     science = writer_reader_rules(monitoring=False, commercial=False, science=True)
