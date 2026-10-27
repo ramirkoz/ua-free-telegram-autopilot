@@ -569,6 +569,23 @@ class Publisher:
         delivery_preflight = self._delivery_preflight(article_id, channel)
         if delivery_preflight != "CONTINUE":
             return delivery_preflight
+        # Final LIVE barrier for all channels, including historical READY rows
+        # carried over in Data during a Windows Portable upgrade. Never use
+        # discovered_at as a substitute for the publisher's source timestamp.
+        with self.store.connect() as con:
+            started_row = con.execute(
+                "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
+            ).fetchone()
+        if started_row:
+            from .freshness_fence_241 import source_freshness_rejection
+            stale_reason = source_freshness_rejection(
+                str(article["source_published_at"] or ""), str(started_row[0] or "")
+            )
+            if stale_reason:
+                self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
+                event("publish", "stale source refused before Telegram", level=30,
+                      channel_id=channel_id, article_id=article_id, reason=stale_reason)
+                return "SOURCE_FRESHNESS:" + stale_reason
         # Strongest safety boundary: abort before any image/video preparation
         # and before every Telegram call, including old READY rows on upgrade.
         from .publication_safety import is_ai_rejection_text

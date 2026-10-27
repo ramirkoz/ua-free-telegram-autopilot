@@ -291,7 +291,6 @@ def test_runtime_channel_isolation_on_ai_outage(tmp_path: Path):
     for cid in (1, 2, 3):
         seed_channel(store, cid)
         seed_source(store, cid, cid)
-        add_article(store, cid, cid, f"a{cid}", title=f"Article {cid}", url=f"https://s{cid}/a")
     runtime = RuntimeEngine(store)
 
     class FakeEditorial:
@@ -321,6 +320,12 @@ def test_runtime_channel_isolation_on_ai_outage(tmp_path: Path):
     runtime.publisher = FakePublisher()
     runtime.ingest.collect_channel = lambda cid, heartbeat=None: {"seen": 0, "added": 0, "errors": 0}
     runtime.start()
+    # Live freshness policy requires source-date proof strictly after startup.
+    # Seed work after the session begins so this test still tests AI isolation.
+    for cid in (1, 2, 3):
+        store.insert_collected(channel_id=cid, source_id=cid, external_id=f"a{cid}",
+                               title=f"Article {cid}", source_url=f"https://s{cid}/a",
+                               raw_text="body", source_published_at=now_iso())
     deadline = time.time() + 4
     try:
         c1 = None

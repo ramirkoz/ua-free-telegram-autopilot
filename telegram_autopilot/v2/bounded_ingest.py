@@ -13,6 +13,7 @@ from . import ingest as base
 from .loghub import event
 from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
+from .freshness_fence_241 import source_freshness_rejection
 
 
 class BoundedStrictIngestService(StrictIngestService):
@@ -46,8 +47,13 @@ class BoundedStrictIngestService(StrictIngestService):
         return changed
 
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
-        added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = 0
+        added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = stale_filtered = 0
         cfg = self.store.get_channel(channel_id)
+        with self.store.connect() as con:
+            runtime_row = con.execute(
+                "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
+            ).fetchone()
+        runtime_started_at = str(runtime_row[0] or "") if runtime_row else ""
 
         def beat() -> None:
             if heartbeat is not None:
@@ -129,10 +135,16 @@ class BoundedStrictIngestService(StrictIngestService):
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
-            nonlocal added, seen, known_external, known_url, sources_with_new
+            nonlocal added, seen, known_external, known_url, sources_with_new, stale_filtered
             seen += len(items)
             source_added = 0
             for item in items:
+                stale_reason = source_freshness_rejection(
+                    str(item.published_at or ""), runtime_started_at
+                ) if runtime_started_at else ""
+                if stale_reason:
+                    stale_filtered += 1
+                    continue
                 if '"source_reader"' in str(item.article_layout_json or ""):
                     event(
                         "reader", "optional source reader used",
@@ -260,10 +272,15 @@ class BoundedStrictIngestService(StrictIngestService):
             pool.shutdown(wait=False, cancel_futures=True)
             beat()
 
+        if stale_filtered:
+            event("ingest", "source day/start fence skipped old items",
+                  channel_id=channel_id, skipped=stale_filtered,
+                  runtime_started_at=runtime_started_at)
         return {
             "seen": seen, "added": added, "errors": errors,
             "skipped_cooldown": skipped, "timed_out_sources": timed_out,
             "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
+            "stale_filtered": stale_filtered,
         }
 
 

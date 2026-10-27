@@ -14,6 +14,7 @@ from .ingest import IngestService
 from .loghub import event
 from .media_pipeline import processing_media_gate
 from .publisher import Publisher
+from .freshness_fence_241 import source_freshness_rejection
 from .storage import V2Store
 
 
@@ -149,6 +150,14 @@ class RuntimeEngine:
         self.store.recover_stale_leases()
         self.stop_event.clear()
         self.started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        # A new runtime is a hard source-time cutover on EVERY restart. Keep the
+        # marker in the existing DB so the publisher/collectors share one fence.
+        with self.store.connect() as con:
+            con.execute(
+                "INSERT INTO meta(key,value) VALUES('runtime_source_freshness_started_at',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (self.started_at,),
+            )
         event("ai", "startup live AI probes skipped; health will update on real work or explicit manual test")
         for row in self.store.list_channels(enabled_only=True):
             self._start_channel(int(row["id"]))
@@ -355,6 +364,20 @@ class RuntimeEngine:
             self._job_activity(state, "completed")
             return True
         self._job_activity(state, "started")
+        # Existing DB rows cannot be rescued into publication by a restart.
+        # Apply the source's own date before dedupe, media or any paid AI.
+        if self.started_at:
+            stale_reason = source_freshness_rejection(
+                str(article["source_published_at"] or ""), self.started_at
+            )
+            if stale_reason:
+                self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
+                state.processed += 1
+                self._job_activity(state, "rejected")
+                self._job_activity(state, "completed")
+                event("worker", "stale source rejected before AI", channel_id=channel_id,
+                      article_id=article_id, reason=stale_reason)
+                return True
         event("worker", "job start", channel_id=channel_id, article_id=article_id, job_id=job_id, attempts=int(job["attempts"] or 0))
         try:
             canonical = str(article["canonical_source_url"] or "").strip()
