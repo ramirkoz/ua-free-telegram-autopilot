@@ -13,6 +13,18 @@ _VAGUE_EXPERIMENT_LEAD = re.compile(
     r"(?:експерименту|дослідження|статті|роботи)\b",
     re.IGNORECASE,
 )
+_ACRONYM = re.compile(r"(?<![A-Za-z])([A-Z]{3,7})(?![A-Za-z])")
+_FAMILIAR = {
+    "NASA", "ESA", "CERN", "IEEE", "MIT", "IBM", "WHO", "UNESCO",
+    "GPT", "HTML", "HTTP", "HTTPS", "USB", "GPU", "CPU", "DNA",
+    "RNA", "OLED", "GPS", "COVID", "UFO", "ISS", "USA", "USDT",
+}
+_SIMPLE_EXPLANATION = re.compile(
+    r"^\\s*(?:[-—–:]\\s*|\\(\\s*)(?:(?:це|система|технологія|метод|спосіб|"
+    r"модель|інструмент|програма|пристрій)\\b)[^.!?]{5,115}"
+    r"(?:що|який|яка|для|щоб|дозволяє|показує|визначає|порівнює)",
+    re.IGNORECASE,
+)
 _FINDING = re.compile(
     r"\b(?:виявил\w*|з'ясува\w*|з’ясува\w*|"
     r"довел\w*|спростува\w*|підтвердил\w*|"
@@ -35,4 +47,17 @@ def science_plain_language_issue(text: str) -> str:
             "процес замість суті відкриття. Почни з підтвердженого результату "
             "і поясни значення простими словами."
         )
+    # Opaque Latin acronyms are not self-explanatory to general readers.
+    # Familiar names stay; niche methods require a plain role on first mention.
+    for match in _ACRONYM.finditer(body):
+        acronym = match.group(1)
+        if acronym in _FAMILIAR:
+            continue
+        explanation = body[match.end():match.end() + 140]
+        if not _SIMPLE_EXPLANATION.search(explanation):
+            return (
+                "SCIENCE_READER_ACRONYM: невідоме скорочення " + acronym +
+                " без пояснення зрозумілою мовою. Поясни його функцію "
+                "лише за SOURCE або прибери назву."
+            )
     return ""
