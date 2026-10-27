@@ -12,7 +12,7 @@ from ..models import CollectedArticle, Source
 from . import ingest as base
 from .loghub import event
 from .strict_ingest import StrictIngestService, collect_strict
-from .commercial_yield_237 import prioritize_commercial_sources
+from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
 
 
 class BoundedStrictIngestService(StrictIngestService):
@@ -109,13 +109,17 @@ class BoundedStrictIngestService(StrictIngestService):
                     (int(channel_id),),
                 ).fetchall()
             original_ids = [source.id for source in sources]
-            sources = prioritize_commercial_sources(sources, health_rows)
+            # v2.2.40: recent *published* results, not just raw additions,
+            # determine the mild fast-first weight. Noncommercial untouched.
+            yield_rows = commercial_source_yield_rows_24h(self.store, channel_id)
+            sources = prioritize_commercial_sources(sources, health_rows, yield_rows)
             if original_ids != [source.id for source in sources]:
                 event(
                     "ingest", "commercial fast-first collection order",
                     channel_id=channel_id, source_count=len(sources),
                     first_sources=[source.name for source in sources[:4]],
                     unmodified_source_set=True, cooldowns_preserved=True,
+                    fast_first_metric="published_source_cohort_24h",
                 )
 
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:
