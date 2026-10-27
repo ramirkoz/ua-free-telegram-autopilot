@@ -16,7 +16,7 @@ from telegram_autopilot.v2.event_dedupe_guard import (
 )
 from telegram_autopilot.v2.event_memory import find_published_event, record_committed_event
 
-STAMP = "2026-10-25T11:20:53+02:00"
+STAMP = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2))).isoformat(timespec="seconds")
 POLICE = (
     "Подробиці ударів по Запоріжжю та області 24 жовтня. "
     "Вчора армія РФ атакувала Запоріжжя ракетами та безпілотниками. "
@@ -140,8 +140,10 @@ class SqliteEventStore:
               CREATE TABLE articles (
                 id INTEGER PRIMARY KEY,channel_id INTEGER,source_id INTEGER,
                 stage TEXT,decision TEXT,title TEXT,raw_text TEXT,
-                source_published_at TEXT,published_at TEXT,event_key TEXT DEFAULT ''
+                source_published_at TEXT,published_at TEXT,event_key TEXT DEFAULT '',
+                final_text TEXT DEFAULT '',event_summary TEXT DEFAULT '',discovered_at TEXT DEFAULT ''
               );
+              CREATE TABLE sources(id INTEGER PRIMARY KEY,name TEXT DEFAULT '');
               CREATE TABLE publication_delivery_journal(
                 article_id INTEGER,channel_id INTEGER,state TEXT
               );
@@ -158,7 +160,7 @@ class SqliteEventStore:
     def insert(self, article, *, receipt="COMMITTED", archive=False):
         with self.connect() as con:
             con.execute(
-                "INSERT INTO articles VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO articles(id,channel_id,source_id,stage,decision,title,raw_text,source_published_at,published_at,event_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (article["id"], article["channel_id"], article["source_id"],
                  "PUBLISHED", "PUBLISH", article["title"], article["raw_text"],
                  article["source_published_at"], STAMP, ""),
