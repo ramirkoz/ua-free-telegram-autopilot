@@ -193,6 +193,13 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.2.29 source portfolio update failed; existing Data retained",
                       level=40, detail=str(exc)[:1200])
+            # Upgrade science channel policy before its workers can publish.
+            # Run historical RC103 once first to prevent a background override.
+            from .operational_retention import _apply_scientific_news_profile
+            from .science_broad_audience_242 import apply_science_general_audience_profile
+            _apply_scientific_news_profile(store)
+            migrated = apply_science_general_audience_profile(store)
+            event("editorial", "science general-audience policy checked", migrated=migrated)
             # 2.0.10: the RC103 fast-start hook skips normal maintenance.
             # Retire the old queue synchronously BEFORE workers/UI can publish.
             # Failing here must stop launch rather than leak pre-cutover posts.
