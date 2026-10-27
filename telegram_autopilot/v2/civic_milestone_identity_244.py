@@ -33,6 +33,7 @@ _FIRST_MONTH = re.compile(
     r"вже\s+міся(?:ць|ц\w*)|"
     r"за\s+(?:цей|перший)\s+міся(?:ць|ц\w*))"
 )
+_MULTIPLE_MONTHS = re.compile(r"(?iu)\\b(?:два|двох|дві|три|чотири|кілька|2|3|4)\\s+місяц\\w*\\s+тому")
 _LOCATION = re.compile(r"\b(?:[УВув]|місті)\s+([А-ЯІЇЄҐ][а-яіїєґ'’-]{3,})")
 _NEW_PHASE = re.compile(
     r"(?iu)\b(?:відкрили\s+(?:нов(?:у|ий)|ще\s+одн(?:у|ин)|друг(?:у|ий))\s+"
@@ -111,6 +112,8 @@ def civic_milestone_same_event(current: Any, candidate: Any) -> tuple[bool, str]
         return False, ""
     left, right = _source_story(current), _source_story(candidate)
     if not (_FIRST_MONTH.search(left) and _FIRST_MONTH.search(right)):
+        return False, ""
+    if _MULTIPLE_MONTHS.search(left) or _MULTIPLE_MONTHS.search(right):
         return False, ""
     facility_left, facility_right = _facility_key(left), _facility_key(right)
     if not facility_left or facility_left != facility_right:
