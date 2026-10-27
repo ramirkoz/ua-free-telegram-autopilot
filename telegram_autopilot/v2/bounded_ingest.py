@@ -272,10 +272,15 @@ class BoundedStrictIngestService(StrictIngestService):
             pool.shutdown(wait=False, cancel_futures=True)
             beat()
 
+        if stale_filtered:
+            event("ingest", "source day/start fence skipped old items",
+                  channel_id=channel_id, skipped=stale_filtered,
+                  runtime_started_at=runtime_started_at)
         return {
             "seen": seen, "added": added, "errors": errors,
             "skipped_cooldown": skipped, "timed_out_sources": timed_out,
             "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
+            "stale_filtered": stale_filtered,
         }
 
 
