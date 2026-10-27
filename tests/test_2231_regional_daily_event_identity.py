@@ -16,7 +16,14 @@ from telegram_autopilot.v2.event_dedupe_guard import (
 )
 from telegram_autopilot.v2.event_memory import find_published_event, record_committed_event
 
-STAMP = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2))).isoformat(timespec="seconds")
+_CLOCK = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2)))
+STAMP = _CLOCK.isoformat(timespec="seconds")
+_REPORT_DAY = (_CLOCK - timedelta(days=1)).date()
+_EARLIER_DAY = (_CLOCK - timedelta(days=2)).date()
+_MONTHS = ("", "січня", "лютого", "березня", "квітня", "травня", "червня", "липня",
+           "серпня", "вересня", "жовтня", "листопада", "грудня")
+_REPORT_LABEL = f"{_REPORT_DAY.day} {_MONTHS[_REPORT_DAY.month]}"
+_EARLIER_LABEL = f"{_EARLIER_DAY.day} {_MONTHS[_EARLIER_DAY.month]}"
 POLICE = (
     "Подробиці ударів по Запоріжжю та області 24 жовтня. "
     "Вчора армія РФ атакувала Запоріжжя ракетами та безпілотниками. "
@@ -42,6 +49,12 @@ AGGREGATE = (
 )
 
 
+# Preserve the 2026-10-25 operator story/facts but place the live temporal
+# test fixture inside the rolling 24-hour ledger window, avoiding test rot.
+POLICE = POLICE.replace("24 жовтня", _REPORT_LABEL)
+AGGREGATE = AGGREGATE.replace("24 жовтня", _REPORT_LABEL)
+
+
 def row(article_id, source, *, when=STAMP, channel=3, source_id=None, stage="PENDING"):
     return {
         "id": article_id, "source_id": source_id if source_id is not None else article_id,
@@ -55,7 +68,7 @@ def row(article_id, source, *, when=STAMP, channel=3, source_id=None, stage="PEN
 def test_actual_three_sources_have_same_day_and_facts():
     first, second, third = (regional_daily_facts(row(i, s))
                             for i, s in enumerate((POLICE, NEWSROOM, AGGREGATE), 1))
-    assert all(f["report_day"] == "2026-10-24" for f in (first, second, third))
+    assert all(f["report_day"] == _REPORT_DAY.isoformat() for f in (first, second, third))
     assert first["injured"] == second["injured"] == third["injured"] == 4, (first, second, third)
     assert first["strikes"] is None
     assert second["strikes"] == third["strikes"] == 832
@@ -87,7 +100,7 @@ def test_confirmed_increase_and_correction_remain_updates():
 
 
 def test_different_day_is_new_even_with_same_832_attacks():
-    changed = AGGREGATE.replace("24 жовтня", "23 жовтня")
+    changed = AGGREGATE.replace(_REPORT_LABEL, _EARLIER_LABEL)
     assert regional_daily_relation(row(2, changed), row(1, AGGREGATE)) == ""
 
 
@@ -128,7 +141,7 @@ def test_ai_caption_cannot_authorize_identity_or_changed_casualty_count():
 
 
 def test_different_proven_hours_window():
-    future = "2026-10-26T13:20:53+02:00"
+    future = (_CLOCK + timedelta(days=1, hours=2)).isoformat(timespec="seconds")
     assert regional_daily_relation(row(2, NEWSROOM, when=future), row(1, POLICE)) == ""
 
 
@@ -227,7 +240,7 @@ def test_engine_pre_ai_blocks_real_cross_source_but_not_next_day(tmp_path, monke
     store = SqliteEventStore(tmp_path / "pre-ai.sqlite3")
     store.insert(row(79194, POLICE), receipt=None)
     store.insert(row(79198, NEWSROOM), receipt=None)
-    store.insert(row(79199, AGGREGATE.replace("24 жовтня", "23 жовтня")), receipt=None)
+    store.insert(row(79199, AGGREGATE.replace(_REPORT_LABEL, _EARLIER_LABEL)), receipt=None)
     engine = EventFingerprintDedupeEngine(store)
     monkeypatch.setattr(engine, "_candidate_rows", lambda channel, article, hours: [store.get_article(79194)])
     same = engine._find_duplicate(79198, published_only=False)
