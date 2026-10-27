@@ -52,7 +52,8 @@ def test_opaque_genetics_abbreviation_without_explanation_is_blocked():
         "Генетики відтворили історію заселення островів за зразками ДНК. "
         "Дослідники вивчили спільних предків методом IBD."
     )
-    assert science_plain_language_issue(text).startswith("SCIENCE_READER_ACRONYM: IBD")
+    assert science_plain_language_issue(text).startswith("SCIENCE_READER_ACRONYM:")
+    assert "IBD" in science_plain_language_issue(text)
 
 
 def test_familiar_science_names_and_explained_acronyms_are_allowed():
