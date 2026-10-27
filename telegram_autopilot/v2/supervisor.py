@@ -174,7 +174,7 @@ class SupervisorService:
             active = int(con.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('QUEUED','WAITING','LEASED')").fetchone()[0] or 0)
             due = int(con.execute("SELECT COUNT(*) FROM jobs WHERE state='QUEUED' AND available_at<=?", (now_iso(),)).fetchone()[0] or 0)
             last_job_update = str(con.execute("SELECT COALESCE(MAX(updated_at),'') FROM jobs").fetchone()[0] or "")
-            published_total = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED'").fetchone()[0] or 0)
+            published_total = int(con.execute("SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED' AND datetime(published_at)>=datetime('now','-7 days')").fetchone()[0] or 0)
             published_today = int(
                 con.execute(
                     "SELECT COUNT(*) FROM articles WHERE stage='PUBLISHED' AND substr(published_at,1,10)=?",
@@ -182,7 +182,7 @@ class SupervisorService:
                 ).fetchone()[0]
                 or 0
             )
-            last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE stage='PUBLISHED'").fetchone()[0] or "")
+            last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE stage='PUBLISHED' AND datetime(published_at)>=datetime('now','-7 days')").fetchone()[0] or "")
             recent_errors = int(
                 con.execute(
                     "SELECT COUNT(*) FROM jobs WHERE error_code<>'' AND updated_at>=?",
@@ -316,10 +316,10 @@ class SupervisorService:
                 oldest_ready = str(con.execute("SELECT COALESCE(MIN(ready_at),'') FROM articles WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'", (cid,)).fetchone()[0] or "")
                 oldest_ready_ts = self._parse_iso(oldest_ready)
                 oldest_ready_age_seconds = int(max(0.0, now_ts - oldest_ready_ts)) if oldest_ready_ts is not None else 0
-                published_total = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED'", (cid,)).fetchone()[0] or 0)
+                published_total = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime('now','-7 days')", (cid,)).fetchone()[0] or 0)
                 published_today = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND substr(published_at,1,10)=?", (cid, today)).fetchone()[0] or 0)
                 jobs_done_today = int(con.execute("SELECT COUNT(*) FROM jobs WHERE channel_id=? AND state='DONE' AND substr(updated_at,1,10)=?", (cid, today)).fetchone()[0] or 0)
-                last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE channel_id=? AND stage='PUBLISHED'", (cid,)).fetchone()[0] or "")
+                last_publish = str(con.execute("SELECT COALESCE(MAX(published_at),'') FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime('now','-7 days')", (cid,)).fetchone()[0] or "")
                 published_30m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut30)).fetchone()[0] or 0)
                 published_60m = int(con.execute("SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='PUBLISHED' AND datetime(published_at)>=datetime(?)", (cid, cut60)).fetchone()[0] or 0)
                 starvation_hours = max(1, int(ch["output_starvation_window_hours"] or 4))
