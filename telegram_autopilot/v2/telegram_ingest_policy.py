@@ -140,15 +140,18 @@ def _collect_current(
     page_prefer_feed: bool = False,
     page_candidate_scan_limit: int = 24,
     page_fetch_limit: int = 8,
+    rss_enrich_eligible=None,
 ) -> list[CollectedArticle]:
     if source.kind == "telegram":
         return collect_telegram_current(source)
-    return collector.collect_source(
-        source,
+    kwargs = dict(
         page_prefer_feed=page_prefer_feed,
         page_candidate_scan_limit=page_candidate_scan_limit,
         page_fetch_limit=page_fetch_limit,
     )
+    if rss_enrich_eligible is not None:
+        kwargs["rss_enrich_eligible"] = rss_enrich_eligible
+    return collector.collect_source(source, **kwargs)
 
 
 def install_ingest_behavior() -> None:
