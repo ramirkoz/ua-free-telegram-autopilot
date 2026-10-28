@@ -43,7 +43,7 @@ def _expired_article_ids(store, *, retention_days: int, limit: int = _BATCH_SIZE
     return [int(row[0]) for row in rows]
 
 
-def _purge_article_batch(store, article_ids: list[int]) -> tuple[int, int]:
+def _purge_article_batch(store, article_ids: list[int], *, retention_days: int = OPERATIONAL_RETENTION_DAYS) -> tuple[int, int]:
     if not article_ids:
         return 0, 0
     marks = ",".join("?" for _ in article_ids)
@@ -57,11 +57,12 @@ def _purge_article_batch(store, article_ids: list[int]) -> tuple[int, int]:
             eligible = [
                 int(row[0]) for row in con.execute(
                     f"""SELECT a.id FROM articles a WHERE a.id IN ({marks})
+                           AND datetime(a.discovered_at)<datetime('now',?)
                            AND NOT EXISTS (
                              SELECT 1 FROM publication_delivery_journal j
                               WHERE j.article_id=a.id AND j.state<>'COMMITTED'
                            )""",
-                    tuple(article_ids),
+                    (*tuple(article_ids), f"-{max(1, int(retention_days))} days"),
                 ).fetchall()
             ]
             if not eligible:
@@ -123,7 +124,7 @@ def _run_batched_retention(store, *, retention_days: int = OPERATIONAL_RETENTION
         ids = _expired_article_ids(store, retention_days=days, limit=_BATCH_SIZE)
         if not ids:
             break
-        deleted, detached = _purge_article_batch(store, ids)
+        deleted, detached = _purge_article_batch(store, ids, retention_days=days)
         stats["articles_purged"] += deleted
         stats["duplicate_links_detached"] += detached
         stats["batches"] += 1
