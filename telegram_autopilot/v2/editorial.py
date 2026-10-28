@@ -26,6 +26,7 @@ from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
 from .science_broad_audience_242 import is_science_general_channel, broad_science_value_rejection
 from .science_reader_clarity_243 import science_plain_language_issue
+from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
@@ -925,6 +926,9 @@ def validate_writer_output(
     language_blockers = final_language_blockers(value)
     if language_blockers:
         raise ValueError("Жорсткий мовний QA: " + "; ".join(language_blockers[:4]))
+    agreement_issues = high_confidence_agreement_issues(value)
+    if agreement_issues:
+        raise ValueError("UK_TRANSLATION_AGREEMENT_QA: " + "; ".join(agreement_issues[:4]))
     grammar_blockers = hard_grammar_blockers(value)
     if grammar_blockers:
         raise ValueError("Жорсткий граматичний QA: " + "; ".join(grammar_blockers[:4]))
@@ -1100,6 +1104,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     # Independent final publish-boundary language sentinel. Run BEFORE source
     # and fact checks so another issue cannot mask a nonword that would be sent.
     issues.extend("Жорсткий мовний QA: " + item for item in final_language_blockers(value))
+    issues.extend("UK_TRANSLATION_AGREEMENT_QA: " + item for item in high_confidence_agreement_issues(value))
     critical = hard_editorial_reject(channel, article, value)
     if critical:
         issues.append(critical)
@@ -1517,6 +1522,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{POST_TRANSLATION_WRITER_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
 CHANNEL PURPOSE: {p.purpose}
@@ -1645,6 +1651,7 @@ SOURCE:
         )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
+{POST_TRANSLATION_FINAL_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
 {source_fact_card.text}
