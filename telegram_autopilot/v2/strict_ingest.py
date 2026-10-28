@@ -800,9 +800,10 @@ def collect_telegram_strict(source: Source) -> list[CollectedArticle]:
     return items[-40:]
 
 
-def collect_strict(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8) -> list[CollectedArticle]:
+def collect_strict(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None) -> list[CollectedArticle]:
     return collect_telegram_strict(source) if source.kind == "telegram" else collector.collect_source(
-        source, page_prefer_feed=page_prefer_feed, page_candidate_scan_limit=page_candidate_scan_limit, page_fetch_limit=page_fetch_limit
+        source, page_prefer_feed=page_prefer_feed, page_candidate_scan_limit=page_candidate_scan_limit,
+        page_fetch_limit=page_fetch_limit, rss_enrich_eligible=rss_enrich_eligible,
     )
 
 
