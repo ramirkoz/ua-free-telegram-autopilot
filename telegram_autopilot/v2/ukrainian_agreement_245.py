@@ -28,7 +28,7 @@ _BAD_RELATIVE = re.compile(
 # Other directly attested live-production Ukrainian calques. Avoid broad
 # heuristics here: an AI guard is no substitute for full morphology.
 _BAD_PREPOSITION_CASE = (
-    (re.compile(r"(?iu)\bзгідно\s+із?\s+(?:звіт|дослідженням)\b"),
+    (re.compile(r"(?iu)\bзгідно\s+із?\s+звіт\b"),
      "UK_CASE: неправильний відмінок після «згідно з»"),
 )
 
