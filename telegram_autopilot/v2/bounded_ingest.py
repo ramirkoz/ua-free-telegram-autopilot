@@ -31,6 +31,41 @@ class BoundedStrictIngestService(StrictIngestService):
     active_source_slots = 3
     worker_headroom = 6
 
+    def _repair_v2247_commercial_keyword_cooldowns(self, channel_id: int) -> int:
+        """Undo only persisted false cooldowns caused by the 2.2.47 adapter TypeError.
+
+        Keep real HTTP403/429/network failures and all success/failure history.
+        The exact error match and channel profile make repeated calls idempotent.
+        """
+        with self.store.connect() as con:
+            row = con.execute(
+                "SELECT editorial_runtime_profile FROM channels WHERE id=?",
+                (int(channel_id),),
+            ).fetchone()
+            if row is None or str(row["editorial_runtime_profile"]) != "commercial_editorial":
+                return 0
+            stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+            cur = con.execute(
+                """UPDATE source_health
+                   SET consecutive_failures=0, cooldown_until='',
+                       last_outcome='RECOVERED_248', last_error='', updated_at=?
+                   WHERE source_id IN (
+                       SELECT id FROM sources WHERE channel_id=? AND enabled=1
+                   )
+                     AND last_outcome='ERROR'
+                     AND last_error=?""",
+                (stamp, int(channel_id),
+                 "_collect_current() got an unexpected keyword argument 'rss_enrich_eligible'"),
+            )
+            repaired = int(cur.rowcount or 0)
+        if repaired:
+            event(
+                "ingest", "recovered exact 2.2.47 commercial adapter cooldowns",
+                level=30, channel_id=channel_id, sources=repaired,
+                untouched_real_network_errors=True,
+            )
+        return repaired
+
     def _repair_legacy_budget_cooldowns(self, channel_id: int) -> int:
         """Clear only cooldowns created by the broken RC52/RC53 channel-wide timer."""
         stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -63,6 +98,7 @@ class BoundedStrictIngestService(StrictIngestService):
                 except Exception:
                     pass
 
+        self._repair_v2247_commercial_keyword_cooldowns(channel_id)
         self._repair_legacy_budget_cooldowns(channel_id)
 
         # A source-owned override can request direct HTML even when this
