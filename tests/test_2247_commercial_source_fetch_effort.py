@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -85,7 +86,7 @@ def test_rss_unneeded_hydration_skipped_but_source_records_kept(monkeypatch, onl
         kwargs["rss_enrich_eligible"] = (
             lambda item: not source_freshness_rejection(
                 item.published_at, "2026-10-28T10:28:26+02:00",
-                now=None,
+                now=datetime(2026, 10, 28, 12, 0, tzinfo=timezone(timedelta(hours=2))),
             )
         )
         # Fixture's time is 11:45, and runtime is earlier that day.
