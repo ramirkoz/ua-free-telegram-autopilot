@@ -141,6 +141,7 @@ def _collect_current(
     page_candidate_scan_limit: int = 24,
     page_fetch_limit: int = 8,
     rss_enrich_eligible=None,
+    page_url_eligible=None,
 ) -> list[CollectedArticle]:
     if source.kind == "telegram":
         return collect_telegram_current(source)
@@ -151,6 +152,8 @@ def _collect_current(
     )
     if rss_enrich_eligible is not None:
         kwargs["rss_enrich_eligible"] = rss_enrich_eligible
+    if page_url_eligible is not None and source.kind == "page":
+        kwargs["page_url_eligible"] = page_url_eligible
     return collector.collect_source(source, **kwargs)
 
 

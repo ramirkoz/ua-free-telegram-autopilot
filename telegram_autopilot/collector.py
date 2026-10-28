@@ -552,7 +552,7 @@ def _common_feed_candidates(url: str) -> list[str]:
     return [origin + path for path in ("/feed/", "/feed", "/rss", "/rss.xml")]
 
 
-def _collect_common_feed_fallback(source: Source, *, rss_enrich_eligible=None) -> list[CollectedArticle]:
+def _collect_common_feed_fallback(source: Source, *, rss_enrich_eligible=None, page_url_eligible=None) -> list[CollectedArticle]:
     """Recover page sources whose front page rate-limits bots but public RSS still works."""
     for candidate in _common_feed_candidates(source.url):
         try:
@@ -667,6 +667,10 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if time.monotonic() >= deadline or attempted >= fetch_limit:
                     break
                 if score < -4:
+                    continue
+                # Commercial PAGE only: skip network hydration of known URLs.
+                # Keep iterating the source's listing for genuinely new links.
+                if page_url_eligible is not None and not page_url_eligible(url):
                     continue
                 attempted += 1
                 item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and attempted <= 2 and time.monotonic() < deadline - 20.0)
