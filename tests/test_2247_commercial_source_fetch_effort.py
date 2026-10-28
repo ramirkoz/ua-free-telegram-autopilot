@@ -35,7 +35,7 @@ def test_only_slow_zero_yield_page_uses_shallow_fetch():
     result = commercial_page_fetch_limits(
         sources, health, cohort, page_fetch_limit=8, page_candidate_scan_limit=24
     )
-    assert result == {1: (12, 4)}
+    assert result == {1: (24, 4)}
     assert len(sources) == 5
     assert all(s.priority == 20 for s in sources)
 

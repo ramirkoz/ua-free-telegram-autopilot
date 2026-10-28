@@ -54,7 +54,9 @@ def commercial_page_fetch_limits(
             continue
         # Still fetch 4 full pages, rather than disabling or treating
         # "no newly published" as editorial rejection.
-        limits = (min(configured_scan, 12), min(configured_fetch, 4))
+        # Keep the full listing scan to reach unseen candidates despite
+        # known-link skipping; only expensive page hydration is reduced.
+        limits = (configured_scan, min(configured_fetch, 4))
         if limits != (configured_scan, configured_fetch):
             result[sid] = limits
     return result

@@ -606,7 +606,7 @@ def _article_link_score(url: str, text: str) -> int:
     if len(segments) == 1 and len(slug) < 16: score -= 3
     return score
 
-def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None) -> list[CollectedArticle]:
+def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None, page_url_eligible=None) -> list[CollectedArticle]:
     try:
         if source.kind == "telegram":
             return _collect_telegram(source)
@@ -667,6 +667,10 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 if time.monotonic() >= deadline or attempted >= fetch_limit:
                     break
                 if score < -4:
+                    continue
+                # Commercial PAGE only: skip network hydration of known URLs.
+                # Keep iterating the source's listing for genuinely new links.
+                if page_url_eligible is not None and not page_url_eligible(url):
                     continue
                 attempted += 1
                 item = _enrich_article(CollectedArticle(hashlib.sha256(url.encode("utf-8")).hexdigest(), text[:500], url, "", None, []), timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and attempted <= 2 and time.monotonic() < deadline - 20.0)

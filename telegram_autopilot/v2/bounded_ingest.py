@@ -203,6 +203,12 @@ class BoundedStrictIngestService(StrictIngestService):
                 )
                 if freshness is not None and source.kind in {"rss", "page"}:
                     kwargs["rss_enrich_eligible"] = freshness
+                if commercial_profile and source.kind == "page":
+                    # Channel-scoped read-only known-URL check. Noncommercial
+                    # and Telegram paths are untouched.
+                    kwargs["page_url_eligible"] = lambda url: (
+                        self.store.find_equivalent_article(int(channel_id), str(url)) is None
+                    )
                 items = collect_strict(source, **kwargs)
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
