@@ -552,7 +552,7 @@ def _common_feed_candidates(url: str) -> list[str]:
     return [origin + path for path in ("/feed/", "/feed", "/rss", "/rss.xml")]
 
 
-def _collect_common_feed_fallback(source: Source, *, rss_enrich_eligible=None, page_url_eligible=None) -> list[CollectedArticle]:
+def _collect_common_feed_fallback(source: Source, *, rss_enrich_eligible=None) -> list[CollectedArticle]:
     """Recover page sources whose front page rate-limits bots but public RSS still works."""
     for candidate in _common_feed_candidates(source.url):
         try:
@@ -606,7 +606,7 @@ def _article_link_score(url: str, text: str) -> int:
     if len(segments) == 1 and len(slug) < 16: score -= 3
     return score
 
-def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None) -> list[CollectedArticle]:
+def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None, page_url_eligible=None) -> list[CollectedArticle]:
     try:
         if source.kind == "telegram":
             return _collect_telegram(source)
