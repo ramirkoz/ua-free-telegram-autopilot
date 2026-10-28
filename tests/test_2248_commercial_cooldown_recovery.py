@@ -13,9 +13,10 @@ def test_exact_commercial_cooldowns_recovered_once_and_other_channels_safe(tmp_p
     with store.connect() as con:
         for cid, profile in ((1, "standard"), (2, "commercial_editorial"), (3, "standard")):
             con.execute(
-                """INSERT INTO channels(id,name,telegram_chat_id,enabled,editorial_runtime_profile)
-                   VALUES(?,?,?,?,?)""",
-                (cid, f"channel-{cid}", "@test", 1, profile),
+                """INSERT INTO channels(id,name,telegram_chat_id,enabled,editorial_runtime_profile,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (cid, f"channel-{cid}", "@test", 1, profile,
+                 "2026-10-28T12:00:00+02:00", "2026-10-28T12:00:00+02:00"),
             )
         for sid, cid, enabled in ((10, 1, 1), (20, 2, 1), (21, 2, 1), (22, 2, 0), (30, 3, 1)):
             con.execute(
