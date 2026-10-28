@@ -161,12 +161,13 @@ class BoundedStrictIngestService(StrictIngestService):
                 if commercial_profile and runtime_started_at else None
             )
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
-                items = collect_strict(
-                    source,
+                kwargs = dict(
                     page_prefer_feed=bool(getattr(cfg, "page_prefer_feed", False)) and source.id not in page_first_source_ids,
                     page_candidate_scan_limit=page_scan, page_fetch_limit=page_fetch,
-                    rss_enrich_eligible=freshness,
                 )
+                if freshness is not None and source.kind in {"rss", "page"}:
+                    kwargs["rss_enrich_eligible"] = freshness
+                items = collect_strict(source, **kwargs)
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
