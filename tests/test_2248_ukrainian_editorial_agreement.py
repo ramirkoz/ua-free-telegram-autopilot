@@ -71,6 +71,6 @@ def test_all_channels_block_old_ready_with_wrong_subject_verb(channel_id, mode):
 
 def test_prompt_requires_scientific_uncertainty_and_factual_source():
     assert "моделювання" in POST_TRANSLATION_WRITER_RULE
-    assert "припущення" in POST_TRANSLATION_WRITER_RULE
+    assert "гіпотезу" in POST_TRANSLATION_WRITER_RULE
     assert "ймовірно" in POST_TRANSLATION_FINAL_RULE
     assert "SOURCE" in POST_TRANSLATION_WRITER_RULE

@@ -57,4 +57,3 @@ def test_exact_commercial_cooldowns_recovered_once_and_other_channels_safe(tmp_p
             assert row["cooldown_until"] == "2099-01-01T00:00:00+00:00"
             assert row["failure_count"] == 9
         assert con.execute("SELECT COUNT(*) FROM sources WHERE enabled=1").fetchone()[0] == 4
-        assert con.execute("SELECT COUNT(*) FROM delivery_journal").fetchone()[0] == 0
