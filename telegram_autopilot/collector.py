@@ -552,7 +552,7 @@ def _common_feed_candidates(url: str) -> list[str]:
     return [origin + path for path in ("/feed/", "/feed", "/rss", "/rss.xml")]
 
 
-def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
+def _collect_common_feed_fallback(source: Source, *, rss_enrich_eligible=None) -> list[CollectedArticle]:
     """Recover page sources whose front page rate-limits bots but public RSS still works."""
     for candidate in _common_feed_candidates(source.url):
         try:
@@ -566,7 +566,8 @@ def _collect_common_feed_fallback(source: Source) -> list[CollectedArticle]:
                 continue
             deadline = time.monotonic() + 70.0
             reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
-            for index, item in enumerate(items[:4] if reader_enabled else items[:6]):
+            eligible_items = [item for item in items if rss_enrich_eligible is None or rss_enrich_eligible(item)]
+            for index, item in enumerate(eligible_items[:4] if reader_enabled else eligible_items[:6]):
                 if time.monotonic() >= deadline:
                     break
                 _enrich_article(item, timeout=8.0 if reader_enabled else 12.0, reader_fallback_enabled=reader_enabled and index < 2 and time.monotonic() < deadline - 20.0)
@@ -605,7 +606,7 @@ def _article_link_score(url: str, text: str) -> int:
     if len(segments) == 1 and len(slug) < 16: score -= 3
     return score
 
-def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8) -> list[CollectedArticle]:
+def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candidate_scan_limit: int=24, page_fetch_limit: int=8, rss_enrich_eligible=None) -> list[CollectedArticle]:
     try:
         if source.kind == "telegram":
             return _collect_telegram(source)
@@ -618,14 +619,15 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
             )
             items = parse_rss(response.body)
             deadline = time.monotonic() + 70.0
-            for item in items[:6]:
+            eligible_items = [item for item in items if rss_enrich_eligible is None or rss_enrich_eligible(item)]
+            for item in eligible_items[:6]:
                 if time.monotonic() >= deadline:
                     break
                 _enrich_article(item, timeout=12.0)
             return items[:40]
         if source.kind == "page":
             if bool(page_prefer_feed):
-                fallback = _collect_common_feed_fallback(source)
+                fallback = _collect_common_feed_fallback(source, rss_enrich_eligible=rss_enrich_eligible)
                 if fallback:
                     return fallback
             try:
@@ -635,7 +637,7 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                 )
             except NetworkError as exc:
                 if "HTTP 429" in str(exc) or "HTTP 403" in str(exc):
-                    fallback = _collect_common_feed_fallback(source)
+                    fallback = _collect_common_feed_fallback(source, rss_enrich_eligible=rss_enrich_eligible)
                     if fallback:
                         return fallback
                 raise

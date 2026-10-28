@@ -13,6 +13,7 @@ from . import ingest as base
 from .loghub import event
 from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
+from .commercial_fetch_effort_247 import commercial_page_fetch_limits
 from .freshness_fence_241 import source_freshness_rejection
 
 
@@ -106,7 +107,9 @@ class BoundedStrictIngestService(StrictIngestService):
         # 2.2.37: commercial source queue runs high-yield, lower-latency feeds
         # sooner. Every eligible source is still collected once. Operator
         # source selection, cooldowns, editorial policy and quotas are unchanged.
-        if str(getattr(cfg, "editorial_runtime_profile", "")) == "commercial_editorial":
+        commercial_profile = str(getattr(cfg, "editorial_runtime_profile", "")) == "commercial_editorial"
+        page_limits_by_source: dict[int, tuple[int, int]] = {}
+        if commercial_profile:
             with self.store.connect() as con:
                 health_rows = con.execute(
                     """SELECT source_id,last_added,last_duration_ms,last_outcome
@@ -119,6 +122,20 @@ class BoundedStrictIngestService(StrictIngestService):
             # determine the mild fast-first weight. Noncommercial untouched.
             yield_rows = commercial_source_yield_rows_24h(self.store, channel_id)
             sources = prioritize_commercial_sources(sources, health_rows, yield_rows)
+            page_limits_by_source = commercial_page_fetch_limits(
+                sources, health_rows, yield_rows,
+                page_fetch_limit=int(getattr(cfg, "page_fetch_limit", 8)),
+                page_candidate_scan_limit=int(getattr(cfg, "page_candidate_scan_limit", 24)),
+            )
+            if page_limits_by_source:
+                event(
+                    "ingest", "commercial slow homepage fetch reduced",
+                    channel_id=channel_id, sources=[
+                        {"source_id": source.id, "name": source.name, "scan": page_limits_by_source[source.id][0],
+                         "fetch": page_limits_by_source[source.id][1]}
+                        for source in sources if source.id in page_limits_by_source
+                    ], enabled_roster_unchanged=True, editorial_policy_unchanged=True,
+                )
             if original_ids != [source.id for source in sources]:
                 event(
                     "ingest", "commercial fast-first collection order",
@@ -130,8 +147,27 @@ class BoundedStrictIngestService(StrictIngestService):
 
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:
             started = time.monotonic()
+            page_scan, page_fetch = page_limits_by_source.get(
+                source.id,
+                (int(getattr(cfg, "page_candidate_scan_limit", 24)),
+                 int(getattr(cfg, "page_fetch_limit", 8))),
+            )
+            # Editorial sources have the original fetch path. For commercial
+            # feeds, only enrich stories actually eligible AFTER runtime start;
+            # source items still reach the ordinary date/dedupe pre-AI gate.
+            freshness = (
+                (lambda item: not source_freshness_rejection(
+                    str(item.published_at or ""), runtime_started_at))
+                if commercial_profile and runtime_started_at else None
+            )
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
-                items = collect_strict(source, page_prefer_feed=bool(getattr(cfg,"page_prefer_feed",False)) and source.id not in page_first_source_ids, page_candidate_scan_limit=int(getattr(cfg,"page_candidate_scan_limit",24)), page_fetch_limit=int(getattr(cfg,"page_fetch_limit",8)))
+                kwargs = dict(
+                    page_prefer_feed=bool(getattr(cfg, "page_prefer_feed", False)) and source.id not in page_first_source_ids,
+                    page_candidate_scan_limit=page_scan, page_fetch_limit=page_fetch,
+                )
+                if freshness is not None and source.kind in {"rss", "page"}:
+                    kwargs["rss_enrich_eligible"] = freshness
+                items = collect_strict(source, **kwargs)
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
