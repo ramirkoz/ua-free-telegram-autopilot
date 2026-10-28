@@ -353,6 +353,26 @@ def _install_supervisor_contract() -> None:
                 stale = int(con.execute(
                     "SELECT COUNT(*) FROM articles WHERE stage<>'PUBLISHED' AND datetime(discovered_at)<datetime('now','-7 days')"
                 ).fetchone()[0] or 0)
+                cleanup_eligible = int(con.execute(
+                    """SELECT COUNT(*) FROM articles a
+                       WHERE datetime(a.discovered_at)<datetime('now','-7 days')
+                         AND NOT EXISTS (
+                           SELECT 1 FROM publication_delivery_journal j
+                            WHERE j.article_id=a.id AND j.state<>'COMMITTED')"""
+                ).fetchone()[0] or 0)
+                protected_delivery = int(con.execute(
+                    """SELECT COUNT(*) FROM articles a
+                       JOIN publication_delivery_journal j ON j.article_id=a.id
+                       WHERE datetime(a.discovered_at)<datetime('now','-7 days')
+                         AND j.state<>'COMMITTED'"""
+                ).fetchone()[0] or 0)
+                retention_row = con.execute(
+                    "SELECT value FROM meta WHERE key='retention_246_last_run_json'"
+                ).fetchone()
+                try:
+                    last_cleanup = json.loads(str(retention_row[0])) if retention_row else {}
+                except (TypeError, ValueError):
+                    last_cleanup = {}
             size_bytes = page_size * page_count
             base.update(
                 size_bytes=size_bytes,
@@ -362,6 +382,9 @@ def _install_supervisor_contract() -> None:
                 free_ratio=round((freelist / page_count) if page_count else 0.0, 4),
                 operational_rows_7d=active_7d,
                 stale_unpublished_over_7d=stale,
+                retention_eligible_over_7d=cleanup_eligible,
+                retention_protected_delivery_over_7d=protected_delivery,
+                retention_last_run=last_cleanup,
             )
         except sqlite3.Error as exc:
             base["metrics_error"] = str(exc)[:500]
