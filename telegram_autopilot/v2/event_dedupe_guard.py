@@ -6,7 +6,7 @@ from typing import Any
 
 from .dedupe import DedupeResult
 from .initiative_dedupe import find_initiative_duplicate
-from .domain import Decision, DedupeProfile, Stage
+from .domain import ChannelMode, Decision, DedupeProfile, Stage
 from .loghub import event
 from .storage import now_iso
 from .semantic_dedupe import (
@@ -408,6 +408,7 @@ def event_fingerprint_same_event(
     compound_events: bool = False,
     rare_terms: bool = False,
     commercial_profile: bool = False,
+    monitoring_profile: bool = False,
 ) -> tuple[bool, str]:
     """High-precision event equivalence controlled only by channel settings.
 
@@ -436,6 +437,16 @@ def event_fingerprint_same_event(
     civic_same, civic_reason = municipal_same_event(current, candidate)
     if civic_same:
         return True, civic_reason
+
+    # First-month civic-service coverage can use different headline angles
+    # and copies of the same video. Original-source venue/location/milestone
+    # identity is stronger evidence than similarity of generated text.
+    # Only the monitoring role receives this lane.
+    if monitoring_profile:
+        from .civic_milestone_identity_244 import civic_milestone_same_event
+        milestone_same, milestone_reason = civic_milestone_same_event(current, candidate)
+        if milestone_same:
+            return True, milestone_reason
 
     # 2.2.19: short national repatriation announcements can have different
     # headlines and photos but identical verified source-owned event facts.
@@ -930,6 +941,7 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                 compound_events=compound_events,
                 rare_terms=rare_terms,
                 commercial_profile=commercial_profile,
+                monitoring_profile=bool(channel and channel.mode == ChannelMode.MONITORING),
             )
             if same:
                 return DedupeResult("DUPLICATE", int(candidate["id"]), match_reason)
