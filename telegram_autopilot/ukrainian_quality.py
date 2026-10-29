@@ -25,6 +25,10 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bпри\s+несподіваному\s+русі\b", re.I), "під час несподіваного руху"),
     (re.compile(r"\bверсія\s+була\s+сировиною\b", re.I), "версія була сирою"),
     (re.compile(r"\bперша\s+версія\s+була\s+сировиною\b", re.I), "перша версія була сирою"),
+    # 2.2.54: attested CTRL+UA live copyedit of a science limitation.
+    # Same meaning, no new inference or causal claim.
+    (re.compile(r"\bне\s+доказує\s+причинність\b", re.I),
+     "не доводить причинно-наслідкового зв’язку"),
     (re.compile(r"\bна\s+даний\s+момент\b", re.I), "зараз"),
     (re.compile(r"\bприймати\s+участь\b", re.I), "брати участь"),
     (re.compile(r"\bприйняти\s+участь\b", re.I), "взяти участь"),
