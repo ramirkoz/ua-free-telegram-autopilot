@@ -72,4 +72,10 @@ def test_case_guard_does_not_block_correct_genders(good):
 def test_rules_preserve_source_as_factual_authority():
     assert "may/might/could" in FINAL_CLAIM_REVIEW_RULE
     assert "SOURCE" in FINAL_CLAIM_REVIEW_RULE
-    assert "працював" in FINAL_CLAIM_REVIEW_RULE
+    assert "працював" in FINAL_CLAIM_REVIEW_RULE.casefold()
+
+
+def test_service_possibility_is_not_a_science_hypothesis():
+    a = "Фонд розповів про можливість отримати допомогу онлайн."
+    b = "Фонд надає можливість отримати допомогу онлайн."
+    assert codes(a, b) == set()
