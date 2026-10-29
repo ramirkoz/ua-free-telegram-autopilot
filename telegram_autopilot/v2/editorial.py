@@ -31,6 +31,7 @@ from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
+from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
 _PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
@@ -1531,6 +1532,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
 {blueprint.prompt_block()}
+{FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
@@ -1622,6 +1624,14 @@ SOURCE:
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+        # Local LanguageTool may run AFTER trusted AI; never let it undo
+        # draft-to-final factual safeguards. This does not call another model.
+        delta_issues = draft_final_regressions(draft, final)
+        if delta_issues:
+            raise ValueError(
+                "FINAL_EDIT_CLAIM_DELTA_QA: " +
+                "; ".join(issue.code for issue in delta_issues[:3])
+            )
         if is_science_general_channel(channel):
             reason = science_plain_language_issue(final)
             if reason:
@@ -1671,6 +1681,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {blueprint.prompt_block(final=True)}
+{FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
@@ -1709,6 +1720,15 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+            # 2.2.51: A syntactically cleaner FINAL must not strengthen the
+            # same qualified assertion or promote a contributor to author.
+            # This compares same-language DRAFT -> FINAL, not English NLI.
+            delta_issues = draft_final_regressions(draft, candidate)
+            if delta_issues:
+                raise ValueError(
+                    "FINAL_EDIT_CLAIM_DELTA_QA: " +
+                    "; ".join(issue.code + ": " + issue.evidence for issue in delta_issues[:3])
+                )
             if is_science_general_channel(channel):
                 reason = science_plain_language_issue(candidate)
                 if reason:
