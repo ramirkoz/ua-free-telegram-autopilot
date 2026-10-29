@@ -33,6 +33,7 @@ from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
 from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
+from .editorial_tone_254 import editorial_tone_rules
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
 _PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
@@ -1517,6 +1518,11 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             science=is_science_general_channel(channel),
             angle=selection.angle,
         )
+        tone_rule = editorial_tone_rules(
+            article, monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'ОБОВ\'ЯЗКОВО: у першому абзаці природно вживи точну назву «{source_context}» хоча б один раз. '
@@ -1545,6 +1551,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
 {blueprint.prompt_block()}
+{tone_rule}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
@@ -1674,6 +1681,12 @@ SOURCE:
             science=is_science_general_channel(channel),
             angle=editorial_angle,
         )
+        tone_rule = editorial_tone_rules(
+            article, monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+            final=True,
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
@@ -1695,6 +1708,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {blueprint.prompt_block(final=True)}
+{tone_rule}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
