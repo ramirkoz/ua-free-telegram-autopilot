@@ -119,7 +119,7 @@ def final_reader_issue(article: Any, final: str) -> str:
         and not _ATTRIBUTED_OPINION.search(output)
     ):
         # A reviewer's impression cannot be upgraded to the company's motive.
-        if re.search(r"(?i)\b(?:brand|company|apple|advertis|campaign)\b", title + " " + raw[:1500]):
+        if re.search(r"(?i)\b(?:brand|company|advertis|campaign)\b", title + " " + raw[:1500]):
             return (
                 "UNATTRIBUTED_BRAND_INTENT_252: оцінку журналіста подано "
                 "як підтверджений свідомий намір компанії"
