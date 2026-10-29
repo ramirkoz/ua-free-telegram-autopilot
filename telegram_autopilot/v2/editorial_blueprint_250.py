@@ -28,17 +28,17 @@ _CIVIC_CHANGE = re.compile(r"(?iu)\b(?:рішенн\w*|розпорядженн\
                             r"зареєстру\w*|реєстрац\w*|термін\w*|набір\w*|"
                             r"прийом\w*|змін\w*\s+розклад\w*)\b")
 _CREATIVE = re.compile(r"(?i)\b(?:campaign|advertis\w*|creative|animation|brand|commercial)\b|"
-                       r"(?iu)\b(?:кампані\w*|бренд\w*|реклам\w*|анімаці\w*)\b")
+                       r"\b(?:кампані\w*|бренд\w*|реклам\w*|анімаці\w*)\b")
 _HAND_CRAFT = re.compile(r"(?i)\b(?:hand[- ]drawn|traditional\s+animation|"
                          r"handmade|hand[- ]craft\w*|hand[- ]paint\w*)\b|"
-                         r"(?iu)\b(?:ручн\w*\s+(?:анімаці\w*|робот\w*|малюванн\w*)|"
+                         r"\b(?:ручн\w*\s+(?:анімаці\w*|робот\w*|малюванн\w*)|"
                          r"мальован\w*\s+вручну)\b")
 _AI_MENTION = re.compile(r"(?i)\b(?:AI|artificial\s+intelligence|"
                          r"generative\s+AI|AI[- ]generat\w*)\b|"
-                         r"(?iu)\b(?:штучн\w*\s+інтелект\w*|генеративн\w*\s+ШІ)\b")
+                         r"\b(?:штучн\w*\s+інтелект\w*|генеративн\w*\s+ШІ)\b")
 _QUALIFIED = re.compile(r"(?i)\b(?:may|might|could|possibly|likely|suggests?|"
                         r"hypothesis|hypothesiz\w*|believ\w*)\b|"
-                        r"(?iu)\b(?:мож\w*|ймовірн\w*|припуска\w*|гіпотез\w*)\b")
+                        r"\b(?:мож\w*|ймовірн\w*|припуска\w*|гіпотез\w*)\b")
 
 
 @dataclass(frozen=True, slots=True)
