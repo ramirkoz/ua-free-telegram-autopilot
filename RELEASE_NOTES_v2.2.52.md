@@ -1,0 +1,11 @@
+# Autopilot 2.2.52: reader completeness and safe latest-fact checks
+
+Based on six actual 2.2.50 operator publications (29 October 2026), with exact title/raw/final comparisons.
+
+- **Source completeness before AI selection:** a Telegram teaser explicitly saying «Детальніше» which promises renamed-street **new names**, or a water-outage **full address list**, but omits those core facts is NOT published as a completed local news item. The guard is bounded to these two strong signals, does not block independently adequate short incident updates, and avoids fabricated details. This version does **not** pretend to have fetched linked article content or follow arbitrary outbound URLs. Future source hydration needs authenticated/safe fetch architecture.
+- **Updated injury totals:** when source says the number of wounded *rose to N*, a final post cannot simultaneously present the earlier total as current. Explicit “спочатку/попередньо ... згодом” chronology remains valid; unrelated figures are untouched.
+- **Journalistic opinion vs brand intent:** review first-person impressions are not evidence that a brand “свідомо” changed strategy. Narrow high-confidence veto only when an unsupported intention is output. Directly sourced stated intentions and attributed reviewer opinions remain valid.
+- **Reader-facing writing instructions:** prioritize verified core result, new name/address where source provides it, final casualty totals and plain-language explanation of research. Source authority overrides style.
+- These gates are applied before monitoring selection, at writer QA, trusted final edit validation, and existing Telegram prepublish QA via `validate_writer_output`, including legacy READY rows.
+- Focused positive/negative tests from live posts. No new AI call, no changes to source roster/priority, 45/30/5-minute intervals, OpenRouter $3/day or $20/month caps, Data/SQLite migration, media or COMMITTED delivery/UNKNOWN quarantine.
+- **Limit:** does not implement generic semantic translation entailment, deep grammar checking, automatic follow-through of externally linked teaser content, or prove improved A/B post quality. Operator LIVE acceptance requires new 2.2.52 source/post samples.

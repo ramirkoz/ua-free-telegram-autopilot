@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
+from .editorial_reader_contract_252 import source_completeness_issue, final_reader_issue, READER_COMPLETENESS_RULE_252
 from ..evidence_pack import build_evidence_pack
 from ..fact_guard import actionable_source_urls, article_non_actionable_urls, source_urls_in_text, strip_non_actionable_article_urls, validate_fact_guard
 from ..language import looks_ukrainian
@@ -870,6 +871,9 @@ def validate_writer_output(
         raise ValueError("AI не повернув природний український текст")
     require_source_context(value, required_context)
     validate_fact_guard(article, value)
+    reader_issue = final_reader_issue(article, value)
+    if reader_issue:
+        raise ValueError(reader_issue)
     analysis_issues = _unsupported_analysis_claims(article, value)
     if analysis_issues:
         raise ValueError("Fact Grounding QA: " + "; ".join(analysis_issues))
@@ -1188,6 +1192,15 @@ class EditorialEngine:
         self.learning = LearningEngine(store)
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # 2.2.52: known external-link teasers must contain the promised facts
+        # before any selector/writer spends AI tokens; no blanket rejection.
+        if channel.mode == ChannelMode.MONITORING:
+            incomplete = source_completeness_issue(article)
+            if incomplete:
+                event("editorial", "source completeness gate blocked teaser",
+                      channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                      reason=incomplete)
+                return EditorialOutcome(Decision.REJECT, reason=incomplete, fit_score=0)
         # Preserve specific verified-source rejection signatures first.
         if channel.mode == ChannelMode.MONITORING:
             source_problem = _monitoring_official_context_reject(article, channel)
@@ -1532,6 +1545,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
 {blueprint.prompt_block()}
+{READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
 {source_voice_instruction}
@@ -1681,6 +1695,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {blueprint.prompt_block(final=True)}
+{READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
 {source_voice_instruction}
