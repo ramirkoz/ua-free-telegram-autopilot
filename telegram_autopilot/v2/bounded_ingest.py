@@ -219,9 +219,9 @@ class BoundedStrictIngestService(StrictIngestService):
                 items = collect_strict(source, **kwargs)
             if source.kind == "telegram":
                 for item in items:
-                    if source_freshness_rejection(
+                    if runtime_started_at and source_freshness_rejection(
                         str(item.published_at or ""), runtime_started_at
-                    ) if runtime_started_at else False:
+                    ):
                         continue
                     if not teaser_page_target(item):
                         continue
