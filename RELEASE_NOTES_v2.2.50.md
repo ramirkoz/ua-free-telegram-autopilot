@@ -1,0 +1,9 @@
+# Autopilot 2.2.50 — editorial blueprint (source-bounded)
+Purpose: fix the verified 2.2.49 failure pattern where source facts were correct but reader-facing news value was buried or absent. Based on three 29 October real posts: science star/planet ring, Prada hand-drawn advertising versus AI campaign editorial contrast, and Mission Kharkiv practical support notice.
+
+Changes:
+- Deterministic, role-scoped editorial blueprint BEFORE writing, using only actual source text and channel runtime role, with a specific reader question, lead, evidence order, certainty/attribution boundary. Newsroom service notices receive fast contact-first structure; scientific discoveries foreground supported significance and modality; commercial campaigns foreground creative mechanism and attributable source-authored contrasts.
+- Both production writer and trusted final editor receive the SAME intent, source, format and boundary, not just generic free-form angle. No extra AI inference call, no new persistent state, no editorial model rerouting or added budget. Selector ANGLE is explicitly optional and never evidence.
+- Does not introduce blanket "all posts need headlines" or any automatic speculative causal text. Protected monitoring contacts, source/publisher integrity, Telegram media ownership, nonoverridable safety gate, all existing QA and citations remain. Does not override operator rules.
+- Regression: source-only classification, scientific qualified wording, commercial author-vs-brand attribution, monitoring contact format and telegram civic report control. Main acceptance requires full CI, Windows Portable and Defender, official release assets and post-install operator LIVE review.
+- Avoid treating semantic intent adherence as fully tested: v2.2.51 follow-up should introduce source-to-draft-to-final claim-level verification and broader Ukrainian grammar quality, then A/B independent assessment.

@@ -1495,6 +1495,14 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
         style_memory = self.learning.style_memory_block(channel.id, article)
+        from .editorial_blueprint_250 import build_editorial_blueprint
+        blueprint = build_editorial_blueprint(
+            article,
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+            angle=selection.angle,
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'ОБОВ\'ЯЗКОВО: у першому абзаці природно вживи точну назву «{source_context}» хоча б один раз. '
@@ -1522,6 +1530,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{blueprint.prompt_block()}
 {POST_TRANSLATION_WRITER_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
@@ -1598,6 +1607,7 @@ SOURCE:
             final = self._final_edit(
                 channel, article, draft, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
+                editorial_angle=selection.angle,
             )
         else:
             final = draft
@@ -1622,6 +1632,7 @@ SOURCE:
         self, channel: ChannelConfig, article: Any, draft: str, *, min_chars: int, max_chars: int,
         hard_max_chars: int | None = None, trusted_only: bool = False, fail_closed: bool = False,
         repair_focus: str = "",
+        editorial_angle: str = "",
     ) -> str:
         p = channel.policy
         source_name = source_context_name(channel, article)
@@ -1631,6 +1642,14 @@ SOURCE:
         )
         final_hard_max = min(body_hard_max, int(hard_max_chars or body_hard_max))
         style_memory = self.learning.style_memory_block(channel.id, article)
+        from .editorial_blueprint_250 import build_editorial_blueprint
+        blueprint = build_editorial_blueprint(
+            article,
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+            angle=editorial_angle,
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
@@ -1651,6 +1670,7 @@ SOURCE:
         )
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
+{blueprint.prompt_block(final=True)}
 {POST_TRANSLATION_FINAL_RULE}
 {source_voice_instruction}
 {source_stance_instruction}
