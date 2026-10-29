@@ -41,7 +41,7 @@ _EDITOR_VOICE = re.compile(
 _EXPLICIT_BRAND_INTENT = re.compile(
     r"(?i)\b(?:intentionally|deliberately|purposefully|consciously|"
     r"brand\s+(?:said|stated|confirmed)|company\s+(?:said|stated|confirmed))\b|"
-    r"(?iu)\b(?:свідомо|навмисно|цілеспрямовано)\b"
+    r"\b(?:свідомо|навмисно|цілеспрямовано)\b"
 )
 _FINAL_INTENT = re.compile(r"(?iu)\b(?:свідомо|навмисно|цілеспрямовано)\b")
 _ATTRIBUTED_OPINION = re.compile(
