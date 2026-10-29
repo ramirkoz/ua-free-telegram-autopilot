@@ -5,6 +5,7 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Callable
 
 from ..database import content_hash
@@ -15,6 +16,7 @@ from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
 from .commercial_fetch_effort_247 import commercial_page_fetch_limits
 from .freshness_fence_241 import source_freshness_rejection
+from .linked_teaser_hydration_253 import teaser_page_target, hydrate_linked_teaser
 
 
 class BoundedStrictIngestService(StrictIngestService):
@@ -90,6 +92,11 @@ class BoundedStrictIngestService(StrictIngestService):
                 "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
             ).fetchone()
         runtime_started_at = str(runtime_row[0] or "") if runtime_row else ""
+        # 2.2.53: at most TWO external article fetch attempts across the
+        # ENTIRE channel collection cycle, even with parallel Telegram sources.
+        # This count is consumed, not recycled after each finished request.
+        linked_teaser_tokens = [2]
+        linked_teaser_lock = Lock()
 
         def beat() -> None:
             if heartbeat is not None:
@@ -210,6 +217,33 @@ class BoundedStrictIngestService(StrictIngestService):
                         self.store.find_equivalent_article(int(channel_id), str(url)) is None
                     )
                 items = collect_strict(source, **kwargs)
+            if source.kind == "telegram":
+                for item in items:
+                    if runtime_started_at and source_freshness_rejection(
+                        str(item.published_at or ""), runtime_started_at
+                    ):
+                        continue
+                    if not teaser_page_target(item):
+                        continue
+                    # Existing or duplicate post: never fetch linked pages again.
+                    if self._existing_reason(
+                        channel_id, source.id, item.external_id, item.url
+                    ):
+                        continue
+                    with linked_teaser_lock:
+                        if not linked_teaser_tokens[0]:
+                            break
+                        linked_teaser_tokens[0] -= 1
+                    _, outcome = hydrate_linked_teaser(item)
+                    event(
+                        "ingest", "bounded external teaser detail hydration",
+                        channel_id=channel_id, source_id=source.id,
+                        article_url=item.url, status=outcome,
+                        attempted_http=True, limit_per_channel_cycle=2,
+                        source_identity_unchanged=True, media_unchanged=True,
+                    )
+                    # One fetch per exact Telegram source in this cycle.
+                    break
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
