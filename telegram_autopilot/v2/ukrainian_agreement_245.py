@@ -61,6 +61,10 @@ _BAD_SUBJECT_VERB = (
 _BAD_PREPOSITION_CASE = (
     (re.compile(r"(?iu)\bзгідно\s+із?\s+звіт\b"),
      "UK_CASE: неправильний відмінок після «згідно з»"),
+    # 2.2.51: real published 'нашої власної планетні системи':
+    # genitive feminine head must not take nominative plural adjective.
+    (re.compile(r"(?iu)\b(?:нашої|цієї|власної|такої)\s+(?:власної\s+)?планетні\s+системи\b"),
+     "UK_CASE: «нашої/власної планетні системи» — потрібен родовий відмінок прикметника"),
 )
 
 
