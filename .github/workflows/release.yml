@@ -353,8 +353,22 @@ jobs:
           $ErrorActionPreference='Stop'
           $scanner=Get-ChildItem "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $scanner) { throw 'Defender scanner unavailable' }
-          & $scanner.FullName -SignatureUpdate
-          if ($LASTEXITCODE -ne 0) { throw "Defender update failed: $LASTEXITCODE" }
+          # A hosted Windows runner may already be installing Defender signatures:
+          # MpCmdRun returns exit code 2 (0x80070652) without scanning anything.
+          # Retry only this transient update collision; never waive the update
+          # or the actual Defender scan and never publish on a failed scan.
+          $signatureUpdated=$false
+          for ($attempt=1; $attempt -le 4; $attempt++) {
+            & $scanner.FullName -SignatureUpdate
+            $updateCode=$LASTEXITCODE
+            if ($updateCode -eq 0) { $signatureUpdated=$true; break }
+            if ($updateCode -ne 2 -or $attempt -ge 4) {
+              throw "Defender update failed after $attempt attempt(s): $updateCode"
+            }
+            Write-Warning "Windows Defender signature update busy (exit 2); retry $attempt/4"
+            Start-Sleep -Seconds (10*$attempt)
+          }
+          if (-not $signatureUpdated) { throw 'Defender signatures not updated' }
           & $scanner.FullName -Scan -ScanType 3 -File $env:PORTABLE_STAGE -DisableRemediation
           if ($LASTEXITCODE -ne 0) { throw "Defender runtime scan failed: $LASTEXITCODE" }
 
