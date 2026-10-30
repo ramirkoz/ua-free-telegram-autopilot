@@ -237,6 +237,7 @@ def _install_ai_efficiency_contract() -> None:
     from . import editorial as ed
     from .domain import Decision
     from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
+    from .commercial_topic_balance_258 import commercial_topic_advisory_258
 
     def combined_select(self, channel, article):
         p = channel.policy
@@ -251,10 +252,12 @@ def _install_ai_efficiency_contract() -> None:
         topic_memory = self.learning.topic_memory_block(channel.id, article)
         commercial = ed._is_commercial_editorial(channel)
         commercial_rule = COMMERCIAL_READER_RULE_256 if commercial else ""
+        commercial_mix = commercial_topic_advisory_258(self.store, channel.id, article) if commercial else ""
         prompt = f"""Ти CHANNEL-FIT + EDITORIAL-VALUE SELECTOR Telegram-автопілота RC102. Зроби ОДНЕ рішення одним викликом.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {commercial_rule}
+{commercial_mix}
 SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {ed._clean(ed._v(article, 'title', ''), 700)}\nSOURCE:\n{ed._source_pack(article, 3600)}
 Оціни channel fit і value одночасно. Усі оцінки 0..100. Навіть для reject поверни всі поля.
 Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"general_interest":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"story_class":"other","shareable_to_friend":false,"share_hook_quote":"","product_only":false}}"""

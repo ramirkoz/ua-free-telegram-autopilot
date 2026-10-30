@@ -20,6 +20,7 @@ from .media_pipeline import build_media_bundle
 from .storage import V2Store, now_iso
 from ..secrets_store import load_secrets
 from .provider_discovery import provider_discovery_snapshot
+from .commercial_topic_balance_258 import commercial_topic_mix_7d_258
 
 
 # 2.2.3: structured selector reject codes -> commercial telemetry categories.
@@ -667,6 +668,15 @@ class SupervisorService:
             return "duplicate"
         return "other"
 
+    def _commercial_topic_mix_snapshot_258(self) -> dict[str, Any]:
+        """Read-only published-feed evidence; never a source or editorial veto."""
+        with self.store.connect() as con:
+            channels = con.execute(
+                "SELECT id FROM channels WHERE enabled=1 AND editorial_runtime_profile='commercial_editorial'"
+            ).fetchall()
+        return {str(int(row["id"])): commercial_topic_mix_7d_258(self.store, int(row["id"]))
+                for row in channels}
+
     def _commercial_throughput_snapshot(self) -> dict[str, Any]:
         cut=datetime.fromtimestamp(time.time()-7200,tz=timezone.utc).astimezone().isoformat(timespec="seconds")
         channels=[]
@@ -888,6 +898,7 @@ class SupervisorService:
             "delivery": self.store.delivery_journal_summary(),
             "dedupe_shadow": self._shadow_dedupe_snapshot(),
             "commercial_throughput": self._commercial_throughput_snapshot(),
+            "commercial_topic_mix_7d": self._commercial_topic_mix_snapshot_258(),
             "media": {**self._media_snapshot(), "recovery": self._media_recovery_snapshot()},
             "channel_stats": self._channel_stats(),
             "channel_settings": channel_settings,

@@ -1341,6 +1341,8 @@ SOURCE:
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
         commercial_audience_instruction = COMMERCIAL_READER_RULE_256 if _is_commercial_editorial(channel) else ""
+        from .commercial_topic_balance_258 import commercial_topic_advisory_258
+        commercial_mix_instruction = commercial_topic_advisory_258(self.store, channel.id, article) if _is_commercial_editorial(channel) else ""
         science_audience_instruction = (
             "SCIENCE FOR GENERAL READERS: A microcontroller, chip, power, firmware, "
             "clock-frequency or benchmark tweak without a demonstrated broad outcome "
@@ -1354,6 +1356,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {topic_memory}
 {science_audience_instruction}
 {commercial_audience_instruction}
+{commercial_mix_instruction}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
 Якщо decision="reject", reject_code — РІВНО один із: off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other.
