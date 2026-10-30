@@ -34,7 +34,7 @@ class FeedStore:
           (4,2,129,"LEGO makes a pop culture Halloween stunt","Halloween LEGO","PUBLISHED",now),
           (5,2,199,"A compact cabin hides a sauna","Compact cabin","PUBLISHED",now),
           (6,2,97,"Robot goose surprises museum visitors","A robot","PUBLISHED",now),
-          (7,2,199,"A new smart watch concept","A watch","REJECTED",now),
+          (7,2,199,"A new smart watch concept","A watch","REJECTED",""),
           (8,2,199,"Very old tiny house","Old","PUBLISHED",old),
           (9,1,199,"Other channel tiny house","Other","PUBLISHED",now),
         ]
