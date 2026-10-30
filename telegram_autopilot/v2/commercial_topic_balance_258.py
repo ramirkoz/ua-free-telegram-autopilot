@@ -125,6 +125,8 @@ def commercial_topic_mix_7d_258(store: Any, channel_id: int) -> dict[str, Any]:
 
 def commercial_topic_advisory_258(store: Any, channel_id: int, article: Any) -> str:
     """Small context addition to an EXISTING selector call, never a veto."""
+    if store is None or not callable(getattr(store, "connect", None)):
+        return ""  # Legacy/isolated selector adapters have no persistent feed.
     rows = _published_rows(store, channel_id, limit=12)
     if not rows:
         return ""
