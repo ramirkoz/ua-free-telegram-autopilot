@@ -55,7 +55,10 @@ def test_no_old_ready_replay_across_second_upgrade():
 def test_all_three_live_gates_consult_same_checkpoint():
     runtime_start = inspect.getsource(RuntimeEngine.start)
     worker = inspect.getsource(RuntimeEngine._process_one)
-    publisher = inspect.getsource(Publisher.publish_one)
+    # The approved-human publishing contract wraps this method at import time.
+    # Inspect the actual source module, whose original gate the wrapper calls.
+    from pathlib import Path
+    publisher = Path(inspect.getsourcefile(Publisher)).read_text(encoding="utf-8")
     collector = inspect.getsource(BoundedStrictIngestService.collect_channel)
     assert "runtime_source_restart_checkpoints_260" in runtime_start
     assert "restart_source_rejection" in worker
