@@ -14,6 +14,7 @@ from .incident_guard import _FATAL_CONTEXT, _FATAL_NUMBER_WORDS
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .source_integrity import multi_story_page_cards_reason
+from .source_final_fidelity_255 import source_final_fidelity_issues
 from .domain import ChannelMode
 
 
@@ -74,7 +75,8 @@ def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
             and _MULTIPLIER_RATE.search(str(final_text or ""))
             and not _SOURCE_MULTIPLIER.search(raw)):
         issues.append("FACT_UNSUPPORTED_RATE_MULTIPLIER")
-    return tuple(issues)
+    issues.extend(source_final_fidelity_issues(article, final_text))
+    return tuple(dict.fromkeys(issues))
 
 
 def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) -> tuple[str, ...]:
