@@ -72,7 +72,7 @@ def test_exact_failing_operator_publishers_migrate_once_no_article_replay(tmp_pa
         assert con.execute("SELECT source_id FROM articles WHERE id=501").fetchone()[0]==102
         assert con.execute("SELECT result FROM publication_delivery_journal WHERE id=7").fetchone()[0]=="COMMITTED"
         assert con.execute("SELECT url FROM sources WHERE id=902").fetchone()[0]=="https://shots.net/"
-        assert con.execute("SELECT success_count,failure_count FROM source_health WHERE source_id=102").fetchone()==(1083,408)
+        assert tuple(con.execute("SELECT success_count,failure_count FROM source_health WHERE source_id=102").fetchone())==(1083,408)
     assert recover_commercial_listings_262(store)["changed"]==0
 
 
