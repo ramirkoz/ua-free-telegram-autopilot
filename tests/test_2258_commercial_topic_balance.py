@@ -53,7 +53,7 @@ def test_topic_mix_uses_published_posts_and_reports_true_source_share():
     assert report["published_sample_size"] == 6
     assert report["theme_counts"]["tiny_living"] == 4
     assert report["theme_counts"]["pop_culture"] == 1
-    assert report["consecutive_theme_run"] == 3
+    assert report["consecutive_theme_run"] == 1  # newest real post is robotics, not tiny living
     assert report["source_published_total_7d"] == 6
     assert report["top_sources"][0]["name"] == "Yanko Design"
     assert report["top_sources"][0]["posts_7d"] == 4
@@ -97,3 +97,20 @@ def test_headline_similarity_is_advisory_not_event_dedupe():
     assert "Подібні заголовки" in advice
     assert "#1" in advice
     assert "НЕ доводять дубль" in advice
+
+
+def test_actual_consecutive_theme_run_is_counted_from_newest_publication():
+    store = FeedStore()
+    stamp = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat(timespec="seconds")
+    with store.connect() as con:
+        con.executemany(
+            "INSERT INTO articles VALUES(?,?,?,?,?,?,?)",
+            [
+                (10,2,199,"Tiny house with folding walls","Tiny house","PUBLISHED",stamp),
+                (11,2,199,"A tiny home for coastal vacations","Tiny home","PUBLISHED",stamp),
+                (12,2,199,"Another tiny cabin for hikers","Tiny cabin","PUBLISHED",stamp),
+            ],
+        )
+    report = commercial_topic_mix_7d_258(store, 2)
+    assert report["consecutive_theme_run"] == 3
+    assert report["theme_counts"]["tiny_living"] == 7
