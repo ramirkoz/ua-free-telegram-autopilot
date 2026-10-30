@@ -193,6 +193,16 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.2.29 source portfolio update failed; existing Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.2.61: change ONLY the exact known commercial Design Milk source
+            # after its recorded HTTP 403. Preserve source ID/history and operator
+            # custom URLs; revalidate the public syndicated feed on LIVE.
+            try:
+                from .commercial_feed_recovery_261 import recover_commercial_feed_261
+                feed_result = recover_commercial_feed_261(store)
+                event("ingest", "2.2.61 official syndicated commercial feed checked", **feed_result)
+            except Exception as exc:
+                event("ingest", "2.2.61 feed recovery failed; operator Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
