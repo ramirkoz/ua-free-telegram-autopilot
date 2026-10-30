@@ -236,6 +236,7 @@ def _install_supervisor_contract() -> None:
 def _install_ai_efficiency_contract() -> None:
     from . import editorial as ed
     from .domain import Decision
+    from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
 
     def combined_select(self, channel, article):
         p = channel.policy
@@ -248,14 +249,16 @@ def _install_ai_efficiency_contract() -> None:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(ed._v(article, "id", 0) or 0), detail=reason)
             return ed.EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
+        commercial = ed._is_commercial_editorial(channel)
+        commercial_rule = COMMERCIAL_READER_RULE_256 if commercial else ""
         prompt = f"""Ти CHANNEL-FIT + EDITORIAL-VALUE SELECTOR Telegram-автопілота RC102. Зроби ОДНЕ рішення одним викликом.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
+{commercial_rule}
 SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {ed._clean(ed._v(article, 'title', ''), 700)}\nSOURCE:\n{ed._source_pack(article, 3600)}
 Оціни channel fit і value одночасно. Усі оцінки 0..100. Навіть для reject поверни всі поля.
-Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"general_interest":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0}}"""
+Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"general_interest":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"story_class":"other","shareable_to_friend":false,"share_hook_quote":"","product_only":false}}"""
 
-        commercial = ed._is_commercial_editorial(channel)
         required = (
             ("commercial_mechanism", "consumer_behavior", "creative_execution", "measurable_result", "strategic_transferability", "why_now", "general_interest", "retellability", "culture_signal", "surprise_or_conflict", "consumer_relevance")
             if commercial else
@@ -296,6 +299,16 @@ SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: 
             value = dict(fit)
             value["reason"] = ed._clean(fit.get("reason"), 420)
             allowed, code, value_score = self._sold_value_allowed(value, score, ed._editorial_thresholds(channel))
+            # 2.2.56 is a reader-interest proof gate, never a source/domain ban.
+            if allowed:
+                reader_veto = commercial_reader_veto_256(article, value)
+                if reader_veto:
+                    event("editorial", "sold broad audience catalog rejected",
+                          channel_id=channel.id, article_id=int(ed._v(article, "id", 0) or 0),
+                          story_class=str(value.get("story_class", "")),
+                          source_quote=str(value.get("share_hook_quote", ""))[:180],
+                          reason=reader_veto)
+                    allowed, code = False, reader_veto.split(":")[0]
             profile = "commercial"
             prefix = "SOLD_VALUE"
         else:
