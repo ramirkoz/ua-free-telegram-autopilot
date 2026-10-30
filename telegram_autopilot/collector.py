@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .article_extractor import editorial_media_candidate, extract_article_content
+from .v2.page_publication_date_262 import published_date_from_article_html
 from .models import CollectedArticle, Source
 from .media import encode_media
 from .network import NetworkError, fetch_url
@@ -365,7 +366,8 @@ def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0, reader_fal
             allowed_content_types={"text/html", "application/xhtml+xml"},
             timeout=max(5.0, min(20.0, float(timeout))),
         )
-        extracted = extract_article_content(response.body.decode("utf-8", errors="replace"), item.url)
+        html = response.body.decode("utf-8", errors="replace")
+        extracted = extract_article_content(html, item.url)
         if extracted.title and item.title and not _article_title_identity(item.title, extracted.title):
             # A real HTTP 200 may be a neighboring news page or malformed feed URL.
             # Keep evidence of the failure so the publisher can fail closed.
@@ -378,6 +380,12 @@ def _enrich_article(item: CollectedArticle, *, timeout: float = 12.0, reader_fal
             item.media_urls = []
             return item
 
+        # v2.2.62: only the EXACT hydrated article may supply publication
+        # metadata; a missing/ambiguous date remains a strict source-date veto.
+        if not item.published_at:
+            page_date = published_date_from_article_html(html, item.url)
+            if page_date:
+                item.published_at = page_date
         if len(extracted.text) > len(item.raw_text):
             item.raw_text = extracted.text
         if extracted.layout_json:
@@ -673,7 +681,9 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
                     unique[key] = (score, order, url, text)
             scan_limit = max(8, min(120, int(page_candidate_scan_limit or 24)))
             reader_enabled = bool(getattr(source, "reader_fallback_enabled", False))
-            fetch_limit = max(4, min(40, int(page_fetch_limit or 8)))
+            # Explicitly recovered high-cost publishers may request two
+            # bounded hydrations; all existing defaults/configs >=4 unchanged.
+            fetch_limit = max(2, min(40, int(page_fetch_limit or 8)))
             if reader_enabled:
                 fetch_limit = min(fetch_limit, 2)
             candidates = sorted(unique.values(), key=lambda row: (-row[0], row[1]))[:scan_limit]
