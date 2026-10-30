@@ -36,6 +36,7 @@ from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressi
 from .editorial_tone_254 import editorial_tone_rules
 from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
+from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
 _PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
@@ -1565,6 +1566,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {blueprint.prompt_block()}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
+{UA_EDITORIAL_POLISH_RULE_259}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
@@ -1723,6 +1725,7 @@ SOURCE:
 {blueprint.prompt_block(final=True)}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
+{UA_EDITORIAL_POLISH_RULE_259}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
