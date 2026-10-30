@@ -573,13 +573,24 @@ class Publisher:
         # carried over in Data during a Windows Portable upgrade. Never use
         # discovered_at as a substitute for the publisher's source timestamp.
         with self.store.connect() as con:
-            started_row = con.execute(
-                "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
-            ).fetchone()
-        if started_row:
-            from .freshness_fence_241 import source_freshness_rejection
-            stale_reason = source_freshness_rejection(
-                str(article["source_published_at"] or ""), str(started_row[0] or "")
+            fence_rows = con.execute(
+                "SELECT key,value FROM meta WHERE key IN "
+                "('runtime_source_freshness_started_at','runtime_source_restart_checkpoints_260')"
+            ).fetchall()
+        fence_meta = {str(row["key"]): str(row["value"] or "") for row in fence_rows}
+        started_at = fence_meta.get("runtime_source_freshness_started_at", "")
+        if started_at:
+            from .freshness_fence_241 import restart_source_rejection
+            try:
+                checkpoints = json.loads(fence_meta.get("runtime_source_restart_checkpoints_260", "{}"))
+                if not isinstance(checkpoints, dict):
+                    checkpoints = {}
+            except (TypeError, ValueError):
+                checkpoints = {}
+            stale_reason = restart_source_rejection(
+                str(article["source_published_at"] or ""), started_at,
+                str(checkpoints.get(str(article["source_id"]), "")),
+                discovered_at=str(article["discovered_at"] or ""),
             )
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)

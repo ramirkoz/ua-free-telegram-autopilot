@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -14,7 +15,7 @@ from .ingest import IngestService
 from .loghub import event
 from .media_pipeline import processing_media_gate
 from .publisher import Publisher
-from .freshness_fence_241 import source_freshness_rejection
+from .freshness_fence_241 import source_freshness_rejection, restart_source_rejection
 from .storage import V2Store
 
 
@@ -116,6 +117,7 @@ class RuntimeEngine:
         self._lock = threading.RLock()
         self.states: dict[int, ChannelRuntimeState] = {}
         self.started_at: str = ""
+        self.restart_checkpoints_260: dict[str, str] = {}
 
     @staticmethod
     def _touch(state: ChannelRuntimeState, phase: str | None = None) -> None:
@@ -150,14 +152,33 @@ class RuntimeEngine:
         self.store.recover_stale_leases()
         self.stop_event.clear()
         self.started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        # A new runtime is a hard source-time cutover on EVERY restart. Keep the
-        # marker in the existing DB so the publisher/collectors share one fence.
+        # 2.2.60: snapshot each source's LAST successful pre-restart poll
+        # BEFORE collectors can update last_checked_at. This is a bounded
+        # continuity window, NOT permission to replay a channel backlog.
+        # Preserve the original runtime marker and DB schema.
         with self.store.connect() as con:
+            checkpoints = con.execute(
+                """SELECT id,last_checked_at FROM sources
+                   WHERE enabled=1 AND initialized=1 AND COALESCE(last_error,'')='' 
+                     AND COALESCE(last_checked_at,'')<>''"""
+            ).fetchall()
+            self.restart_checkpoints_260 = {
+                str(row["id"]): str(row["last_checked_at"])
+                for row in checkpoints
+            }
+            con.execute(
+                "INSERT INTO meta(key,value) VALUES('runtime_source_restart_checkpoints_260',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(self.restart_checkpoints_260, separators=(",", ":")),),
+            )
             con.execute(
                 "INSERT INTO meta(key,value) VALUES('runtime_source_freshness_started_at',?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (self.started_at,),
             )
+        event("ingest", "restart source checkpoint snapshot",
+              source_count=len(self.restart_checkpoints_260), strict_fence_preserved=True,
+              max_gap_minutes=120, no_old_ready_replay=True)
         event("ai", "startup live AI probes skipped; health will update on real work or explicit manual test")
         for row in self.store.list_channels(enabled_only=True):
             self._start_channel(int(row["id"]))
@@ -367,8 +388,10 @@ class RuntimeEngine:
         # Existing DB rows cannot be rescued into publication by a restart.
         # Apply the source's own date before dedupe, media or any paid AI.
         if self.started_at:
-            stale_reason = source_freshness_rejection(
-                str(article["source_published_at"] or ""), self.started_at
+            stale_reason = restart_source_rejection(
+                str(article["source_published_at"] or ""), self.started_at,
+                self.restart_checkpoints_260.get(str(article["source_id"]), ""),
+                discovered_at=str(article["discovered_at"] or ""),
             )
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)

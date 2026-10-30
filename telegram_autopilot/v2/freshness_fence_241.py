@@ -53,3 +53,49 @@ def source_freshness_rejection(
     if source < started:
         return "SOURCE_PREDATES_RUNTIME_START"
     return ""
+
+
+
+def restart_source_rejection(
+    source_published_at: str,
+    runtime_started_at: str,
+    source_last_successful_check_at: str,
+    *,
+    discovered_at: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """v2.2.60: bounded continuation of a previously polled source.
+
+    A documented source timestamp from the gap since its last successful poll
+    can be considered on the CURRENT local day, even if the operator upgraded
+    in between. It must be a new DB discovery after THIS runtime started, not
+    an old READY row or a Telegram delivery with uncertain outcome.
+
+    Missing, future, previous-day, long-downtime and unverified source dates
+    keep the original fail-closed RC241 behaviour. Calling at ingest without
+    discovered_at checks time only; storage identity and delivery preflight are
+    independently mandatory.
+    """
+    reason = source_freshness_rejection(
+        source_published_at, runtime_started_at, now=now
+    )
+    if reason != "SOURCE_PREDATES_RUNTIME_START":
+        return reason
+    published = _aware(source_published_at)
+    started = _aware(runtime_started_at)
+    checkpoint = _aware(source_last_successful_check_at)
+    if not (published and started and checkpoint):
+        return reason
+    # No replay across a long offline period and no untrusted future checkpoint.
+    if not (checkpoint < started and timedelta(0) <= started - checkpoint <= timedelta(hours=2)):
+        return reason
+    if not (checkpoint <= published < started):
+        return reason
+    current = now if now is not None else datetime.now().astimezone()
+    if current.tzinfo is None or checkpoint.astimezone(current.tzinfo).date() != current.date():
+        return reason
+    if discovered_at is not None:
+        discovered = _aware(discovered_at)
+        if not discovered or discovered < started or discovered > current.astimezone(timezone.utc) + timedelta(minutes=2):
+            return reason
+    return ""
