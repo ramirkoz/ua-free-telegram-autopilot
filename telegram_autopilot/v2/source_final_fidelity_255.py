@@ -153,7 +153,7 @@ def source_final_fidelity_issues(article: Any, final_text: str) -> tuple[str, ..
     # The local-news operator described five MLRS strikes as "most intense"
     # even though the same source listed 624 drone strikes. Only this
     # unmistakable numerical category reversal is covered here.
-    if _MAX_OUTPUT.search(out) and not _QUALIFIERS.search(out):
+    if _MAX_OUTPUT.search(out) and not _MAX_OUTPUT.search(source) and not _QUALIFIERS.search(out):
         if re.search(r"(?iu)\bрсзв\b", source) and re.search(r"(?iu)\b(?:бпла|безпілотник\w*|дрон\w*)\b", source):
             drone_counts = [int(x or y) for m in _DRONE_COUNT.finditer(source) for x, y in [m.groups()]]
             # Require the source to contain five (or another 1-9 count) for MLRS.
