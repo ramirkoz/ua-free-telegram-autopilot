@@ -163,6 +163,13 @@ def source_final_fidelity_issues(article: Any, final_text: str) -> tuple[str, ..
                     r".{0,100}\bрсзв", source
                 )
             ]
+            # Ukrainian source also writes small counts as words: «п’ять разів».
+            for small_word, number in (("п'ять", 5), ("п’ять", 5), ("чотири", 4), ("три", 3), ("два", 2)):
+                if re.search(
+                    rf"(?iu)\b{re.escape(small_word)}\s+раз\w*.{{0,85}}\bрсзв",
+                    source,
+                ):
+                    rocket_counts.append(number)
             if rocket_counts and drone_counts and min(rocket_counts) < max(drone_counts):
                 issues.append("FACT_UNSUPPORTED_CATEGORY_SUPERLATIVE_255")
 
