@@ -14,6 +14,7 @@ from . import ingest as base
 from .loghub import event
 from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
+from .commercial_diversity_257 import commercial_published_share_7d
 from .commercial_fetch_effort_247 import commercial_page_fetch_limits
 from .freshness_fence_241 import source_freshness_rejection
 from .linked_teaser_hydration_253 import teaser_page_target, hydrate_linked_teaser
@@ -164,7 +165,24 @@ class BoundedStrictIngestService(StrictIngestService):
             # v2.2.40: recent *published* results, not just raw additions,
             # determine the mild fast-first weight. Noncommercial untouched.
             yield_rows = commercial_source_yield_rows_24h(self.store, channel_id)
-            sources = prioritize_commercial_sources(sources, health_rows, yield_rows)
+            share_7d = commercial_published_share_7d(self.store, channel_id)
+            sources = prioritize_commercial_sources(
+                sources, health_rows, yield_rows,
+                published_share_7d=share_7d["shares"],
+                published_total_7d=share_7d["total_posts"],
+                published_sources_7d=share_7d["source_count"],
+            )
+            if share_7d["total_posts"] >= 12:
+                event(
+                    "ingest", "commercial source diversity advisory 7d",
+                    channel_id=channel_id, window_days=7,
+                    published_total_7d=share_7d["total_posts"],
+                    source_count=share_7d["source_count"],
+                    largest_share=round(max(share_7d["shares"].values(), default=0.0), 4),
+                    first_sources=[source.name for source in sources[:5]],
+                    advisory_only=True, no_source_disabled=True,
+                    no_post_quota=True,
+                )
             page_limits_by_source = commercial_page_fetch_limits(
                 sources, health_rows, yield_rows,
                 page_fetch_limit=int(getattr(cfg, "page_fetch_limit", 8)),
@@ -185,7 +203,7 @@ class BoundedStrictIngestService(StrictIngestService):
                     channel_id=channel_id, source_count=len(sources),
                     first_sources=[source.name for source in sources[:4]],
                     unmodified_source_set=True, cooldowns_preserved=True,
-                    fast_first_metric="published_source_cohort_24h",
+                    fast_first_metric="published_source_cohort_24h_with_seven_day_concentration_advisory",
                 )
 
         def fetch_one(source: Source) -> tuple[list[CollectedArticle], int]:

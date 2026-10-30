@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from .commercial_diversity_257 import source_concentration_penalty_257
+
 
 def _value(row: Any, key: str, default: Any = None) -> Any:
     try:
@@ -21,6 +23,9 @@ def _value(row: Any, key: str, default: Any = None) -> Any:
 def prioritize_commercial_sources(
     sources: Iterable[Any], health_rows: Iterable[Any],
     yield_rows: Iterable[Any] | None = None,
+    *, published_share_7d: dict[int, float] | None = None,
+    published_total_7d: int = 0,
+    published_sources_7d: int = 0,
 ) -> list[Any]:
     """2.2.40: schedule the same source set by *published* yield, not raw intake.
 
@@ -65,8 +70,12 @@ def prioritize_commercial_sources(
             benefit = low_yield_penalty = short_penalty = 0
         slow_penalty = min(24, duration_ms // 5000) if last_added == 0 else 0
         failure_penalty = 12 if outcome in {"TIMEOUT", "NETWORK", "ERROR", "HTTP_403", "HTTP_429"} else 0
+        diversity_penalty = source_concentration_penalty_257(
+            int(source.id), published_share_7d or {},
+            total_posts=published_total_7d, source_count=published_sources_7d,
+        )
         return (
-            baseline - benefit + low_yield_penalty + short_penalty + slow_penalty + failure_penalty,
+            baseline - benefit + low_yield_penalty + short_penalty + slow_penalty + failure_penalty + diversity_penalty,
             baseline, int(source.id),
         )
 

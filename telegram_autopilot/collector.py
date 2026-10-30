@@ -435,6 +435,14 @@ def hydrate_article_page(url: str, title: str = "", raw_text: str = "", media_ur
 
 
 class _LinkParser(HTMLParser):
+    # Void HTML tags never add an element level. Previously each image / br
+    # incremented _depth but had no closing tag, so the enclosing <a> never
+    # matched its closing depth. Image-heavy campaign sites yielded EMPTY.
+    _VOID_TAGS = frozenset({
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    })
+
     def __init__(self, base: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base = base
@@ -445,8 +453,10 @@ class _LinkParser(HTMLParser):
         self._a_depth: int | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._depth += 1
-        if tag.lower() == "a":
+        tag = tag.lower()
+        if tag not in self._VOID_TAGS:
+            self._depth += 1
+        if tag == "a":
             href = dict(attrs).get("href") or ""
             if href:
                 self._href = urljoin(self.base, href)
@@ -458,12 +468,19 @@ class _LinkParser(HTMLParser):
             self._text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
-        if self._a_depth == self._depth and tag.lower() == "a":
+        tag = tag.lower()
+        if self._a_depth == self._depth and tag == "a":
             text = " ".join("".join(self._text).split())
             if text and self._href.startswith(("http://", "https://")):
                 self.links.append((self._href, text))
             self._href = ""; self._text = []; self._a_depth = None
-        self._depth = max(0, self._depth - 1)
+        if tag not in self._VOID_TAGS:
+            self._depth = max(0, self._depth - 1)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag.lower() not in self._VOID_TAGS:
+            self.handle_endtag(tag)
 
 
 class _TelegramChannelParser(HTMLParser):
