@@ -34,6 +34,7 @@ from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
 from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
 from .editorial_tone_254 import editorial_tone_rules
+from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
 _PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
@@ -1552,6 +1553,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {reader_rules}
 {blueprint.prompt_block()}
 {tone_rule}
+{SOURCE_FINAL_FIDELITY_RULE_255}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
@@ -1709,6 +1711,7 @@ SOURCE:
 {reader_rules}
 {blueprint.prompt_block(final=True)}
 {tone_rule}
+{SOURCE_FINAL_FIDELITY_RULE_255}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
