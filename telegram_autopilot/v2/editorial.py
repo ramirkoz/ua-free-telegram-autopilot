@@ -34,6 +34,7 @@ from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
 from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
 from .editorial_tone_254 import editorial_tone_rules
+from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
@@ -1339,6 +1340,7 @@ SOURCE:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
+        commercial_audience_instruction = COMMERCIAL_READER_RULE_256 if _is_commercial_editorial(channel) else ""
         science_audience_instruction = (
             "SCIENCE FOR GENERAL READERS: A microcontroller, chip, power, firmware, "
             "clock-frequency or benchmark tweak without a demonstrated broad outcome "
@@ -1351,6 +1353,7 @@ SOURCE:
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {science_audience_instruction}
+{commercial_audience_instruction}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
 Якщо decision="reject", reject_code — РІВНО один із: off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other.
@@ -1389,6 +1392,10 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
             allowed, code, value_score = self._sold_value_allowed(value, score, _editorial_thresholds(channel))
+            if allowed:
+                catalog_veto = commercial_reader_veto_256(article, value)
+                if catalog_veto:
+                    allowed, code = False, catalog_veto.split(":")[0]
             if not allowed:
                 return EditorialOutcome(Decision.REJECT, reason=f"SOLD_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
             return EditorialOutcome(Decision.PUBLISH, reason=f"SOLD_VALUE_PASS score={value_score}; lane={code}; fit={score}; learning={learning.fit_adjustment:+d}", angle=_clean(fit.get("angle"), 500), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
@@ -1412,12 +1419,13 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 
     def _sold_value_gate(self, article: Any) -> dict[str, Any]:
         prompt = f"""Ти COMMERCIAL + BROAD-AUDIENCE EDITORIAL VALUE GATE. Матеріал уже пройшов channel fit.
+{COMMERCIAL_READER_RULE_256}
 Оціни 0..100 дві незалежні речі.
 1) Профільний commercial case: commercial_mechanism, consumer_behavior, creative_execution, measurable_result, strategic_transferability, why_now.
 2) Цікавість широкій аудиторії: general_interest, retellability, culture_signal, surprise_or_conflict, consumer_relevance.
 ВАЖЛИВО: матеріал НЕ мусить бути навчальним маркетинговим кейсом. Попкультура × бренд, мем, вірусний феномен, дивний товар/ціна, незвична колаборація, споживча поведінка, техно/культурний сюжет або брендова провокація можуть бути сильними самі по собі, якщо їх хочеться дочитати й переказати людині поза професією.
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
-Поверни ТІЛЬКИ JSON: {{"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"why_now":0,"general_interest":0,"retellability":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"reason":"коротко"}}"""
+Поверни ТІЛЬКИ JSON: {{"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"why_now":0,"general_interest":0,"retellability":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"story_class":"other","shareable_to_friend":false,"share_hook_quote":"","product_only":false,"reason":"коротко"}}"""
 
         def parse(raw: str):
             obj = _parse_json(raw)
