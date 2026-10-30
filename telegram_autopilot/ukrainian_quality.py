@@ -25,6 +25,15 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bпри\s+несподіваному\s+русі\b", re.I), "під час несподіваного руху"),
     (re.compile(r"\bверсія\s+була\s+сировиною\b", re.I), "версія була сирою"),
     (re.compile(r"\bперша\s+версія\s+була\s+сировиною\b", re.I), "перша версія була сирою"),
+    # 2.2.59: attested operator SOURCE->FINAL language fixes, 30 Oct.
+    # Only local orthography and unambiguous syntax. No speculative rewriting.
+    (re.compile(r"\bСпроект"), "Спроєкт"),
+    (re.compile(r"\bспроект"), "спроєкт"),
+    (re.compile(r"\bПроектув"), "Проєктув"),
+    (re.compile(r"\bпроектув"), "проєктув"),
+    (re.compile(r"\bспроєктували\s+компанія\b"), "спроєктувала компанія"),
+    (re.compile(r"\bповара\s+в\s+шкільну\s+їдальню\b"), "кухаря до шкільної їдальні"),
+    (re.compile(r"(?m)([.!?][ \t]+)причиною\b"), r"\1Причиною"),
     # 2.2.54: attested CTRL+UA live copyedit of a science limitation.
     # Same meaning, no new inference or causal claim.
     (re.compile(r"\bне\s+доказує\s+причинність\b", re.I),
