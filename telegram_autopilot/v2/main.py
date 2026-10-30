@@ -203,6 +203,16 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.2.61 feed recovery failed; operator Data retained",
                       level=40, detail=str(exc)[:1200])
+            # v2.2.62: exact observed slow/empty operator commercial listings.
+            # Source identity/history unchanged; new page dates require actual
+            # article-owned publication metadata, never a discovery timestamp.
+            try:
+                from .commercial_listing_recovery_262 import recover_commercial_listings_262
+                listing_result = recover_commercial_listings_262(store)
+                event("ingest", "2.2.62 publisher listings checked", **listing_result)
+            except Exception as exc:
+                event("ingest", "2.2.62 listings unchanged after failed migration",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile

@@ -123,6 +123,7 @@ class BoundedStrictIngestService(StrictIngestService):
         # channel normally prefers public feeds. Used for broken/stale feeds;
         # no hardcoded commercial channel or publisher names.
         page_first_source_ids: set[int] = set()
+        recovered_page_caps: dict[int, int] = {}
         sources: list[Source] = []
         for row in self.store.sources_for_channel(channel_id, enabled_only=True):
             beat()
@@ -131,6 +132,16 @@ class BoundedStrictIngestService(StrictIngestService):
             except (ValueError, TypeError):
                 source_settings = {}
             if isinstance(source_settings, dict):
+                listing_262 = source_settings.get("commercial_listing_recovery_262")
+                if isinstance(listing_262, dict) and (
+                    listing_262.get("publisher_page_only") is True
+                ):
+                    try:
+                        cap = int(listing_262.get("max_article_page_hydrations_per_cycle", 0))
+                    except (ValueError, TypeError):
+                        cap = 0
+                    if 2 <= cap <= 4 and str(row["kind"]) == "page":
+                        recovered_page_caps[int(row["id"])] = cap
                 override = source_settings.get("commercial_sources_229")
                 if isinstance(override, dict) and override.get("force_page_first") is True:
                     page_first_source_ids.add(int(row["id"]))
@@ -223,6 +234,8 @@ class BoundedStrictIngestService(StrictIngestService):
                 (int(getattr(cfg, "page_candidate_scan_limit", 24)),
                  int(getattr(cfg, "page_fetch_limit", 8))),
             )
+            if commercial_profile and source.id in recovered_page_caps:
+                page_fetch = min(page_fetch, recovered_page_caps[source.id])
             # Editorial sources have the original fetch path. For commercial
             # feeds, only enrich stories actually eligible AFTER runtime start;
             # source items still reach the ordinary date/dedupe pre-AI gate.
