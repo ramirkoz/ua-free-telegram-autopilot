@@ -16,7 +16,7 @@ from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
 from .commercial_diversity_257 import commercial_published_share_7d
 from .commercial_fetch_effort_247 import commercial_page_fetch_limits
-from .freshness_fence_241 import source_freshness_rejection
+from .freshness_fence_241 import source_freshness_rejection, restart_source_rejection
 from .linked_teaser_hydration_253 import teaser_page_target, hydrate_linked_teaser
 
 
@@ -86,13 +86,23 @@ class BoundedStrictIngestService(StrictIngestService):
         return changed
 
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
-        added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = stale_filtered = 0
+        added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = stale_filtered = restart_recovered = 0
         cfg = self.store.get_channel(channel_id)
         with self.store.connect() as con:
             runtime_row = con.execute(
                 "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
             ).fetchone()
         runtime_started_at = str(runtime_row[0] or "") if runtime_row else ""
+        with self.store.connect() as con:
+            checkpoints_row = con.execute(
+                "SELECT value FROM meta WHERE key='runtime_source_restart_checkpoints_260'"
+            ).fetchone()
+        try:
+            source_checkpoints = json.loads(str(checkpoints_row[0])) if checkpoints_row else {}
+            if not isinstance(source_checkpoints, dict):
+                source_checkpoints = {}
+        except (ValueError, TypeError):
+            source_checkpoints = {}
         # 2.2.53: at most TWO external article fetch attempts across the
         # ENTIRE channel collection cycle, even with parallel Telegram sources.
         # This count is consumed, not recycled after each finished request.
@@ -217,8 +227,9 @@ class BoundedStrictIngestService(StrictIngestService):
             # feeds, only enrich stories actually eligible AFTER runtime start;
             # source items still reach the ordinary date/dedupe pre-AI gate.
             freshness = (
-                (lambda item: not source_freshness_rejection(
-                    str(item.published_at or ""), runtime_started_at))
+                (lambda item: not restart_source_rejection(
+                    str(item.published_at or ""), runtime_started_at,
+                    str(source_checkpoints.get(str(source.id), ""))))
                 if commercial_profile and runtime_started_at else None
             )
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
@@ -237,8 +248,9 @@ class BoundedStrictIngestService(StrictIngestService):
                 items = collect_strict(source, **kwargs)
             if source.kind == "telegram":
                 for item in items:
-                    if runtime_started_at and source_freshness_rejection(
-                        str(item.published_at or ""), runtime_started_at
+                    if runtime_started_at and restart_source_rejection(
+                        str(item.published_at or ""), runtime_started_at,
+                        str(source_checkpoints.get(str(source.id), "")),
                     ):
                         continue
                     if not teaser_page_target(item):
@@ -265,14 +277,28 @@ class BoundedStrictIngestService(StrictIngestService):
             return items, int(max(0.0, time.monotonic() - started) * 1000)
 
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
-            nonlocal added, seen, known_external, known_url, sources_with_new, stale_filtered
+            nonlocal added, seen, known_external, known_url, sources_with_new, stale_filtered, restart_recovered
             seen += len(items)
             source_added = 0
             for item in items:
-                stale_reason = source_freshness_rejection(
-                    str(item.published_at or ""), runtime_started_at
+                stale_reason = restart_source_rejection(
+                    str(item.published_at or ""), runtime_started_at,
+                    str(source_checkpoints.get(str(source.id), "")),
                 ) if runtime_started_at else ""
                 if stale_reason:
+                    stale_filtered += 1
+                    continue
+                # Old/cross-source identities remain under the existing store and
+                # Telegram delivery ledger. Never rescue existing pre-start rows.
+                previous_reason = self._existing_reason(
+                    channel_id, source.id, item.external_id, item.url
+                )
+                originally_prestart = bool(runtime_started_at) and (
+                    source_freshness_rejection(
+                        str(item.published_at or ""), runtime_started_at
+                    ) == "SOURCE_PREDATES_RUNTIME_START"
+                )
+                if originally_prestart and previous_reason:
                     stale_filtered += 1
                     continue
                 if '"source_reader"' in str(item.article_layout_json or ""):
@@ -296,6 +322,8 @@ class BoundedStrictIngestService(StrictIngestService):
                 if not before:
                     added += 1
                     source_added += 1
+                    if originally_prestart:
+                        restart_recovered += 1
                 beat()
             if source_added:
                 sources_with_new += 1
@@ -402,6 +430,11 @@ class BoundedStrictIngestService(StrictIngestService):
             pool.shutdown(wait=False, cancel_futures=True)
             beat()
 
+        if restart_recovered:
+            event("ingest", "restart checkpoint admitted unseen current-day sources",
+                  channel_id=channel_id, admitted=restart_recovered,
+                  max_gap_minutes=120, identity_dedupe_preserved=True,
+                  telegram_unknown_replay=False)
         if stale_filtered:
             event("ingest", "source day/start fence skipped old items",
                   channel_id=channel_id, skipped=stale_filtered,
@@ -410,7 +443,7 @@ class BoundedStrictIngestService(StrictIngestService):
             "seen": seen, "added": added, "errors": errors,
             "skipped_cooldown": skipped, "timed_out_sources": timed_out,
             "known_external_id": known_external, "known_canonical_url": known_url, "sources_with_new": sources_with_new,
-            "stale_filtered": stale_filtered,
+            "stale_filtered": stale_filtered, "restart_checkpoint_admitted": restart_recovered,
         }
 
 
