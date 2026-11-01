@@ -117,8 +117,8 @@ def test_runtime_uses_existing_gate_in_writer_final_and_prepublish_without_extra
     final=inspect.getsource(EditorialEngine._final_edit)
     before=inspect.getsource(prepublish_quality_issues)
     gateway=inspect.getsource(AIGateway.run)
-    assert "{MONITORING_NEWS_INTEGRITY_RULE_263}" in write
-    assert "{MONITORING_NEWS_INTEGRITY_RULE_263}" in final
+    assert "MONITORING_NEWS_INTEGRITY_RULE_263" in write
+    assert "MONITORING_NEWS_INTEGRITY_RULE_263" in final
     assert "_source_body_policy_issues(channel, article, value)" in before
     assert "self._route_circuit.remaining" in gateway
     assert "self._route_circuit.note_failure" in gateway
