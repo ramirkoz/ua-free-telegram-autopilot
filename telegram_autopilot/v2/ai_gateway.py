@@ -774,6 +774,10 @@ class AIGateway:
         allowed_providers: Iterable[str] | None = None,
         purpose: str = "content",
     ) -> AIResult:
+        # Test/runtime subclasses may bypass __init__; retain a fresh
+        # per-gateway circuit without changing operator state or provider config.
+        if not hasattr(self, "_route_circuit"):
+            self._route_circuit = RouteContractCircuit()
         text_prompt = str(prompt or "").strip()
         if not text_prompt:
             raise ValueError("Empty AI prompt")
