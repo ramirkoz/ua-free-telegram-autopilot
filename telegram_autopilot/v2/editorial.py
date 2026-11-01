@@ -37,6 +37,7 @@ from .editorial_tone_254 import editorial_tone_rules
 from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
+from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
 _PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
@@ -411,6 +412,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    # 2.2.63: original short social self-promo is not civic news.
+    source_promo = monitoring_source_promo_reason(article)
+    if source_promo:
+        return source_promo
+    source_unverified = monitoring_unverified_teaser_reason(article)
+    if source_unverified:
+        return source_unverified
     from .monitoring_source_voice_230 import source_voice_output_reason
     voice_issue = source_voice_output_reason(article, text)
     if voice_issue:
@@ -739,6 +747,9 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
 def _source_body_policy_issues(channel: ChannelConfig, article: Any, value: str) -> tuple[str, ...]:
     issues = list(source_body_attribution_issues(channel, article, value))
     if channel.mode == ChannelMode.MONITORING:
+        cta_issue = monitoring_copied_cta_issue(value)
+        if cta_issue:
+            issues.append(cta_issue)
         source = str(_v(article, "raw_text", "") or "")
         source_name = str(_v(article, "source_name", "") or "")
         excluded = set(article_non_actionable_urls(article))
@@ -1567,6 +1578,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
+{MONITORING_NEWS_INTEGRITY_RULE_263 if channel.mode == ChannelMode.MONITORING else ''}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
@@ -1726,6 +1738,7 @@ SOURCE:
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
+{MONITORING_NEWS_INTEGRITY_RULE_263 if channel.mode == ChannelMode.MONITORING else ''}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}

@@ -69,6 +69,13 @@ def source_completeness_issue(article: Any) -> str:
     raw = _read(article, "raw_text")
     title = _read(article, "title")
     heading = title[:430]
+    # 2.2.63: the 31 Oct LIVE anonymous restaurant complaint alluded to
+    # alleged contents of a photo without identifying them in words.
+    # Rewriting an unexplained insinuation cannot become factual news.
+    from .monitoring_news_integrity_263 import monitoring_unverified_teaser_reason
+    uncertain = monitoring_unverified_teaser_reason(article)
+    if uncertain:
+        return uncertain
     if not _TEASER.search(raw):
         return ""
     if _RENAME.search(heading) and not _NEW_NAME.search(raw):
