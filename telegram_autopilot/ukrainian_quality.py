@@ -6,6 +6,10 @@ import re
 # autopilot posts.  They only repair spelling/standard Ukrainian wording and do
 # not add facts, names, numbers, attribution or new conclusions.
 _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 2.2.63: LIVE #87860 study age-range agreement; narrow participant-only
+    # construction preserves the exact reported 210 people and 11–18 ages.
+    (re.compile(r"(?iu)\b(учасник(?:ів|и)|підлітк(?:ів|и)|діт(?:ей|и))\s+(\d{1,2})\s*[–—-]\s*(\d{1,2})\s+рік\b"),
+     r"\1 віком від \2 до \3 років"),
     (re.compile(r"\bнеочіківан", re.I), "несподіван"),
     (re.compile(r"\bчехол\b", re.I), "чохол"),
     (re.compile(r"\bчехла\b", re.I), "чохла"),
@@ -224,6 +228,8 @@ def language_quality_issues(value: str) -> tuple[str, ...]:
 
 
 _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?iu)\b(?:учасник(?:ів|и)|підлітк(?:ів|и)|діт(?:ей|и))\s+\d{1,2}\s*[–—-]\s*\d{1,2}\s+рік\b"),
+     "неграмотний віковий діапазон «учасників 11–18 рік»"),
     # LIVE #74292: a correct draft was corrupted by the final AI editor.
     # Hard reject unknown nonsense instead of guessing an unsafe replacement.
     (re.compile(r"(?iu)\bпередзвіри\b"), "вигадане слово «передзвіри» у фінальному тексті"),

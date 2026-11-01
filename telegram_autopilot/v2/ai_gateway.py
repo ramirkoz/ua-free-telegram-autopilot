@@ -17,6 +17,7 @@ from .loghub import event
 from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
+from .ai_route_circuit_263 import RouteContractCircuit
 from .qa_adjacent_word_239 import repair_adjacent_repeated_word
 from .storage import V2Store, now_iso
 
@@ -292,6 +293,7 @@ class AIGateway:
 
     def __init__(self, store: V2Store):
         self.store = store
+        self._route_circuit = RouteContractCircuit()
 
     def _provider_call_lock(self, provider: str) -> threading.Lock:
         return self._PROVIDER_CALL_LOCKS.setdefault(str(provider), threading.Lock())
@@ -827,6 +829,16 @@ class AIGateway:
                 continue
             if self._model_blocked(provider, slot.model):
                 continue
+            # 2.2.63: recurring reasoning-only and 120s CPU timeouts are
+            # model-specific and temporary. Other configured routes remain live.
+            circuit_delay = self._route_circuit.remaining(provider, slot.model)
+            if circuit_delay > 0:
+                event("ai", "model output-contract cooldown skip",
+                      provider=provider, model=slot.model,
+                      remaining_seconds=round(circuit_delay),
+                      purpose=str(purpose or "content"),
+                      operator_configuration_unchanged=True)
+                continue
 
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
@@ -955,6 +967,7 @@ class AIGateway:
                                     break
                                 continue
 
+                self._route_circuit.clear(provider, slot.model)
                 self._mark_success(provider, slot.model, runtime_model)
                 summary = self._refresh_provider_summary(provider, cfg)
                 event(
@@ -970,6 +983,11 @@ class AIGateway:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
+                if self._route_circuit.note_failure(provider, slot.model, exc):
+                    event("ai", "model output-contract temporary cooldown",
+                          provider=provider, model=slot.model,
+                          purpose=str(purpose or "content"),
+                          operator_configuration_unchanged=True)
                 if scope == "provider":
                     provider_suppressed.add(provider)
                 if suppress_reasoning_only_route(provider, exc):
