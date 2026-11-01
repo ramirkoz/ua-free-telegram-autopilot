@@ -686,7 +686,22 @@ def collect_source(source: Source, *, page_prefer_feed: bool=False, page_candida
             fetch_limit = max(2, min(40, int(page_fetch_limit or 8)))
             if reader_enabled:
                 fetch_limit = min(fetch_limit, 2)
-            candidates = sorted(unique.values(), key=lambda row: (-row[0], row[1]))[:scan_limit]
+            ranked = sorted(unique.values(), key=lambda row: (-row[0], row[1]))
+            if page_url_eligible is None:
+                candidates = ranked[:scan_limit]
+            else:
+                # 2.2.64: previously ingested high-ranked listing links can
+                # consume the whole top-N window. Scan a bounded wider set
+                # of links BEFORE applying the new-article scan limit.
+                # Expensive page hydration and its deadline stay unchanged.
+                candidates = []
+                check_limit = min(len(ranked), max(48, min(160, scan_limit * 4)))
+                for entry in ranked[:check_limit]:
+                    if entry[0] < -4 or not page_url_eligible(entry[2]):
+                        continue
+                    candidates.append(entry)
+                    if len(candidates) >= scan_limit:
+                        break
             result: list[CollectedArticle] = []
             deadline = time.monotonic() + 75.0
             attempted = 0

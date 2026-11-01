@@ -135,9 +135,24 @@ def commercial_topic_advisory_258(store: Any, channel_id: int, article: Any) -> 
     similar = sum(commercial_theme_258(row) == theme for row in last_six) if theme != "other" else 0
     echoed = [int(_get(row, "id", 0) or 0) for row in rows
               if _headline_echo(article, row)]
-    if similar < 2 and not echoed:
+    # 2.2.64: many articles are lexically "other". A dominant original
+    # publisher still needs an individual strong reader story, not a quota.
+    source_id = int(_get(article, "source_id", 0) or 0)
+    concentration = 0.0
+    if source_id:
+        share = commercial_published_share_7d(store, channel_id)
+        if share["total_posts"] >= 20 and share["source_count"] >= 2:
+            concentration = float(share["shares"].get(source_id, 0.0))
+    concentrated = concentration >= 0.60
+    if similar < 2 and not echoed and not concentrated:
         return ""
-    pieces = ["КОНТЕКСТ ОПУБЛІКОВАНОЇ СТРІЧКИ v2.2.58 (лише порада, НЕ заборона):"]
+    pieces = ["КОНТЕКСТ ОПУБЛІКОВАНОЇ СТРІЧКИ v2.2.64 (лише порада, НЕ заборона):"]
+    if concentrated:
+        pieces.append(
+            f"Це джерело вже дало {concentration:.0%} публікацій за 7 днів. "
+            "Це НЕ квота і НЕ причина відхилення: потрібен конкретний новий "
+            "фактологічний сюжет для широкої аудиторії, а не ще один пересічний товар."
+        )
     if similar >= 2:
         pieces.append(f"Лексична тема «{theme}» зустрілася {similar} раз(и) серед останніх {len(last_six)} дописів.")
     if echoed:
