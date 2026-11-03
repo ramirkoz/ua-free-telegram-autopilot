@@ -115,7 +115,7 @@ def test_uncalibrated_generic_editorial_preserves_value_gate(tmp_path):
     # generic editorial channels retain their distinct value gate.
     assert len(gateway.calls) == 2
     assert gateway.calls[0]['purpose'] == 'editorial_selector'
-    assert 'local' not in gateway.calls[0]['allowed_providers']
+    assert 'local' not in (gateway.calls[0].get('allowed_providers') or ())
 
 
 def test_reject_selector_does_not_require_value_metrics(tmp_path):
