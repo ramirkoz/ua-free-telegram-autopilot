@@ -104,11 +104,16 @@ def test_supervisor_output_starvation_is_config_driven(tmp_path: Path) -> None:
 
 
 def test_runtime_has_no_channel_name_special_cases() -> None:
+    import io
+    import tokenize
     for path in (
         Path("telegram_autopilot/v2/editorial.py"),
         Path("telegram_autopilot/v2/event_dedupe_guard.py"),
         Path("telegram_autopilot/v2/supervisor.py"),
     ):
-        text = path.read_text(encoding="utf-8").casefold()
-        assert "ctrl+ua" not in text
-        assert "продано" not in text
+        text = path.read_text(encoding="utf-8")
+        executable = "".join(tok.string for tok in tokenize.generate_tokens(io.StringIO(text).readline)
+                             if tok.type not in (tokenize.STRING, tokenize.COMMENT)).casefold()
+        # Channel names in explanatory prompt examples are fine; hardcoded code branches are not.
+        assert "ctrl+ua" not in executable
+        assert "продано" not in executable

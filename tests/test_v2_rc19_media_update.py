@@ -114,7 +114,8 @@ def test_pre_rc19_telegram_snapshot_is_quarantined(tmp_path: Path) -> None:
     row = store.get_article(article_id)
     assert row["stage"] == "READY" and row["decision"] == "PUBLISH"
     assert row["final_text"] == "stale ready text"
-    assert row["blocked_by"] == "NONE"
+    # Newest source/media safety quarantines unverified legacy Telegram media.
+    assert row["blocked_by"] == "MEDIA"
     with store.connect() as con:
         job = con.execute("SELECT state FROM jobs WHERE article_id=?", (article_id,)).fetchone()
     assert job["state"] == "DONE"

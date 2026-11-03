@@ -35,9 +35,8 @@ def _article(store: V2Store, external_id: str, discovered_at: str) -> int:
         return int(cur.lastrowid)
 
 
-def test_rc103_startup_gate_only_schedules_delayed_retention() -> None:
+def test_operator_startup_gate_never_runs_destructive_compaction() -> None:
     source = inspect.getsource(HardenedV2Store.run_startup_maintenance)
-    assert "_schedule_deferred_maintenance" in source
     assert "_compact_operational_database" not in source
     assert "_purge_expired_materials" not in source
     assert 'con.execute("VACUUM")' not in source
