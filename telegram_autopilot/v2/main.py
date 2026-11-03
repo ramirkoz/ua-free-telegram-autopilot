@@ -213,6 +213,34 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.2.62 listings unchanged after failed migration",
                       level=40, detail=str(exc)[:1200])
+            # v2.3.0: recover exact, observed low-yield commercial publisher
+            # homepages using publisher-owned RSS; no new sources or policy edits.
+            try:
+                from .commercial_rss_rescue_230 import recover_commercial_rss_230
+                rss_result = recover_commercial_rss_230(store)
+                event("ingest", "2.3.0 commercial publisher RSS checked", **rss_result)
+            except Exception as exc:
+                event("ingest", "2.3.0 RSS rescue failed; operator Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.5: Product Owner requested fresh consumer/brand/design sources.
+            # Run only after first-run import, before all collectors; idempotent,
+            # preserving old history and operator-created source changes.
+            try:
+                from .commercial_sources_235 import apply_commercial_sources_235
+                source_portfolio = apply_commercial_sources_235(store)
+                event("ingest", "2.3.5 relevant commercial sources added", **source_portfolio)
+            except Exception as exc:
+                event("ingest", "2.3.5 source expansion skipped safely; operator Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.6: fix exact 2.3.5 Trend Hunter/Design Milk FeedBurner
+            # host collision. Historical 235 migration receipts are required.
+            try:
+                from .commercial_feedburner_236 import restore_trend_hunter_236
+                feedburner_result = restore_trend_hunter_236(store)
+                event("ingest", "2.3.6 Trend Hunter restore checked", **feedburner_result)
+            except Exception as exc:
+                event("ingest", "2.3.6 Trend Hunter feed restore failed; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
@@ -220,6 +248,12 @@ def main() -> int:
             _apply_scientific_news_profile(store)
             migrated = apply_science_general_audience_profile(store)
             event("editorial", "science general-audience policy checked", migrated=migrated)
+            # 2.3.6: replace legacy stacked subjective policies only for the
+            # original science and commercial editorial profiles, with full
+            # rollback text stored in meta; monitoring rules are unchanged.
+            from .editorial_human_calibration_236 import apply_editorial_calibration_236
+            calibrated = apply_editorial_calibration_236(store)
+            event("editorial", "2.3.6 human editorial calibration checked", **calibrated)
             # 2.0.10: the RC103 fast-start hook skips normal maintenance.
             # Retire the old queue synchronously BEFORE workers/UI can publish.
             # Failing here must stop launch rather than leak pre-cutover posts.

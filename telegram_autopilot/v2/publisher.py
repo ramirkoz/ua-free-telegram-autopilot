@@ -944,6 +944,19 @@ class Publisher:
         # Telegram never receives third-party URLs, eliminating WEBPAGE_CURL_FAILED
         # from CDN/hotlink restrictions and letting us dedupe exact binary clones.
         prepared, prepare_failures = prepare_telegram_media_list(bundle.encoded_items, timeout=35.0, heartbeat=heartbeat)
+        if (bundle.source_kind == "telegram" and prepare_failures
+                and len(prepare_failures) <= 3 and len(bundle.encoded_items) <= 12):
+            # 2.3.3 one bounded second attempt BEFORE delivery SENDING begins.
+            # Only source-owned failed URLs, no media borrowing/partial albums.
+            failed_urls = [raw for raw, _error in prepare_failures]
+            retried, still_failed = prepare_telegram_media_list(
+                failed_urls, timeout=18.0, heartbeat=heartbeat)
+            prepared.extend(retried)
+            prepare_failures = still_failed
+            event("media", "exact Telegram media download retry 2.3.3",
+                  channel_id=channel_id, article_id=article_id,
+                  retried=len(failed_urls), recovered=len(retried), still_failed=len(still_failed),
+                  no_partial_publish=True)
         before_visual_dedupe = list(prepared)
         prepared, visual_duplicate_count = remove_visual_duplicates(prepared)
         # 2.2.3: exact evidence for replaying a media incident from original bytes.

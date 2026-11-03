@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -26,6 +27,7 @@ from .learning import LearningEngine
 from .storage import V2Store
 from .topic_saturation import topic_saturation_reason
 from .science_broad_audience_242 import is_science_general_channel, broad_science_value_rejection
+from .editorial_coverage_234 import eligible_recheck_234, independent_value_confirms_234, science_finding_evidence_234, strong_commercial_story_evidence_234
 from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
@@ -35,6 +37,7 @@ from .claim_trace import trace_output_claims
 from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
 from .editorial_tone_254 import editorial_tone_rules
 from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
+from .editorial_human_calibration_236 import calibrated_editorial_role
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
@@ -1205,8 +1208,20 @@ class EditorialEngine:
         self.store = store
         self.gateway = gateway
         self.learning = LearningEngine(store)
+        # Bound the independent second opinion: at most two per role/15 min.
+        self._coverage_reviews_234: dict[str, list[float]] = {}
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # 2.3.3: the source may contain several distinct lost/found pets.
+        # A full-source writer cannot reliably attribute collars/places/photos.
+        if channel.mode == ChannelMode.MONITORING:
+            from .multi_notice_integrity_233 import multi_pet_bulletin_reason
+            multi_notice = multi_pet_bulletin_reason(article)
+            if multi_notice:
+                event("editorial", "unsplit multi-pet notice withheld before AI",
+                      level=30, channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0), reason=multi_notice)
+                return EditorialOutcome(Decision.REJECT, reason=multi_notice, fit_score=0)
         # 2.2.52: known external-link teasers must contain the promised facts
         # before any selector/writer spends AI tokens; no blanket rejection.
         if channel.mode == ChannelMode.MONITORING:
@@ -1254,6 +1269,10 @@ INCLUSION RULES:
 
 EXCLUSION RULES:
 {exclusion or 'Не задано.'}
+Практичні повідомлення про місцеві графіки електровідключень, ремонти,
+адреси, час доступності послуг є civil/local_news за наявності перевірених
+фактів. Не відхиляй їх лише тому, що вони про електрику. Але не приймай
+чутки мешканців за офіційний графік або підтвердження служб.
 Спершу визнач ТИП повідомлення (рівно один ключ):
 {types}
 attack_summary — лише якщо є конкретний підсумок: кількість загиблих/поранених/пошкоджених об'єктів або офіційні підсумки. Повідомлення «обстріляли/закидають/атакують» без такого результату — attack_in_progress.
@@ -1334,6 +1353,52 @@ SOURCE:
             model=result.model,
         )
 
+    def _evidence_recheck_234(self, channel: ChannelConfig, article: Any,
+                              reject_code: str, fit_score: int, fit: Mapping[str, Any],
+                              provider: str, model: str) -> EditorialOutcome | None:
+        """A second editorial opinion only; no factual or publish gate bypass."""
+        lane = "commercial" if _is_commercial_editorial(channel) else (
+            "science" if is_science_general_channel(channel) else ""
+        )
+        if not eligible_recheck_234(article, lane=lane, rejection=reject_code):
+            return None
+        now = time.monotonic()
+        key = str(channel.id) + ":" + lane
+        recent = [x for x in self._coverage_reviews_234.get(key, []) if now-x < 900]
+        self._coverage_reviews_234[key] = recent
+        if len(recent) >= 2:
+            return None
+        recent.append(now)  # Count attempt even on provider failure.
+        try:
+            value = self._sold_value_gate(article) if lane == "commercial" else self._value_gate(article, science_broad=True)
+            verified = independent_value_confirms_234(value, lane=lane)
+            fit_for_value = max(60, fit_score)
+            if lane == "commercial":
+                allowed, value_lane, value_score = self._sold_value_allowed(
+                    value, fit_for_value, _editorial_thresholds(channel))
+                if allowed and commercial_reader_veto_256(article, value):
+                    allowed = False
+            else:
+                allowed, value_lane, value_score = self._value_allowed(
+                    value, fit_for_value, _editorial_thresholds(channel))
+                if allowed and broad_science_value_rejection(value):
+                    allowed = False
+            event("editorial", "2.3.4 independent audience value review",
+                  channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                  lane=lane, allowed=bool(allowed and verified), value_score=value_score,
+                  confirmed=verified, max_reviews_per_15m=2)
+            if not (allowed and verified):
+                return None
+            return EditorialOutcome(
+                Decision.PUBLISH, reason=f"COVERAGE_234_CONFIRMED: {lane}; score={value_score}; value_lane={value_lane}",
+                angle=_clean(fit.get("angle"), 500), fit_score=fit_for_value,
+                editorial_value_score=value_score, provider=provider, model=model)
+        except Exception as exc:
+            event("editorial", "2.3.4 independent review unavailable", level=30,
+                  channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                  detail=str(exc)[:160])
+            return None
+
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         from .source_integrity import multi_story_page_cards_reason
         source_problem = multi_story_page_cards_reason(article)
@@ -1352,27 +1417,64 @@ SOURCE:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
-        commercial_audience_instruction = COMMERCIAL_READER_RULE_256 if _is_commercial_editorial(channel) else ""
+        calibrated_role = calibrated_editorial_role(channel)
+        commercial_audience_instruction = (
+            COMMERCIAL_READER_RULE_256 + "\nA well-documented surprising consumer or culture story "
+            "may pass without campaign ROI, professional marketing jargon or B2B strategy. "
+            "Do not reject as weak_audience_hook only because a source is a design/brand publisher: "
+            "judge the specific evidenced human story. Do reject ordinary releases and product specs."
+            if _is_commercial_editorial(channel) and not calibrated_role else ""
+        )
         from .commercial_topic_balance_258 import commercial_topic_advisory_258
-        commercial_mix_instruction = commercial_topic_advisory_258(self.store, channel.id, article) if _is_commercial_editorial(channel) else ""
+        commercial_mix_instruction = commercial_topic_advisory_258(self.store, channel.id, article) if _is_commercial_editorial(channel) and not calibrated_role else ""
         science_audience_instruction = (
             "SCIENCE FOR GENERAL READERS: A microcontroller, chip, power, firmware, "
             "clock-frequency or benchmark tweak without a demonstrated broad outcome "
             "is a weak_audience_hook, NOT science news. A real discovery can matter "
             "without near-term commercialization. Judge reader value outside the "
-            "engineer niche using only source facts. Never invent applications.\n"
-            if is_science_general_channel(channel) else ""
+            "engineer niche using only source facts. Never invent applications. "
+            "Do not demand a breakthrough for a well-supported new study: "
+            "brain, medicine, ecology and astronomy research can interest ordinary "
+            "curious readers because of its actual finding. Cybersecurity can matter "
+            "when it identifies a real risk, not a mere patch/changelog.\n"
+            if is_science_general_channel(channel) and not calibrated_role else ""
         )
-        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення.
+        selector_header = (
+            "Ти редактор. Обирай відповідну тематичну ЦІКАВУ новину, "
+            "а не виключно революційні сенсації, вірусні історії чи масовий маркетинг. "
+            "Для CTRL+UA конкретне наукове відкриття, кіберзагроза, ШІ, космос "
+            "або незвична технологія можуть бути повноцінною новиною. "
+            "Для ПРОДАНО! оригінальна предметна ідея, дизайн, функція чи "
+            "кампанія мають власну цінність без доказів вірусності чи продажів. "
+            "Відхиляй рутинний PR, порожні реклами, беззмістовні релізи, "
+            "непідтверджені твердження та нерелевантні теми. Виключно SOURCE. "
+            "Не вигадуй деталі."
+            if calibrated_role else
+            "Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення."
+        )
+        output_contract = (
+            'Якщо decision="reject", поясни конкретну причину. Поверни тільки JSON: '
+            '{"decision":"publish","fit_score":0,"reason":"фактологічна причина",'
+            '"angle":"редакційний кут"}. Поле decision має бути рівно '
+            '"publish" або "reject". Оцінка fit_score не є другим veto.'
+            if calibrated_role else
+            'Для CPU-local fallback одразу оціни також editorial value, щоб не робити '
+            'окремий дорогий AI-виклик. Якщо decision="reject", reject_code — один із: '
+            'off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, '
+            'duplicate, insufficient_facts, stale, other. Поверни ТІЛЬКИ JSON: '
+            '{"decision":"publish","reject_code":"","fit_score":0,"reason":"коротко",'
+            '"angle":"кут","topic_tags":[],"novelty":0,"consequence_or_insight":0,'
+            '"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,'
+            '"why_now":0,"curiosity_only":false}'
+        )
+        prompt = f"""{selector_header}
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {science_audience_instruction}
 {commercial_audience_instruction}
 {commercial_mix_instruction}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
-Для CPU-local fallback одразу оціни також editorial value, щоб не робити окремий дорогий AI-виклик.
-Якщо decision="reject", reject_code — РІВНО один із: off_topic, weak_audience_hook, routine_pr, weak_mechanism, weak_visual, duplicate, insufficient_facts, stale, other.
-Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","reject_code":"","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false}}"""
+{output_contract}"""
 
         def parse_fit(raw: str):
             obj = _parse_json(raw)
@@ -1381,7 +1483,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
                 raise ValueError("invalid decision")
             return obj
 
-        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=210, timeout_seconds=25, purpose="editorial_selector")
+        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=170 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
         fit = parse_fit(fit_result.text)
         raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
         # RC54: a categorical PUBLISH with fit=9 is internally contradictory. For
@@ -1402,11 +1504,40 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             # guessing a category from free text. Unknown/missing codes stay uncoded.
             code = str(fit.get("reject_code") or "").strip().casefold()
             prefix = f"[{code}] " if code in SELECTOR_REJECT_CODES else ""
+            review = (None if calibrated_role else self._evidence_recheck_234(
+                channel, article, code, score, fit,
+                fit_result.provider, fit_result.model))
+            if review is not None:
+                return review
             return EditorialOutcome(Decision.REJECT, reason=prefix + _clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
+        # The 200 human labels reject the stacked commercial and scientific
+        # subjective value gates (74/77 desired stories were blocked). For
+        # calibrated profiles, one source-grounded channel-fit decision is
+        # enough. Fact, freshness, media, duplicate and Telegram guards are
+        # independent and are NOT bypassed by this branch.
+        if calibrated_role:
+            return EditorialOutcome(
+                Decision.PUBLISH,
+                reason=f"HUMAN_EDITORIAL_236_PASS role={calibrated_role}; fit={score}",
+                angle=_clean(fit.get("angle"), 500), fit_score=score,
+                provider=fit_result.provider, model=fit_result.model,
+            )
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
             allowed, code, value_score = self._sold_value_allowed(value, score, _editorial_thresholds(channel))
+            # 2.3.4: a source-exact, shareable culture/consumer story can
+            # qualify without campaign ROI. Never accept an unverified hook.
+            if (not allowed and score >= 54
+                    and strong_commercial_story_evidence_234(article, value)
+                    and int(value.get("general_interest", 0) or 0) >= 65
+                    and int(value.get("retellability", 0) or 0) >= 56
+                    and max(int(value.get(k, 0) or 0) for k in
+                            ("culture_signal", "surprise_or_conflict", "consumer_relevance")) >= 65):
+                allowed, code = True, "source_verified_cultural_story_234"
+                event("editorial", "2.3.4 source-verified cultural editorial lane",
+                      channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                      value_score=value_score, no_fact_gate_override=True)
             if allowed:
                 catalog_veto = commercial_reader_veto_256(article, value)
                 if catalog_veto:
@@ -1421,7 +1552,21 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             event("ai", "CPU local fit/value combined", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0))
         else:
             value = self._value_gate(article, science_broad=is_science_general_channel(channel))
-        allowed, code, value_score = self._value_allowed(value, score, _editorial_thresholds(channel))
+        thresholds = _editorial_thresholds(channel)
+        # New, source-complete published science findings were systematically
+        # excluded at scores 55-59 despite independent broad-value safeguards.
+        # Respect explicit operator overrides; do not change any global gate.
+        if (is_science_general_channel(channel)
+                and science_finding_evidence_234(article)
+                and independent_value_confirms_234(value, lane="science")):
+            try:
+                operator_limits = json.loads(str(channel.editorial_thresholds_json or "{}"))
+                explicit_standard = isinstance(operator_limits, dict) and "standard_score" in operator_limits
+            except Exception:
+                explicit_standard = False
+            if not explicit_standard:
+                thresholds["standard_score"] = min(thresholds["standard_score"], 55)
+        allowed, code, value_score = self._value_allowed(value, score, thresholds)
         if not allowed:
             return EditorialOutcome(Decision.REJECT, reason=f"EDITORIAL_VALUE_REJECT score={value_score}; code={code}; " + _clean(value.get("reason"), 420), fit_score=score, editorial_value_score=value_score, provider=fit_result.provider, model=fit_result.model)
         if is_science_general_channel(channel):

@@ -438,6 +438,15 @@ def event_fingerprint_same_event(
     if civic_same:
         return True, civic_reason
 
+    # 03.11 regression #88747/#88765: two publishers described the SAME
+    # Zaporizhzhia international medal digest. Require actual Ukrainian
+    # full names, sports and countries, so unrelated competitions survive.
+    if monitoring_profile:
+        from .monitoring_sports_event_236 import sports_medal_same_event_236
+        sports_same, sports_reason = sports_medal_same_event_236(current, candidate)
+        if sports_same:
+            return True, sports_reason
+
     # First-month civic-service coverage can use different headline angles
     # and copies of the same video. Original-source venue/location/milestone
     # identity is stronger evidence than similarity of generated text.

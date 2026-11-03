@@ -108,6 +108,17 @@ class BoundedStrictIngestService(StrictIngestService):
         # This count is consumed, not recycled after each finished request.
         linked_teaser_tokens = [2]
         linked_teaser_lock = Lock()
+        # 2.3.1: a missing RSS item date can sometimes be recovered from the
+        # exact article HTML. Limit this extra verification to two total
+        # attempts per commercial cycle; admission still requires publisher
+        # date, normal restart fence and fresh URL/external ID.
+        rss_undated_tokens = [2]
+        rss_undated_lock = Lock()
+        # 2.3.4: three (instead of two) date-eligible, unseen thin commercial
+        # articles may request a verified publisher page. All identity/date
+        # checks and per-request network limits stay unchanged.
+        commercial_fulltext_tokens = [3]
+        commercial_fulltext_lock = Lock()
 
         def beat() -> None:
             if heartbeat is not None:
@@ -124,6 +135,7 @@ class BoundedStrictIngestService(StrictIngestService):
         # no hardcoded commercial channel or publisher names.
         page_first_source_ids: set[int] = set()
         recovered_page_caps: dict[int, int] = {}
+        migrated_rss_230_ids: set[int] = set()
         sources: list[Source] = []
         for row in self.store.sources_for_channel(channel_id, enabled_only=True):
             beat()
@@ -132,6 +144,8 @@ class BoundedStrictIngestService(StrictIngestService):
             except (ValueError, TypeError):
                 source_settings = {}
             if isinstance(source_settings, dict):
+                if str(row["kind"]) == "rss" and isinstance(source_settings.get("commercial_rss_rescue_230"), dict):
+                    migrated_rss_230_ids.add(int(row["id"]))
                 listing_262 = source_settings.get("commercial_listing_recovery_262")
                 if isinstance(listing_262, dict) and (
                     listing_262.get("publisher_page_only") is True
@@ -239,12 +253,38 @@ class BoundedStrictIngestService(StrictIngestService):
             # Editorial sources have the original fetch path. For commercial
             # feeds, only enrich stories actually eligible AFTER runtime start;
             # source items still reach the ordinary date/dedupe pre-AI gate.
-            freshness = (
-                (lambda item: not restart_source_rejection(
+            def eligible_for_rss_enrichment(item: CollectedArticle) -> bool:
+                rejection = restart_source_rejection(
                     str(item.published_at or ""), runtime_started_at,
-                    str(source_checkpoints.get(str(source.id), ""))))
-                if commercial_profile and runtime_started_at else None
-            )
+                    str(source_checkpoints.get(str(source.id), "")),
+                )
+                if not rejection:
+                    return True
+                if (source.id not in migrated_rss_230_ids
+                        or source.kind != "rss"
+                        or rejection != "SOURCE_DATE_UNVERIFIED"):
+                    return False
+                # Never spend an HTTP request on an article already in Data.
+                if self._existing_reason(channel_id, source.id, item.external_id, item.url):
+                    return False
+                from urllib.parse import urlsplit
+                publisher_host = (urlsplit(source.url).hostname or "").lower().removeprefix("www.")
+                article_host = (urlsplit(str(item.url or "")).hostname or "").lower().removeprefix("www.")
+                if (urlsplit(str(item.url or "")).scheme != "https"
+                        or not publisher_host or article_host != publisher_host):
+                    return False
+                with rss_undated_lock:
+                    if rss_undated_tokens[0] <= 0:
+                        return False
+                    rss_undated_tokens[0] -= 1
+                event("ingest", "2.3.1 source-owned date verification requested",
+                      channel_id=channel_id, source_id=source.id,
+                      source=source.name, article_url=str(item.url)[:350],
+                      extra_fetch_attempt_budget=2, no_date_guess=True)
+                return True
+
+            freshness = (eligible_for_rss_enrichment
+                         if commercial_profile and runtime_started_at else None)
             with base._GLOBAL_SOURCE_FETCH_LIMIT:
                 kwargs = dict(
                     page_prefer_feed=bool(getattr(cfg, "page_prefer_feed", False)) and source.id not in page_first_source_ids,
@@ -259,6 +299,24 @@ class BoundedStrictIngestService(StrictIngestService):
                         self.store.find_equivalent_article(int(channel_id), str(url)) is None
                     )
                 items = collect_strict(source, **kwargs)
+            if commercial_profile and source.kind in {"rss", "page"}:
+                from .commercial_fulltext_233 import enrich_exact_commercial_article_233
+                from .editorial_hard_floor import facts
+                for item in items:
+                    if (len(facts(str(item.raw_text or ""))) >= 2
+                            or restart_source_rejection(str(item.published_at or ""),
+                                runtime_started_at, str(source_checkpoints.get(str(source.id), "")))
+                            or self._existing_reason(channel_id, source.id, item.external_id, item.url)):
+                        continue
+                    with commercial_fulltext_lock:
+                        if not commercial_fulltext_tokens[0]:
+                            break
+                        commercial_fulltext_tokens[0] -= 1
+                    _, outcome = enrich_exact_commercial_article_233(item, source.url)
+                    event("ingest", "2.3.4 exact commercial short-source article retrieval",
+                          channel_id=channel_id, source_id=source.id, source=source.name,
+                          article_url=item.url, status=outcome, limit_per_channel_cycle=3,
+                          no_timestamp_guess=True, identity_media_unchanged=True)
             if source.kind == "telegram":
                 for item in items:
                     if runtime_started_at and restart_source_rejection(
@@ -292,6 +350,20 @@ class BoundedStrictIngestService(StrictIngestService):
         def commit_success(source: Source, items: list[CollectedArticle], duration_ms: int) -> None:
             nonlocal added, seen, known_external, known_url, sources_with_new, stale_filtered, restart_recovered
             seen += len(items)
+            # 2.3.1: one bounded evidence record per migrated commercial feed
+            # and collection cycle. Works on already downloaded items only.
+            if source.id in migrated_rss_230_ids:
+                from .commercial_freshness_231 import diagnose_migrated_feed_231
+                evidence = diagnose_migrated_feed_231(
+                    items, runtime_started_at,
+                    str(source_checkpoints.get(str(source.id), "")),
+                    lambda item: self._existing_reason(
+                        channel_id, source.id, item.external_id, item.url
+                    ),
+                )
+                event("ingest", "2.3.1 commercial RSS freshness audit",
+                      channel_id=channel_id, source_id=source.id,
+                      source=source.name, **evidence)
             source_added = 0
             for item in items:
                 stale_reason = restart_source_rejection(
