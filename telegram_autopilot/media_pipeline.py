@@ -355,7 +355,28 @@ def _foreign_story_image_reason(item: PreparedMedia, *, source_url: str) -> str:
     return ""
 
 
-def _hard_reject(item: PreparedMedia, *, marketing_context: bool = False) -> bool:
+def _article_logo_asset(item: PreparedMedia, *, story_title: str, story_text: str) -> bool:
+    """Allow a *story-owned* logo when the story itself discusses that logo.
+
+    The previous site-logo URL filter also discarded the real Apple/Ed's Electric
+    subject artwork. A generic site masthead cannot claim article identity merely
+    because its URL contains ``logo``; brand-specific alt/caption/file evidence
+    must overlap with the actual headline or SOURCE text.
+    """
+    if not re.search(r"\b(?:logo|logotype|wordmark|brandmark|rebrand(?:ing)?)\b|логотип", story_title, re.IGNORECASE):
+        return False
+    filename = urlsplit(item.url).path.rsplit("/", 1)[-1]
+    asset_terms = _text_tokens(" ".join((item.alt, item.caption, filename)))
+    news_terms = _text_tokens(story_title + " " + story_text[:2500])
+    generic = {"logo", "logotype", "wordmark", "brandmark", "design", "graphic", "branding", "news", "image", "creative", "site", "header", "footer", "icon", "social", "asset", "main"}
+    distinctive = (asset_terms & news_terms) - generic
+    return bool(distinctive)
+
+
+def _hard_reject(
+    item: PreparedMedia, *, marketing_context: bool = False,
+    story_title: str = "", story_text: str = "",
+) -> bool:
     low = (item.url + " " + _candidate_text(item)).casefold().replace("_", "-")
     blocked = _HARD_REJECT
     if marketing_context:
@@ -363,7 +384,11 @@ def _hard_reject(item: PreparedMedia, *, marketing_context: bool = False) -> boo
     if any(term in low for term in blocked):
         return True
     if any(term in low for term in _LOGO_WORDS):
-        return True
+        # Preserve the authentic subject of a logo-design news item; reject site
+        # header/nav icons, and any unbound generic logo even in a logo story.
+        if any(mark in low for mark in ("favicon", "site-logo", "site-icon", "header-logo", "footer-logo", "nav-logo", "app-icon", "sprite")):
+            return True
+        return not _article_logo_asset(item, story_title=story_title, story_text=story_text)
     return False
 
 
@@ -381,7 +406,8 @@ def _classify(item: PreparedMedia) -> str:
 
 
 def _score(item: PreparedMedia, *, title: str, article_text: str, marketing_context: bool = False) -> float:
-    if _hard_reject(item, marketing_context=marketing_context):
+    if _hard_reject(item, marketing_context=marketing_context,
+                    story_title=title, story_text=article_text):
         return -100.0
     # A large image is not automatically relevant. The old score started every
     # body image at the acceptance threshold, so unrelated recommendation cards
@@ -448,7 +474,9 @@ def _take_probe_reason() -> str:
 
 def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> PreparedMedia | None:
     _probe_state.reason = ""
-    if _hard_reject(item, marketing_context=marketing_context):
+    if _hard_reject(item, marketing_context=marketing_context,
+                    story_title=str(getattr(_probe_state, "story_title", "")),
+                    story_text=str(getattr(_probe_state, "story_text", ""))):
         return _probe_reject("hard_reject")
     try:
         response = fetch_url(item.url, headers=_MEDIA_HEADERS, max_bytes=12 * 1024 * 1024, timeout=20, max_redirects=5, allow_http_errors=True)
@@ -474,6 +502,26 @@ def _probe_image(item: PreparedMedia, *, marketing_context: bool = False) -> Pre
     item.perceptual_hash = _perceptual_hash(response.body)
     item.data = response.body
     return item
+
+
+def _probe_article_image(
+    item: PreparedMedia, *, marketing_context: bool, title: str, article_text: str,
+) -> PreparedMedia | None:
+    """Bind the current source story to the binary probe, including adapters.
+
+    Keep the stable `_probe_image` call signature used by existing production
+    hooks and regression stubs. Thread-local scope prevents one article's logo
+    evidence leaking into the next article's images.
+    """
+    previous_title = str(getattr(_probe_state, "story_title", ""))
+    previous_text = str(getattr(_probe_state, "story_text", ""))
+    _probe_state.story_title = title
+    _probe_state.story_text = article_text
+    try:
+        return _probe_image(item, marketing_context=marketing_context)
+    finally:
+        _probe_state.story_title = previous_title
+        _probe_state.story_text = previous_text
 
 
 def _layout_items(layout_json: str, fallback_urls: list[str]) -> tuple[PreparedMedia | None, list[PreparedMedia]]:
@@ -615,7 +663,8 @@ def prepare_article_media(
             featured = None
     if featured and featured.kind == "image":
         featured.classification = _classify(featured)
-        featured = _probe_image(featured, marketing_context=marketing_context)
+        featured = _probe_article_image(featured, marketing_context=marketing_context,
+                                        title=title, article_text=article_text)
         if featured is None:
             dropped(_take_probe_reason())
         if featured:
@@ -659,12 +708,14 @@ def prepare_article_media(
         if identity in seen_identities:
             dropped("same_asset_rendition")
             continue
-        if _hard_reject(item, marketing_context=marketing_context):
+        if _hard_reject(item, marketing_context=marketing_context,
+                        story_title=title, story_text=article_text):
             dropped("hard_reject")
             continue
         item.classification = _classify(item)
         if item.kind == "image":
-            resolved = _probe_image(item, marketing_context=marketing_context)
+            resolved = _probe_article_image(item, marketing_context=marketing_context,
+                                            title=title, article_text=article_text)
             if not resolved:
                 dropped(_take_probe_reason())
                 continue
