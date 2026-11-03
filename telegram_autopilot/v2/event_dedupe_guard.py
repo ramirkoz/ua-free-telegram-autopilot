@@ -438,6 +438,14 @@ def event_fingerprint_same_event(
     if civic_same:
         return True, civic_reason
 
+    # 03.11: preserve separate competitions, but block reworded medal digests
+    # with three shared Ukrainian athlete names, sports, countries and day.
+    if monitoring_profile:
+        from .monitoring_sports_event_20261103 import sports_medal_same_event
+        sports_same, sports_reason = sports_medal_same_event(current, candidate)
+        if sports_same:
+            return True, sports_reason
+
     # First-month civic-service coverage can use different headline angles
     # and copies of the same video. Original-source venue/location/milestone
     # identity is stronger evidence than similarity of generated text.
