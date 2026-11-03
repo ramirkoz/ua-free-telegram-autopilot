@@ -800,7 +800,9 @@ def _rc111_prepare_candidate(
     Only formatting/attribution/length is changed. Facts and numbers are never
     synthesized or deleted here.
     """
-    value=str(raw or "").strip()
+    from .editorial_copyedit_237 import safe_copyedit_237
+    paragraph_limit = 420 if int(hard_max_chars) <= 900 else 620
+    value = safe_copyedit_237(str(raw or "").strip(), paragraph_limit=paragraph_limit)
     if channel.mode == ChannelMode.MONITORING:
         value=restore_practical_literals(article,value,hard_max_chars=hard_max_chars)
         value=strip_non_actionable_article_urls(article,value)
@@ -875,7 +877,11 @@ def validate_writer_output(
     # Gate 1 is deterministic sanitation: strip invisible/bidi junk before any
     # language or factual validation. This mirrors the upstream anti-ai-slop
     # architecture but keeps all runtime work local and dependency-free.
-    value = apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip()
+    from .editorial_copyedit_237 import safe_copyedit_237
+    value = safe_copyedit_237(
+        apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip(),
+        paragraph_limit=420 if int(hard_max_chars or max_chars) <= 900 else 620,
+    )
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
@@ -1124,6 +1130,8 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
     issues: list[str] = []
     if not value:
         return ("порожній final_text",)
+    from .editorial_copyedit_237 import copyedit_issues_237
+    issues.extend(copyedit_issues_237(value))
     # Independent final publish-boundary language sentinel. Run BEFORE source
     # and fact checks so another issue cannot mask a nonword that would be sent.
     issues.extend("Жорсткий мовний QA: " + item for item in final_language_blockers(value))
