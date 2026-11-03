@@ -178,6 +178,19 @@ def _unsettled_aerial_route(article: Any) -> bool:
     return True
 
 
+
+# Operator-verified 2026-11-02 leaks: a local newsbrand sometimes forwards
+# external partisan opinion or guesses about an incident in another city.
+# These narrow source-only checks must not turn into a blanket local-name rule.
+_NONLOCAL_PARTISAN_POLEMIC = re.compile(
+    r"(?iu)\b(?:демократичн\w*\s+парті\w*|республіканськ\w*\s+парті\w*)\b.{0,450}"
+    r"\b(?:кандидат\w*|корумпован\w*|найнебезпечн\w*)\b"
+)
+_NONLOCAL_UNVERIFIED_SPECULATION = re.compile(
+    r"(?iu)\b(?:борщагівц\w*|борщагівк\w*)\b.{0,700}"
+    r"\b(?:спланован\w*\s+підстав\w*|схож\w*\s+на\s+.{0,50}підстав\w*)\b"
+)
+
 def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     """Fail closed only for a channel that has explicitly opted into the live gate."""
     if channel.mode != ChannelMode.MONITORING:
@@ -185,6 +198,12 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     if "[LIVE_NOW_RC96]" not in str(channel.policy.rejection_rules or ""):
         return ""
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
+    if not _LOCAL_ANCHOR.search(original):
+        if _NONLOCAL_PARTISAN_POLEMIC.search(original):
+            return "MONITORING_NONLOCAL_PARTISAN_OPINION: неперевірена зовнішня політична риторика"
+        if _NONLOCAL_UNVERIFIED_SPECULATION.search(original):
+            return "MONITORING_UNVERIFIED_NONLOCAL_SPECULATION: припущення про подію за межами регіону"
+
     # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
     # and the name/geography of the newsroom that forwarded it.
     if _unsettled_aerial_route(article):
