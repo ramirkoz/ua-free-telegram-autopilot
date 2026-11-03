@@ -103,3 +103,11 @@ def test_238_telegram_album_of_logo_untouched():
     output, dropped = choose_identity_story_media_238(items, title="New logo for school",
                                                        raw_text="New logo", source_kind="telegram")
     assert output == items and dropped == 0
+
+
+def test_238_generic_digital_identity_story_not_limited():
+    images = [SimpleNamespace(kind="image", url=f"https://cdn.test/id-{i}.jpg") for i in range(3)]
+    selected, dropped = choose_identity_story_media_238(
+        images, title="Digital identity theft spreads through phishing",
+        raw_text="Two-factor authentication is required", source_kind="web")
+    assert selected == images and dropped == 0

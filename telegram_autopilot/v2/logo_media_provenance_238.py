@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlsplit
 from typing import Any
 
 _SINGLE_IDENTITY_TOPIC = re.compile(
-    r"\b(?:logo|logotype|wordmark|brandmark|rebrand(?:ing)?|identity)\b|"
+    r"\b(?:logo|logotype|wordmark|brandmark|rebrand(?:ing)?|(?:brand|visual)\s+identity)\b|"
     r"\b(?:логотип(?:у|ом|и)?|ребрендинг|айдентик[а-яіїєґ]*)\b", re.IGNORECASE
 )
 _WORD = re.compile(r"[a-zа-яіїєґ0-9]{3,}", re.IGNORECASE)
