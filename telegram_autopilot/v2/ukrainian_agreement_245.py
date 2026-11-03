@@ -86,6 +86,10 @@ def high_confidence_agreement_issues(text: str) -> tuple[str, ...]:
         match = pattern.search(value)
         if match:
             issues.append(f"{label}: «{match.group(0)}». Перевір SOURCE і перебудуй речення.")
+    # 2.3.1: exact mistakes observed in published operator text, not general
+    # morphology heuristics. The normal editor retries from original SOURCE.
+    from .post_quality_231 import ukrainian_operator_issues_231
+    issues.extend(ukrainian_operator_issues_231(value))
     return tuple(dict.fromkeys(issues))
 
 

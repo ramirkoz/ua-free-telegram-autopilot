@@ -100,7 +100,7 @@ class _OneShotGateway:
         return AIResult(raw, 'gemini', 'gemini-3.5-flash', 'Gemini', ('gemini:gemini-3.5-flash',))
 
 
-def test_editorial_fit_and_value_use_one_ai_call(tmp_path):
+def test_uncalibrated_generic_editorial_preserves_value_gate(tmp_path):
     store = V2Store(tmp_path / 'db.sqlite3')
     _seed(store)
     article_id = _article(store, 'combined', stage='COLLECTED', decision='PENDING')
@@ -111,9 +111,11 @@ def test_editorial_fit_and_value_use_one_ai_call(tmp_path):
 
     outcome = engine._select_editorial(channel, article)
     assert str(outcome.decision) == 'PUBLISH'
-    assert len(gateway.calls) == 1
+    # Only explicitly calibrated CTRL/creative profiles use a one-call selector;
+    # generic editorial channels retain their distinct value gate.
+    assert len(gateway.calls) == 2
     assert gateway.calls[0]['purpose'] == 'editorial_selector'
-    assert 'local' not in gateway.calls[0]['allowed_providers']
+    assert 'local' not in (gateway.calls[0].get('allowed_providers') or ())
 
 
 def test_reject_selector_does_not_require_value_metrics(tmp_path):

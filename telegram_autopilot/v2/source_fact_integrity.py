@@ -75,6 +75,8 @@ def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
             and _MULTIPLIER_RATE.search(str(final_text or ""))
             and not _SOURCE_MULTIPLIER.search(raw)):
         issues.append("FACT_UNSUPPORTED_RATE_MULTIPLIER")
+    from .post_quality_231 import source_action_scope_issues_231
+    issues.extend(source_action_scope_issues_231(article, final_text))
     issues.extend(source_final_fidelity_issues(article, final_text))
     return tuple(dict.fromkeys(issues))
 
@@ -87,6 +89,11 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
     claim polarity, manufactured casualties or other high-confidence safety.
     """
     issues: list[str] = []
+    if channel.mode == ChannelMode.MONITORING:
+        from .multi_notice_integrity_233 import multi_pet_bulletin_reason
+        bulletin = multi_pet_bulletin_reason(article)
+        if bulletin:
+            issues.append(bulletin)
     for reason in (
         two_sentence_reason(article, final_text),
         fabricated_event_reason(article, final_text),

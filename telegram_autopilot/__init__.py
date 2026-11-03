@@ -1,4 +1,3 @@
-"""UA FREE Telegram Autopilot."""
+"""demo"""
 
-__version__ = "2.2.64"
-APP_NAME = "UA FREE Telegram Autopilot V2"
+__version__ = "2.3.6"

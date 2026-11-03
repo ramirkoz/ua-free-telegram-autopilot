@@ -182,6 +182,23 @@ class _ExactPostPhotoSignals(HTMLParser):
             "grouped_layer" if self.grouped_photos else ""))
 
 
+def _exact_telegram_source_listing(username: str, post_id: int, *, timeout: float) -> tuple[str, ...]:
+    """Recheck exact message in /s/ listing, never use neighboring widgets."""
+    try:
+        response = collector._source_fetch(
+            f"https://t.me/s/{username}/{post_id}", max_bytes=4 * 1024 * 1024,
+            allowed_content_types={"text/html", "application/xhtml+xml"}, timeout=timeout)
+        parser = StrictTelegramParser(username)
+        parser.feed(response.body.decode("utf8", errors="replace"))
+        parser.close()
+        exact = next((x for x in parser.entries if x.post.casefold() == f"{username}/{post_id}".casefold()), None)
+        if exact is None:
+            return ()
+        return tuple(dict.fromkeys(raw for raw in exact.media if valid_public_media(raw)))
+    except Exception:
+        return ()
+
+
 def check_exact_telegram_media(source_url: str, *, timeout: float = 12.0) -> ExactTelegramSourceMedia:
     """Read one precise public Telegram post for photo, album and video parity.
 
@@ -223,6 +240,19 @@ def check_exact_telegram_media(source_url: str, *, timeout: float = 12.0) -> Exa
             "parser_video_marker" if exact.video_attachment_seen or exact.discarded_video_thumb else "")
         video_expected = bool(video_signal or video_count)
         expected_photos = max(photos.expected_photos, photo_count)
+        # 2.3.3: the embed sometimes hides the media source for a video or
+        # gallery, while the public /s/ view exposes it. Inspect ONLY the exact
+        # matching data-post from /s/, never adjacent post media.
+        if (video_expected and not video_count) or expected_photos > photo_count:
+            supplemental = _exact_telegram_source_listing(username, post_id, timeout=min(timeout, 8.0))
+            if supplemental:
+                recovered = list(dict.fromkeys([*media, *supplemental]))
+                new_photos = sum(decode_media(raw)[0] == "image" for raw in recovered)
+                new_videos = sum(decode_media(raw)[0] == "video" for raw in recovered)
+                if (new_photos >= expected_photos and (not video_expected or new_videos > 0)):
+                    return ExactTelegramSourceMedia(
+                        "confirmed", tuple(recovered), expected_photos, video_expected,
+                        "same_exact_post_listing_recovered_233", photos.signal, video_signal)
         if video_expected and not video_count:
             return ExactTelegramSourceMedia(
                 "video_pending", tuple(media), expected_photos, True,

@@ -91,9 +91,25 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         ))
     )
 
+    # 03.11 source-only unverified reactive-sound speculation: the AI had
+    # invented an aircraft or missile and attributed safety advice to nobody.
+    if not strong_settled_result and re.search(
+        r"(?iu)\bреактив\w*\b.{0,110}\b(?:чутно|чути)\b|"
+        r"\b(?:чутно|чути)\b.{0,110}\bреактив\w*\b",
+        compact,
+    ):
+        return "Непідтверджене повідомлення про звук повітряної загрози без наслідків"
+
+    # 2.3.2: source-owned municipal compensation/how-to text can contain
+    # historical weapon + "по українських містах" without reporting a live
+    # target/route. Do not let that generic background sentence masquerade as
+    # an active threat. Actual route/current-time cues still trigger the gate.
+    from .cost_quality_232 import civic_guidance_not_live_alert
+    ordinary_civic_guidance = civic_guidance_not_live_alert(low)
+
     # 2.2.9: a bare weapon+place bulletin such as "Ланцет на ..." is
     # an active alert, even when it omits verbs like "летить" or "рухається".
-    if not strong_settled_result and re.search(
+    if not ordinary_civic_guidance and not strong_settled_result and re.search(
         rf"\b{_WEAPON}\b[^.!?\n]{{0,28}}\b(?:на|по|у|в|над|біля|поблизу|до|"
         rf"в\s+бік|у\s+напрямку|напрямку)\b\s+\S+", compact, re.I
     ):
@@ -157,7 +173,7 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         any(token in low for token in ("атакували", "атаковано", "обстріляли", "завдали удар", "вибух"))
         or bool(_ATTACK_VERBS.search(low))
     )
-    if attack_now and not settled_aftermath and not strong_settled_result:
+    if attack_now and not ordinary_civic_guidance and not settled_aftermath and not strong_settled_result:
         return "Первинне повідомлення про атаку/вибух без стабілізованих підсумків"
 
     return ""

@@ -178,6 +178,22 @@ def _unsettled_aerial_route(article: Any) -> bool:
     return True
 
 
+_UNANCHORED_US_POLEMIC_236 = re.compile(
+    r"(?iu)\bдемократичн\w*\s+парті\w*\b"
+)
+_UNANCHORED_PARTISAN_ALLEGATION_236 = re.compile(
+    r"(?iu)найекстремальніш\w*|найнебезпечніш\w*\s+кандидат\w*|"
+    r"американськ\w*\s+історі\w*"
+)
+_UNVERIFIED_BORSHCHAHIVKA_236 = re.compile(
+    r"(?iu)\bборщагів(?:к|ц)\w*\b"
+)
+_UNVERIFIED_CONJECTURE_236 = re.compile(
+    r"(?iu)схож\w*\s+на\s+.{0,30}спланован\w*\s+підстав\w*|"
+    r"не\s+розумію\b.{0,130}\bсхож\w*\s+на"
+)
+
+
 def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     """Fail closed only for a channel that has explicitly opted into the live gate."""
     if channel.mode != ChannelMode.MONITORING:
@@ -185,6 +201,13 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     if "[LIVE_NOW_RC96]" not in str(channel.policy.rejection_rules or ""):
         return ""
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
+    # Exact, high-confidence 03.11 LIVE false-positive specimens. Neither
+    # a local Telegram channel name nor a forwarded commentary is local fact.
+    if not _LOCAL_ANCHOR.search(original):
+        if _UNANCHORED_US_POLEMIC_236.search(original) and _UNANCHORED_PARTISAN_ALLEGATION_236.search(original):
+            return "MONITORING_NONLOCAL_US_POLEMIC_236: непрофільний коментар без факту про громаду"
+        if _UNVERIFIED_BORSHCHAHIVKA_236.search(original) and _UNVERIFIED_CONJECTURE_236.search(original):
+            return "MONITORING_NONLOCAL_SPECULATION_236: непідтверджені припущення про немісцеву подію"
     # v2.2.14: High-confidence source-owned noise veto, independent of AI labels
     # and the name/geography of the newsroom that forwarded it.
     if _unsettled_aerial_route(article):

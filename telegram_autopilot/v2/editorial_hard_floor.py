@@ -30,6 +30,9 @@ def facts(text: str) -> tuple[str, ...]:
     body = re.sub(r"https?://\S+|t\.me/\S+", " ", str(text or ""), flags=re.I)
     body = re.sub(r"(?m)^\s*(?:читати\s+у|джерело\s*[:：]|#\w+|[А-ЯІЇЄҐ A-Z]{3,}\s*\|\s*[А-ЯІЇЄҐ A-Z]{3,})[^\n]*$", "", body, flags=re.I)
     body = _ABBREVIATIONS.sub(" ", body)
+    # Telegram sources frequently glue completed sentences without a space:
+    # "...єВідновлення.Ворог...". This is a segmentation repair, not a fact.
+    body = re.sub(r"(?<=[.!?…])(?=[А-ЯІЇЄҐ])", " ", body)
     results = []
     for match in _SENTENCE.finditer(body):
         s = match.group(1).strip(" \n\t•-—🚧⚡️🕯")

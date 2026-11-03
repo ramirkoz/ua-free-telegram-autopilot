@@ -238,6 +238,7 @@ def _install_ai_efficiency_contract() -> None:
     from .domain import Decision
     from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
     from .commercial_topic_balance_258 import commercial_topic_advisory_258
+    from .editorial_human_calibration_236 import calibrated_editorial_role
 
     def combined_select(self, channel, article):
         p = channel.policy
@@ -251,9 +252,35 @@ def _install_ai_efficiency_contract() -> None:
             return ed.EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
         commercial = ed._is_commercial_editorial(channel)
-        commercial_rule = COMMERCIAL_READER_RULE_256 if commercial else ""
-        commercial_mix = commercial_topic_advisory_258(self.store, channel.id, article) if commercial else ""
-        prompt = f"""Ти CHANNEL-FIT + EDITORIAL-VALUE SELECTOR Telegram-автопілота RC102. Зроби ОДНЕ рішення одним викликом.
+        calibrated_role = calibrated_editorial_role(channel)
+        commercial_rule = COMMERCIAL_READER_RULE_256 if commercial and not calibrated_role else ""
+        commercial_mix = (
+            commercial_topic_advisory_258(self.store, channel.id, article)
+            if commercial and not calibrated_role else ""
+        )
+        if calibrated_role:
+            prompt = f"""Ти редактор Telegram-каналу. Визнач, чи це НОВА, конкретна,
+цікава і перевірена інформація у тематиці каналу. Не вимагай надзвичайного
+прориву, масового впливу, продажів або вірусного ефекту. Для CTRL+UA:
+наука, космос, ШІ, кібербезпека, робототехніка, цікаві технології. Для
+ПРОДАНО!: дизайн, незвичайний товар, продукт, креативна концепція,
+винахідлива функція, упаковка чи маркетинг. Рутинні пресрелізи, реклама
+без цікавої ідеї, дублі та непрофільні історії не потрібні. Оціни ТІЛЬКИ
+реальні підтверджені факти з SOURCE, не вигадуй інтерес чи наслідки.
+PURPOSE: {p.purpose}
+AUDIENCE: {p.audience}
+SELECTION: {p.selection_rules}
+EXCLUSIONS: {p.rejection_rules}
+EXTRA: {p.selector_extra_prompt}
+{topic_memory}
+SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}
+SOURCE TITLE: {ed._clean(ed._v(article, 'title', ''), 700)}
+SOURCE:
+{ed._source_pack(article, 3600)}
+Поле decision — рівно "publish" або "reject". Відповідай ТІЛЬКИ JSON: {{"decision":"publish","fit_score":0,
+"reason":"конкретна причина","angle":"кут новини"}}"""
+        else:
+            prompt = f"""Ти CHANNEL-FIT + EDITORIAL-VALUE SELECTOR Telegram-автопілота RC102. Зроби ОДНЕ рішення одним викликом.
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {commercial_rule}
@@ -262,11 +289,11 @@ SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: 
 Оціни channel fit і value одночасно. Усі оцінки 0..100. Навіть для reject поверни всі поля.
 Поверни ТІЛЬКИ JSON: {{"decision":"publish" або "reject","fit_score":0,"reason":"коротко","angle":"кут","topic_tags":["..."],"novelty":0,"consequence_or_insight":0,"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,"why_now":0,"curiosity_only":false,"commercial_mechanism":0,"consumer_behavior":0,"creative_execution":0,"measurable_result":0,"strategic_transferability":0,"general_interest":0,"culture_signal":0,"surprise_or_conflict":0,"consumer_relevance":0,"story_class":"other","shareable_to_friend":false,"share_hook_quote":"","product_only":false}}"""
 
-        required = (
+        required = (() if calibrated_role else (
             ("commercial_mechanism", "consumer_behavior", "creative_execution", "measurable_result", "strategic_transferability", "why_now", "general_interest", "retellability", "culture_signal", "surprise_or_conflict", "consumer_relevance")
             if commercial else
             ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
-        )
+        ))
 
         def parse(raw: str):
             obj = ed._parse_json(raw)
@@ -284,7 +311,7 @@ SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: 
         result = self.gateway.run(
             prompt,
             validator=parse,
-            max_output_tokens=260,
+            max_output_tokens=170 if calibrated_role else 260,
             timeout_seconds=25,
             allowed_providers=("gemini", "nvidia", "groq", "cloudflare"),
             purpose="editorial_selector",
@@ -297,6 +324,17 @@ SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}\nSOURCE TITLE: 
         score = max(0, min(100, raw_score + int(learning.fit_adjustment)))
         if fit["decision"] == "reject":
             return ed.EditorialOutcome(Decision.REJECT, reason=ed._clean(fit.get("reason"), 600), fit_score=score, provider=result.provider, model=result.model)
+
+        if calibrated_role:
+            # This is the actually installed RC102 runtime selector override,
+            # not the dormant fallback in editorial.py. Human-labelled
+            # channels must not be vetoed again by broad-value scoring.
+            return ed.EditorialOutcome(
+                Decision.PUBLISH,
+                reason=f"HUMAN_EDITORIAL_236_PASS role={calibrated_role}; fit={score}",
+                angle=ed._clean(fit.get("angle"), 500), fit_score=score,
+                provider=result.provider, model=result.model,
+            )
 
         if commercial:
             value = dict(fit)

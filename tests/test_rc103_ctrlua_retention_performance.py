@@ -76,7 +76,7 @@ def _article(store: V2Store, external_id: str, *, days_old: int, final_text: str
         return int(cur.lastrowid)
 
 
-def test_rc103_editorial_review_is_bounded_to_seven_days(tmp_path):
+def test_operator_editorial_review_preserves_historical_rewrites(tmp_path):
     store = V2Store(tmp_path / "db.sqlite3")
     _seed_science_channel(store)
     recent = _article(store, "recent", days_old=6)
@@ -84,7 +84,7 @@ def test_rc103_editorial_review_is_bounded_to_seven_days(tmp_path):
 
     ids = {item.article_id for item in EditorialReviewService(store).candidates(limit=200)}
     assert recent in ids
-    assert old not in ids
+    assert old in ids
 
 
 def test_rc103_startup_compaction_archives_old_work_and_prunes_jobs(tmp_path):

@@ -19,6 +19,7 @@ from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_c
 from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
 from .ai_route_circuit_263 import RouteContractCircuit
 from .qa_adjacent_word_239 import repair_adjacent_repeated_word
+from .cost_quality_232 import order_openrouter_editorial_models, safe_format_candidate, PAID_EDITORIAL_PURPOSES
 from .storage import V2Store, now_iso
 
 
@@ -391,6 +392,8 @@ class AIGateway:
                     purpose=str(purpose or "content"), detail=str(exc)[:700],
                 )
                 models = ()
+        if str(purpose or "").casefold() in PAID_EDITORIAL_PURPOSES:
+            models = order_openrouter_editorial_models(tuple(models), manual=bool(manual))
         eligible = tuple(model_id for model_id in models if _chat_compatible_id(model_id))
         if len(eligible) != len(models):
             event(
@@ -811,12 +814,20 @@ class AIGateway:
             if slot.provider == "codex"
         ] if mode == "codex" else []
 
+        # Writer and final-editor may consume significant OpenRouter spend.
+        # In 2.3.1 these routes tried paid Grok before healthy free models.
+        # Use free reviewed routes first, then at most two paid candidates.
+        editorial_cost_guard = str(purpose or "").casefold() in PAID_EDITORIAL_PURPOSES
         if mode == "codex":
-            route_slots = codex_slots + openrouter_slots + free_slots
+            route_slots = codex_slots + (free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots)
         elif mode == "openrouter":
-            route_slots = openrouter_slots + free_slots
+            route_slots = free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots
         else:
             route_slots = free_slots
+        paid_attempts_232 = 0
+        paid_spend_232 = 0.0
+        paid_attempt_limit_232 = 2
+        paid_spend_limit_232 = 0.006  # USD per gateway invocation, not a per-day budget.
         for slot in route_slots:
             provider = slot.provider
             if allowed is not None and provider not in allowed:
@@ -825,6 +836,10 @@ class AIGateway:
                 continue
             configured.add(provider)
             if provider == "openrouter":
+                if editorial_cost_guard and (paid_attempts_232 >= paid_attempt_limit_232 or paid_spend_232 >= paid_spend_limit_232):
+                    event("ai", "2.3.2 paid editorial attempt cap", purpose=str(purpose or ""),
+                          attempts=paid_attempts_232, actual_usd=round(paid_spend_232, 6))
+                    break
                 budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
                 if not budget_ok:
                     self._mark_openrouter_budget_block(cfg)
@@ -844,6 +859,8 @@ class AIGateway:
                       operator_configuration_unchanged=True)
                 continue
 
+            if provider == "openrouter" and editorial_cost_guard:
+                paid_attempts_232 += 1
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
@@ -865,6 +882,8 @@ class AIGateway:
                         json_mode=json_mode,
                     )
                     actual_cost = self._consume_last_actual_cost()
+                    if provider == "openrouter" and editorial_cost_guard:
+                        paid_spend_232 += max(0.0, float(actual_cost or 0.0))
                     transport_attempts += 1
                     estimated_cost = _openrouter_reference_cost(runtime_model, input_tokens, output_tokens)
                     self.store.record_ai_usage(
@@ -924,6 +943,21 @@ class AIGateway:
                                         provider=provider, model=runtime_model,
                                         removed_chars=removed, purpose=str(purpose or "content"),
                                     )
+                        # Content-preserving source-footer/paragraph formatting
+                        # repair. Original full validator must accept it.
+                        if not repaired_ok:
+                            formal_candidate = safe_format_candidate(output, first_error)
+                            if formal_candidate:
+                                try:
+                                    validator(formal_candidate)
+                                except Exception:
+                                    pass
+                                else:
+                                    output = formal_candidate
+                                    repaired_ok = True
+                                    event("ai", "2.3.2 safe formatting repaired by full QA",
+                                          provider=provider, model=runtime_model,
+                                          purpose=str(purpose or "content"))
                         if not repaired_ok:
                             validation_failures += 1
                             signature=_rc111_qa_signature(first_error)
