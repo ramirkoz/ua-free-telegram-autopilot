@@ -306,10 +306,11 @@ def _identity_text(row: Any) -> str:
     event summary and the leading editorial/source text where the event itself is
     normally stated.
     """
-    title = str(_value(row, "title", "") or "").strip()
-    summary = str(_value(row, "event_summary", "") or "").strip()
-    final_text = str(_value(row, "final_text", "") or "").strip()
-    raw_text = str(_value(row, "raw_text", "") or "").strip()
+    from .monitoring_event_update_237 import clean_event_boilerplate_237
+    title = clean_event_boilerplate_237(str(_value(row, "title", "") or "").strip())
+    summary = clean_event_boilerplate_237(str(_value(row, "event_summary", "") or "").strip())
+    final_text = clean_event_boilerplate_237(str(_value(row, "final_text", "") or "").strip())
+    raw_text = clean_event_boilerplate_237(str(_value(row, "raw_text", "") or "").strip())
     parts = [title, summary]
     if final_text:
         parts.append(final_text[:2200])
@@ -416,6 +417,12 @@ def event_fingerprint_same_event(
     combines generic scientific names, concepts, rare terms, proper names, actions
     and normalized facts.
     """
+    if monitoring_profile:
+        from .monitoring_event_update_237 import material_monitoring_update_237
+        material_update = material_monitoring_update_237(current, candidate)
+        if material_update:
+            return False, material_update
+
     # 2.2.31: daily regional summaries use original-report day, totals and
     # independently reported victims, not English title overlap or AI captions.
     from .regional_daily_event_231 import regional_daily_relation
@@ -883,10 +890,19 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
             from .event_memory import find_published_event
             memory_match = find_published_event(self.store, current)
             if memory_match.relation == "DUPLICATE":
-                return DedupeResult(
-                    "DUPLICATE", memory_match.prior_article_id,
-                    "2.2.25 event-memory: " + memory_match.reason,
-                )
+                from .monitoring_event_update_237 import material_monitoring_update_237
+                prior = (self.store.get_article(memory_match.prior_article_id)
+                         if channel is not None and channel.mode == ChannelMode.MONITORING
+                         and memory_match.prior_article_id is not None else None)
+                if prior is not None and material_monitoring_update_237(current, prior):
+                    event("dedupe", "2.3.7 material event update protected",
+                          channel_id=channel_id, article_id=article_id,
+                          prior_article_id=memory_match.prior_article_id)
+                else:
+                    return DedupeResult(
+                        "DUPLICATE", memory_match.prior_article_id,
+                        "2.2.25 event-memory: " + memory_match.reason,
+                    )
             if memory_match.relation == "UPDATE":
                 if str(current["event_key"] or "") != memory_match.event_id:
                     self.store.update_article(article_id, event_key=memory_match.event_id)
@@ -928,6 +944,11 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
                     continue
             except Exception:
                 pass
+            if channel is not None and channel.mode == ChannelMode.MONITORING:
+                from .monitoring_event_update_237 import material_monitoring_update_237
+                update_reason = material_monitoring_update_237(current, candidate)
+                if update_reason:
+                    continue
             # Material new confirmed aggregate facts are updates, not same
             # event replays; skip older-family fuzzy matcher for this pair.
             from .regional_daily_event_231 import regional_daily_relation
