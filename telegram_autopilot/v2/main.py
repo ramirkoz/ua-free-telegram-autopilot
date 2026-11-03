@@ -213,6 +213,16 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.2.62 listings unchanged after failed migration",
                       level=40, detail=str(exc)[:1200])
+            # Reconstruct the exact commercial 2.3.5 source mix before applying
+            # human editorial policy. Publisher identity, not a shared RSS
+            # relay hostname, prevents accidental Trend Hunter suppression.
+            try:
+                from .commercial_sources_236 import apply_commercial_sources_236
+                source_update = apply_commercial_sources_236(store)
+                event("ingest", "full 2.3.5 commercial roster restored", **source_update)
+            except Exception as exc:
+                event("ingest", "2.3.6 commercial source migration failed",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
