@@ -91,6 +91,9 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         ))
     )
 
+    if not strong_settled_result and re.search(r"(?iu)\\bреактив\\w*\\b[^.!?\\n]{0,110}\\bчутно\\b|\\bчутно\\b[^.!?\\n]{0,110}\\bреактив\\w*\\b", compact):
+        return "Непідтверджене повідомлення про звук повітряної загрози без наслідків"
+
     # 2.2.9: a bare weapon+place bulletin such as "Ланцет на ..." is
     # an active alert, even when it omits verbs like "летить" or "рухається".
     if not strong_settled_result and re.search(
