@@ -1,3 +1,18 @@
+# Current canonical 2.3.6 release — synchronized 2026-11-03
+
+**SUPERSEDES ALL BELOW WARNINGS FROM THE PRE-RELEASE HANDOFF.** Full operator-derived 2.3.6 code is now present on GitHub `main`, `V2_VERSION.txt=2.3.6`. [Official GitHub Release v2.3.6](https://github.com/ramirkoz/ua-free-telegram-autopilot/releases/tag/v2.3.6) has passed release workflow and current `main` CI. Identical named artifacts with exact sizes and matching SHA256 manifest exist in [Google Drive RELEASE folder](https://drive.google.com/drive/folders/1O14xcRXwNN3LIRmY9plMUNGB2-wAizTX).
+
+- Portable ZIP **36,243,970 B**, SHA256 `1dba73798b86876c8f5660f7568bb8ccc8f66d49997b73e92e3d1539b8094b39`.
+- Source ZIP **1,188,312 B**, SHA256 `b9d63deed5f7ee4404901bc3048655f90ab0eac011d6411be582730e7bfc1d68`.
+- `SHA256SUMS.txt` **234 B**.
+- The earlier **29,444,571 B** operator-local candidate was superseded by GitHub Windows-native release, retained only as historical RC.
+- ProductVault current: [RELEASE_2.3.6.md](https://github.com/ramirkoz/ProductVault/blob/main/01_PRODUCT/AUTOPILOT/RELEASE_2.3.6.md).
+- Operator LIVE acceptance on installed Windows machine is still pending. Preserve Data, first-run import, Telegram UNKNOWN protection.
+
+---
+
+## Historical handoff (superseded, do not treat as current)
+
 # Autopilot v2.3.6 — verified four-way synchronization (2026-11-03)
 
 **Status:** GitHub **main 2.3.6**, official Windows GitHub release **v2.3.6**, Google Drive official asset mirror **completed**, ProductVault canonical record **updated**. Operator LIVE installation/Telegram delivery still requires acceptance; synchronization success is not a claim that the user has installed 2.3.6.
