@@ -220,6 +220,12 @@ def main() -> int:
             _apply_scientific_news_profile(store)
             migrated = apply_science_general_audience_profile(store)
             event("editorial", "science general-audience policy checked", migrated=migrated)
+            # 03.11 human-labelled editorial reset is applied AFTER historic
+            # policy migrations. All changes and rollback text stay in Data/meta.
+            # Monitoring profiles, source rosters, Telegram receipts untouched.
+            from .editorial_human_calibration_20261103 import apply_human_editorial_policy
+            calibrated = apply_human_editorial_policy(store)
+            event("editorial", "human calibration checked", channels=calibrated)
             # 2.0.10: the RC103 fast-start hook skips normal maintenance.
             # Retire the old queue synchronously BEFORE workers/UI can publish.
             # Failing here must stop launch rather than leak pre-cutover posts.
