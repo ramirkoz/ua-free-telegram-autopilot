@@ -47,6 +47,7 @@ def _policy_fixture(tmp_path: Path) -> _Store:
             );
             CREATE TABLE channel_policies(
                channel_id INTEGER PRIMARY KEY,
+               purpose TEXT, audience TEXT,
                selection_rules TEXT, rejection_rules TEXT,
                selector_extra_prompt TEXT, writer_extra_prompt TEXT,
                updated_at TEXT
@@ -61,8 +62,9 @@ def _policy_fixture(tmp_path: Path) -> _Store:
             ],
         )
         con.executemany(
-            "INSERT INTO channel_policies VALUES(?,?,?,?,?,?)",
-            [(cid, "old selection", "old reject", "old selector", "old writer", "old date")
+            "INSERT INTO channel_policies VALUES(?,?,?,?,?,?,?,?)",
+            [(cid, "old purpose", "old audience", "old selection", "old reject",
+              "old selector", "old writer", "old date")
              for cid in (1, 2, 3)],
         )
     return store
