@@ -214,6 +214,24 @@ def build_publication_media_bundle(
             if hero is not None:
                 candidates.append(hero)
 
+        # 2.3.8: two different logo stories from Creative Bloq published the
+        # same unrelated second visual. For single-brand identity news, keep
+        # only the image independently bound to THIS source article; preserve
+        # explicit schema-verified galleries and all ordinary story galleries.
+        from .logo_media_provenance_238 import choose_identity_story_media_238
+        candidates, logo_media_dropped = choose_identity_story_media_238(
+            candidates,
+            title=str(_v(article, "title", "") or ""),
+            raw_text=str(_v(article, "raw_text", "") or ""),
+            source_kind=raw.source_kind,
+        )
+        if logo_media_dropped:
+            counts = dict(drop_reasons)
+            counts["identity_story_unproven_extra_238"] = (
+                counts.get("identity_story_unproven_extra_238", 0) + logo_media_dropped
+            )
+            drop_reasons = tuple(sorted(counts.items()))
+
         seen: set[str] = set()
         for item in candidates:
             if item is None or item.kind not in {"image", "video"} or not item.url:
