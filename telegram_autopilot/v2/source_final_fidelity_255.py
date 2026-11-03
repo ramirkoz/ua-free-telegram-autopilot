@@ -173,10 +173,25 @@ def source_final_fidelity_issues(article: Any, final_text: str) -> tuple[str, ..
             if rocket_counts and drone_counts and min(rocket_counts) < max(drone_counts):
                 issues.append("FACT_UNSUPPORTED_CATEGORY_SUPERLATIVE_255")
 
+    # A local power-outage report with concrete time windows is NOT fulfilled
+    # by "the schedule was updated" without any times. Do not publish a
+    # misleadingly complete generic summary of a source-owned timetable.
+    if re.search(r"(?iu)(?:графік\w*|підчерг\w*).{0,140}(?:світл\w*|відключен\w*)|(?:світл\w*|відключен\w*).{0,140}(?:графік\w*|підчерг\w*)", source):
+        slot_re = re.compile(r"(?iu)\b(?:з|від)\s*(\d{1,2}:\d{2})\s*(?:до|[-–—])\s*(\d{1,2}:\d{2})")
+        source_slots = {(a, b) for a, b in slot_re.findall(source)}
+        if len(source_slots) >= 2:
+            output_slots = {(a, b) for a, b in slot_re.findall(out)}
+            if len(source_slots & output_slots) < 2:
+                issues.append("FACT_POWER_SCHEDULE_TIME_WINDOWS_LOST_20261103")
+
     return tuple(dict.fromkeys(issues))
 
 
 SOURCE_FINAL_FIDELITY_RULE_255 = (
+    "Якщо SOURCE містить конкретні години відключень світла за чергами, " 
+    "не замінюй ці години загальним повідомленням про оновлення графіків: " 
+    "збережи точні інтервали із SOURCE, без вигаданих годин; якщо всі не вміщуються, " 
+    "не вдавай, ніби наведено повний розклад. " 
     "SOURCE → DRAFT → FINAL | ФАКТИЧНА ТОЧНІСТЬ v2.2.55: "
     "«мешканці Запоріжжя» означає місце проживання людей, "
     "а НЕ місце удару. Поїзд «Дніпро — Запоріжжя» є маршрутом, "
