@@ -35,6 +35,7 @@ from .claim_trace import trace_output_claims
 from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressions
 from .editorial_tone_254 import editorial_tone_rules
 from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
+from .editorial_human_calibration_20261103 import human_calibrated_editorial
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
@@ -1352,7 +1353,10 @@ SOURCE:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
-        commercial_audience_instruction = COMMERCIAL_READER_RULE_256 if _is_commercial_editorial(channel) else ""
+        calibrated_editorial = human_calibrated_editorial(channel)
+        commercial_audience_instruction = (
+            COMMERCIAL_READER_RULE_256 if _is_commercial_editorial(channel) and not calibrated_editorial else ""
+        )
         from .commercial_topic_balance_258 import commercial_topic_advisory_258
         commercial_mix_instruction = commercial_topic_advisory_258(self.store, channel.id, article) if _is_commercial_editorial(channel) else ""
         science_audience_instruction = (
@@ -1363,7 +1367,18 @@ SOURCE:
             "engineer niche using only source facts. Never invent applications.\n"
             if is_science_general_channel(channel) else ""
         )
-        prompt = f"""Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення.
+        selector_header = (
+            "Ти редактор. Вирішуй, чи це предметна і цікава новина для каналу за SOURCE. "
+            "Не вимагай одночасно гучного прориву, вірусності, масової користі чи маркетингової механіки. "
+            "Для science: відкриття, ШІ, космос, робот, кібербезпека, цікавий технологічний продукт. "
+            "Для commercial: оригінальний предмет, дизайн, продукт чи креативна ідея самі можуть бути новиною. "
+            "Відхиляй порожній PR, рекламу без ідеї, відсутність перевірюваних фактів та невідповідність темі. "
+            "Старість evergreen-матеріалу не тотожна відсутності редакційної цікавості; часову безпеку перевіряє окремий guard. "
+            "Не вигадуй фактів."
+            if calibrated_editorial else
+            "Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення."
+        )
+        prompt = f"""{selector_header}
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {science_audience_instruction}
@@ -1403,6 +1418,16 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             code = str(fit.get("reject_code") or "").strip().casefold()
             prefix = f"[{code}] " if code in SELECTOR_REJECT_CODES else ""
             return EditorialOutcome(Decision.REJECT, reason=prefix + _clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)
+        if calibrated_editorial:
+            # Human editorial calibration is ONE subjective fit decision, not
+            # a chain of two more opaque scoring vetoes. Existing source,
+            # factual, freshness, duplicate and publication guards still run.
+            return EditorialOutcome(
+                Decision.PUBLISH,
+                reason=f"HUMAN_EDITORIAL_PASS fit={score}; learning={learning.fit_adjustment:+d}",
+                angle=_clean(fit.get("angle"), 500), fit_score=score,
+                provider=fit_result.provider, model=fit_result.model,
+            )
         value_keys = ("novelty", "consequence_or_insight", "mechanism", "reader_payoff", "retellability", "concrete_stakes", "why_now")
         if _is_commercial_editorial(channel):
             value = self._sold_value_gate(article)
