@@ -73,6 +73,7 @@ CREATIVE_WRITER = (
 )
 
 POLICY_FIELDS = (
+    "purpose", "audience",
     "selection_rules", "rejection_rules",
     "selector_extra_prompt", "writer_extra_prompt",
 )
@@ -116,7 +117,7 @@ def apply_human_editorial_policy(store: Any) -> int:
         channels = con.execute(
             """SELECT c.id,c.channel_mode,c.editorial_runtime_profile,
                       c.dedupe_profile,c.dedupe_scientific_names,c.dedupe_compound_events,
-                      p.selection_rules,p.rejection_rules,
+                      p.purpose,p.audience,p.selection_rules,p.rejection_rules,
                       p.selector_extra_prompt,p.writer_extra_prompt
                FROM channels c JOIN channel_policies p ON p.channel_id=c.id
                WHERE c.channel_mode='editorial'"""
@@ -139,13 +140,17 @@ def apply_human_editorial_policy(store: Any) -> int:
             cid = int(row["id"])
             prior[str(cid)] = {field: str(row[field] or "") for field in POLICY_FIELDS}
             new_policy = (
-                (SCIENCE_SELECTION, SCIENCE_REJECTION, SCIENCE_SELECTOR, SCIENCE_WRITER)
+                ("Цікава наука й технології, зрозумілі українською.",
+                 "Допитливі читачі, не обов'язково фахівці.",
+                 SCIENCE_SELECTION, SCIENCE_REJECTION, SCIENCE_SELECTOR, SCIENCE_WRITER)
                 if role == "science" else
-                (CREATIVE_SELECTION, CREATIVE_REJECTION, CREATIVE_SELECTOR, CREATIVE_WRITER)
+                ("Оригінальні продукти, дизайн, креатив і незвичайні ідеї.",
+                 "Допитливі читачі, не обов'язково маркетологи чи дизайнери.",
+                 CREATIVE_SELECTION, CREATIVE_REJECTION, CREATIVE_SELECTOR, CREATIVE_WRITER)
             )
             con.execute(
                 """UPDATE channel_policies
-                   SET selection_rules=?,rejection_rules=?,
+                   SET purpose=?,audience=?,selection_rules=?,rejection_rules=?,
                        selector_extra_prompt=?,writer_extra_prompt=?,updated_at=?
                    WHERE channel_id=?""",
                 (*new_policy, stamp, cid),
