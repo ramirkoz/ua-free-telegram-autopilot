@@ -239,6 +239,7 @@ def _install_ai_efficiency_contract() -> None:
     from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
     from .commercial_topic_balance_258 import commercial_topic_advisory_258
     from .editorial_human_calibration_236 import calibrated_editorial_role
+    from .editorial_feedback_2310 import calibrated_feedback_2310
 
     def combined_select(self, channel, article):
         p = channel.policy
@@ -273,6 +274,7 @@ SELECTION: {p.selection_rules}
 EXCLUSIONS: {p.rejection_rules}
 EXTRA: {p.selector_extra_prompt}
 {topic_memory}
+{calibrated_feedback_2310(calibrated_role)}
 SOURCE NAME: {ed._clean(ed._v(article, 'source_name', ''), 300)}
 SOURCE TITLE: {ed._clean(ed._v(article, 'title', ''), 700)}
 SOURCE:
