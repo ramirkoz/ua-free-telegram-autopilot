@@ -40,7 +40,8 @@ class RouteContractCircuit:
         cpu_timeout = p == "local" and (
             kind == "timeout" or "не завершила локальне ai-завдання за 120 секунд" in message
         )
-        if not (reasoning or cpu_timeout):
+        oversized_writer = (p == "groq" and "http 413" in message)
+        if not (reasoning or cpu_timeout or oversized_writer):
             return False
         stamp = time.monotonic() if now is None else float(now)
         key = (p, str(model or "").lower())
@@ -49,7 +50,7 @@ class RouteContractCircuit:
             count = 0
         count += 1
         if count >= 2:
-            until = stamp + (900 if cpu_timeout else 600)
+            until = stamp + (900 if cpu_timeout else 600 if reasoning else 300)
         self._events[key] = (count, stamp, until)
         return count >= 2
 
