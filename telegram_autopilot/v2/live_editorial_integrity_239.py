@@ -35,6 +35,10 @@ _NATIONAL_FINANCE = re.compile(
     r"нбу\s+(?:оприлюднив|встановив)\s+курс)"
 )
 _SPECIAL_LOCAL = re.compile(r"(?iu)(?:впо|переселенц|громад|мешканц|жител|вихідц|евакуйован)")
+_NATIONAL_EMERGENCY = re.compile(
+    r"(?iu)(?:енергосистем\w*\s+україн|низці\s+областей|"
+    r"кількох\s+областях|по\s+(?:всій|всій\s+території)\s+україн)"
+)
 _CLAIMED_STATS = re.compile(
     r"(?iu)(?:населенн[яі]|мешканц[іві])[^.!?\n]{0,90}"
     r"(?:третин[ауи]|\d+\s*(?:тис|тисяч|мільйон))"
@@ -79,7 +83,7 @@ def monitoring_scope_issue(article: Any) -> str:
         return "MONITORING_EXTERNAL_POLITICAL_REACTION_239"
     if _NATIONAL_FINANCE.search(body):
         return "MONITORING_NATIONAL_FINANCE_NO_LOCAL_EVENT_239"
-    if _OTHER_CITY.search(body) and not _SPECIAL_LOCAL.search(body):
+    if _OTHER_CITY.search(body) and not (_SPECIAL_LOCAL.search(body) or _NATIONAL_EMERGENCY.search(body)):
         return "MONITORING_OTHER_REGION_ONLY_239"
     return ""
 
