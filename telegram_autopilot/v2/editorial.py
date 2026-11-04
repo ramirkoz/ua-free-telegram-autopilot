@@ -1132,6 +1132,8 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
         return ("порожній final_text",)
     from .editorial_copyedit_237 import copyedit_issues_237
     issues.extend(copyedit_issues_237(value))
+    from .live_editorial_integrity_239 import final_integrity_issues
+    issues.extend(final_integrity_issues(article, value))
     # Independent final publish-boundary language sentinel. Run BEFORE source
     # and fact checks so another issue cannot mask a nonword that would be sent.
     issues.extend("Жорсткий мовний QA: " + item for item in final_language_blockers(value))
@@ -1244,6 +1246,11 @@ class EditorialEngine:
             source_problem = _monitoring_official_context_reject(article, channel)
             if source_problem:
                 return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
+        if channel.mode == ChannelMode.MONITORING:
+            from .live_editorial_integrity_239 import monitoring_scope_issue
+            scope_issue = monitoring_scope_issue(article)
+            if scope_issue:
+                return EditorialOutcome(Decision.REJECT, reason=scope_issue, fit_score=0)
         from .editorial_hard_floor import two_sentence_reason
         source_short = two_sentence_reason(article)
         if source_short:
