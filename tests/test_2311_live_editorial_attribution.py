@@ -108,3 +108,31 @@ def test_random_numeric_tail_stays_blocked():
 def test_unrelated_legal_story_without_allegation_trigger_untouched():
     row = article("У Запоріжжі поліція відкрила новий центр допомоги свідкам.")
     assert unattributed_criminal_allegation_2311(row, "Поліція відкрила центр.") == ""
+
+
+def test_prepublish_guard_blocks_older_ready_without_local_case():
+    from telegram_autopilot.v2.domain import ChannelMode
+    from telegram_autopilot.v2.editorial import hard_editorial_reject
+    channel = SimpleNamespace(
+        mode=ChannelMode.MONITORING,
+        policy=SimpleNamespace(monitoring_denied_origins=""),
+    )
+    assert hard_editorial_reject(channel, article(NABU_SOURCE_90628)) == (
+        "MONITORING_NONLOCAL_NATIONAL_CRIMINAL_CASE_2311"
+    )
+
+
+def test_human_approval_cannot_bypass_unattributed_criminal_case():
+    from telegram_autopilot.v2.domain import ChannelMode
+    from telegram_autopilot.v2.source_fact_integrity import non_overridable_quality_issues
+    row = article(
+        NABU_SOURCE_90628 + " За повідомленням відомства ведеться розслідування."
+    )
+    channel = SimpleNamespace(mode=ChannelMode.MONITORING)
+    final = (
+        "НАБУ і САП розслідують ймовірну діяльність колцентрів. "
+        "Організатором став раніше засуджений чоловік, який підкуповував посадовців."
+    )
+    assert "MONITORING_UNATTRIBUTED_CRIMINAL_ALLEGATION_2311" in (
+        non_overridable_quality_issues(channel, row, final)
+    )
