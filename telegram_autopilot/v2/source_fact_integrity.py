@@ -106,6 +106,11 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
         if reason:
             issues.append(reason)
     if channel.mode == ChannelMode.MONITORING:
+        # Even human-approved posts must not convert an investigation into a verdict.
+        from .live_editorial_integrity_2311 import unattributed_criminal_allegation_2311
+        allegation = unattributed_criminal_allegation_2311(article, final_text)
+        if allegation:
+            issues.append(allegation)
         # Human approval / force-publish never overrides immutable source stance.
         # A rhetorical source question is not a confirmed event or motive.
         from .monitoring_editorial_stance_232 import monitoring_source_stance_reason

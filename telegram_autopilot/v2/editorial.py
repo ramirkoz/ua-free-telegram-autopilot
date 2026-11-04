@@ -31,6 +31,11 @@ from .editorial_coverage_234 import eligible_recheck_234, independent_value_conf
 from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
+from .live_editorial_integrity_2311 import (
+    LEGAL_ALLEGATION_WRITER_RULE_2311,
+    national_criminal_case_without_local_2311,
+    unattributed_criminal_allegation_2311,
+)
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
 from .claim_trace import trace_output_claims
@@ -408,6 +413,11 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         return ""
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
+    # 2.3.11: source content, not the Telegram channel brand,
+    # establishes local relevance. Also covers preexisting READY rows.
+    national_case = national_criminal_case_without_local_2311(article)
+    if national_case:
+        return national_case
     # Evaluate the SOURCE, not AI rewrite/title/forwarding channel, at both
     # selection and final Telegram send. This also catches existing READY rows
     # imported from older versions after their media blockers are resolved.
@@ -864,6 +874,24 @@ def _unsupported_analysis_claims(article: Any, value: str) -> tuple[str, ...]:
     return tuple(issues)
 
 
+def _source_owned_practical_tail(article: Any, value: str) -> bool:
+    """A verified source-owned contact line is not a truncated sentence.
+
+    Only a separately appended exact source phone/email/URL after complete
+    prose qualifies. A dangling sentence ending in a random number stays
+    blocked. This does NOT waive fact, length or language guards.
+    """
+    body, separator, tail = str(value or "").rpartition("\n\n")
+    if not separator or not body.strip() or not tail.strip():
+        return False
+    allowed = {f"{label}: {literal}" for label, literal in _practical_literals(article)}
+    lines = [line.strip() for line in tail.splitlines() if line.strip()]
+    return bool(
+        allowed and lines and all(line in allowed for line in lines)
+        and re.search(r"[.!?…][\)\]»”'\"]*$", body.strip())
+    )
+
+
 def validate_writer_output(
     article: Any,
     text: str,
@@ -925,7 +953,7 @@ def validate_writer_output(
     # The source footer is appended separately; body must end on a sentence.
     if re.search(r"[А-Яа-яІіЇїЄєҐґA-Za-z0-9]$", value) and not re.search(
         r"(?:https?://\\S+|[.!?…][\\)\\]»”'\"]*)$", value
-    ):
+    ) and not _source_owned_practical_tail(article, value):
         raise ValueError("Редакційний QA: незавершене речення або обірваний текст")
     if value.count("(") != value.count(")") or value.count("«") != value.count("»"):
         raise ValueError("Незакриті дужки/лапки")
@@ -1739,6 +1767,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
 {MONITORING_NEWS_INTEGRITY_RULE_263 if channel.mode == ChannelMode.MONITORING else ''}
+{LEGAL_ALLEGATION_WRITER_RULE_2311 if channel.mode == ChannelMode.MONITORING else ''}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_WRITER_RULE}
@@ -1784,6 +1813,9 @@ SOURCE:
                 stance = monitoring_source_stance_reason(article, candidate)
                 if stance:
                     raise ValueError("Monitoring source stance QA: " + stance)
+                allegation = unattributed_criminal_allegation_2311(article, candidate)
+                if allegation:
+                    raise ValueError(allegation)
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
@@ -1899,6 +1931,7 @@ SOURCE:
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
 {MONITORING_NEWS_INTEGRITY_RULE_263 if channel.mode == ChannelMode.MONITORING else ''}
+{LEGAL_ALLEGATION_WRITER_RULE_2311 if channel.mode == ChannelMode.MONITORING else ''}
 {READER_COMPLETENESS_RULE_252}
 {FINAL_CLAIM_REVIEW_RULE}
 {POST_TRANSLATION_FINAL_RULE}
@@ -1932,6 +1965,9 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                 stance = monitoring_source_stance_reason(article, candidate)
                 if stance:
                     raise ValueError("Monitoring source stance QA: " + stance)
+                allegation = unattributed_criminal_allegation_2311(article, candidate)
+                if allegation:
+                    raise ValueError(allegation)
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
