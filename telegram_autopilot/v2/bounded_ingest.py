@@ -117,7 +117,7 @@ class BoundedStrictIngestService(StrictIngestService):
         # 2.3.4: three (instead of two) date-eligible, unseen thin commercial
         # articles may request a verified publisher page. All identity/date
         # checks and per-request network limits stay unchanged.
-        commercial_fulltext_tokens = [3]
+        commercial_fulltext_tokens = [6]
         commercial_fulltext_lock = Lock()
 
         def beat() -> None:
@@ -315,7 +315,7 @@ class BoundedStrictIngestService(StrictIngestService):
                     _, outcome = enrich_exact_commercial_article_233(item, source.url)
                     event("ingest", "2.3.4 exact commercial short-source article retrieval",
                           channel_id=channel_id, source_id=source.id, source=source.name,
-                          article_url=item.url, status=outcome, limit_per_channel_cycle=3,
+                          article_url=item.url, status=outcome, limit_per_channel_cycle=6,
                           no_timestamp_guess=True, identity_media_unchanged=True)
             if source.kind == "telegram":
                 for item in items:
