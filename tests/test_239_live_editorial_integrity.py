@@ -66,3 +66,8 @@ def test_legal_guilt_wording_rejected():
     assert "UNPRESUMED_LEGAL_GUILT_239" in final_integrity_issues(
         article("До суду скеровано обвинувальний акт."), "Шахраї привласнили кошти."
     )
+
+
+def test_national_energy_disruption_with_city_not_false_rejected():
+    row = article("Укренерго повідомило: енергосистема України зазнала ударів. Через атаки у Києві та низці областей ввели відключення.")
+    assert monitoring_scope_issue(row) == ""
