@@ -228,6 +228,9 @@ def language_quality_issues(value: str) -> tuple[str, ...]:
 
 
 _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 05 Nov 2.3.14 natural CTRL+UA: observed high-confidence case errors.
+    (re.compile(r"(?iu)\bрідкісн(?:ий|ого|им)\s+знахід\b"), "неправильний рід «рідкісний знахід»"),
+    (re.compile(r"(?iu)\b(?:у|в)\s+дикій\s+природи\b"), "неправильний відмінок «у дикій природи»"),
     (re.compile(r"(?iu)\b(?:учасник(?:ів|и)|підлітк(?:ів|и)|діт(?:ей|и))\s+\d{1,2}\s*[–—-]\s*\d{1,2}\s+рік\b"),
      "неграмотний віковий діапазон «учасників 11–18 рік»"),
     # LIVE #74292: a correct draft was corrupted by the final AI editor.
