@@ -33,6 +33,7 @@ from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRAN
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
 from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
+from .schedule_digest_2314 import schedule_digest_limits_2314, schedule_digest_instruction_2314
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
 from .live_editorial_integrity_2311 import (
     LEGAL_ALLEGATION_WRITER_RULE_2311,
@@ -693,6 +694,12 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
         effective_min = configured_min
         effective_max = configured_max
     effective_max = max(effective_min, min(effective_max, int(body_hard_max)))
+    # 2.3.14: a table-rich source with an explicit change narrative should
+    # produce a short factual update, not 500 chars of artificial padding.
+    # Bare time tables still fail the independent two-sentence source gate.
+    effective_min, effective_max = schedule_digest_limits_2314(
+        _source_text(article), effective_min, effective_max,
+    )
     return effective_min, effective_max, effective_max
 
 
@@ -1787,6 +1794,7 @@ EXTRA: {p.writer_extra_prompt}
 ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {source_fact_card.text}
 {schedule_guidance(_v(article, 'raw_text', ''))}
+{schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
 потім поясни його зміст простими словами, додай лише перевірені подробиці.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
@@ -1946,6 +1954,7 @@ SOURCE:
 {source_stance_instruction}
 {source_fact_card.text}
 {schedule_guidance(_v(article, 'raw_text', ''))}
+{schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
