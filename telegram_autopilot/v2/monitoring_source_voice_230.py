@@ -78,6 +78,11 @@ def source_voice_output_reason(article: Any, final_text: str) -> str:
     if (_FIRST_PERSON_QUOTE.search(original)
             and _MISSING_SPEAKER_IN_OUTPUT.search(str(final_text or ""))):
         return "MONITORING_SOURCE_SPEAKER_LOST"
+    # 2.3.15: the news channel may not impersonate the source's gratitude.
+    outgoing = str(final_text or "")
+    if (re.search(r"(?im)^\s*(?:щиро\s+)?дякуємо\b", outgoing)
+            and re.search(r"(?iu)\b(?:щиро\s+)?дякуємо\b", original)):
+        return "MONITORING_BORROWED_THANKS_VOICE_2315"
     return ""
 
 
