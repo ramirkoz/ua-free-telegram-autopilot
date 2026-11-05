@@ -417,11 +417,6 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
             return source_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
-    # 2.3.15: immutable source teaser veto before any formatting or Telegram send.
-    from .source_safety_2315 import monitoring_invite_bait_reason
-    invite_bait = monitoring_invite_bait_reason(article)
-    if invite_bait:
-        return invite_bait
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
     # 2.3.11: source content, not the Telegram channel brand,
@@ -440,6 +435,11 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    # 2.3.15: immutable source teaser veto before any formatting or Telegram send.
+    from .source_safety_2315 import monitoring_invite_bait_reason
+    invite_bait = monitoring_invite_bait_reason(article)
+    if invite_bait:
+        return invite_bait
     # 2.2.63: original short social self-promo is not civic news.
     source_promo = monitoring_source_promo_reason(article)
     if source_promo:
