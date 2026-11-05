@@ -69,6 +69,7 @@ def test_real_times_pass_numeric_guard_and_invented_or_malformed_times_fail():
 def test_numeric_guard_survives_real_writer_validation():
     good = (
         "У Запоріжжі оновили графік відключень світла на 5 листопада. "
+        "Окремі відключення починаються пізніше, а інші триватимуть довше. "
         "Для черги 1.2 зазначено відключення з 13:30 до 17:00, "
         "а для черги 3.2 — до 21:30."
     )
