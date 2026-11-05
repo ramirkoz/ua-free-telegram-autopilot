@@ -9,6 +9,7 @@ publisher, brand, article-ID, or URL whitelists.
 from __future__ import annotations
 
 from typing import Any
+import re
 from urllib.parse import urlsplit
 
 
@@ -85,9 +86,10 @@ def source_only_promotion_veto_2312(role: str, article: Any) -> str:
     if "/deals/" not in path:
         return ""
     title = field("title").casefold()
-    if any(token in title for token in (
-        "discount", "cheaper", "saving", "save $", "deal", "sale",
-        "знижк", "дешевш", "розпродаж", "заощад",
-    )):
+    if re.search(
+        r"(?iu)\\b(?:discount\\w*|cheaper|savings?|deals?|sales?|"
+        r"знижк\\w*|дешевш\\w*|розпродаж\\w*|заощад\\w*)\\b|"
+        r"\\bsave\\s*[$€£]?\\d+", title,
+    ):
         return "EDITORIAL_OPERATOR_PRICE_PROMO_2312"
     return ""
