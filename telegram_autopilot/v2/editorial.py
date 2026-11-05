@@ -32,6 +32,7 @@ from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
+from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
 from .live_editorial_integrity_2311 import (
     LEGAL_ALLEGATION_WRITER_RULE_2311,
@@ -124,9 +125,11 @@ def _parse_json(raw: str) -> dict[str, Any]:
 
 def _source_pack(article: Any, budget: int = 6000) -> str:
     try:
-        return build_evidence_pack(article, char_budget=budget).text
+        packed = build_evidence_pack(article, char_budget=budget).text
     except Exception:
-        return (_clean(_v(article, "title", ""), 700) + "\n" + _clean(_v(article, "raw_text", ""), budget)).strip()
+        packed = (_clean(_v(article, "title", ""), 700) + "\n" + _clean(_v(article, "raw_text", ""), budget)).strip()
+    # Prompt-only lossless spacing; source DB and factual QA use raw evidence.
+    return restore_joined_schedule_rows(packed)
 
 
 def _telegram_meta(article: Any) -> dict[str, Any]:
@@ -611,18 +614,10 @@ def _source_day_month_pairs(text: str) -> set[tuple[int, str]]:
 
 
 def _number_tokens(text: str) -> set[str]:
-    clean = re.sub(r"https?://\S+", "", str(text or ""))
-    # Telegram may join the last word of an HTML block to a date:
-    # "транспорту22 жовтня". The number is SOURCE-OWNED, not invented.
-    # Only split a glued DAY+MONTH, not arbitrary embedded model/product
-    # identifiers (GPT5, iPhone16), preserving invented-number protection.
-    clean = _UK_MONTH_AFTER_GLUE.sub(" ", clean)
-    result: set[str] = set()
-    for token in re.findall(r"(?<!\w)\d[\d\s.,:/-]*\d|(?<!\w)\d(?!\w)", clean):
-        normalized = re.sub(r"[\s,._]", "", token).strip()
-        if normalized:
-            result.add(normalized)
-    return result
+    # Atomic numeric matching preserves exact clock times in schedule tables
+    # and still rejects genuinely unsupported, malformed model-added numbers.
+    # The source-only row repair does not alter operator records.
+    return numeric_atoms(_UK_MONTH_AFTER_GLUE.sub(" ", str(text or "")))
 
 
 TELEGRAM_BODY_SAFE_MAX = 880
@@ -1791,6 +1786,7 @@ EXTRA: {p.writer_extra_prompt}
 {style_memory}
 ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {source_fact_card.text}
+{schedule_guidance(_v(article, 'raw_text', ''))}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
 потім поясни його зміст простими словами, додай лише перевірені подробиці.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
@@ -1949,6 +1945,7 @@ SOURCE:
 {source_voice_instruction}
 {source_stance_instruction}
 {source_fact_card.text}
+{schedule_guidance(_v(article, 'raw_text', ''))}
 {repair_focus}
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
