@@ -435,6 +435,11 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    # 2.3.15: immutable source teaser veto before any formatting or Telegram send.
+    from .source_safety_2315 import monitoring_invite_bait_reason
+    invite_bait = monitoring_invite_bait_reason(article)
+    if invite_bait:
+        return invite_bait
     # 2.2.63: original short social self-promo is not civic news.
     source_promo = monitoring_source_promo_reason(article)
     if source_promo:
@@ -1258,6 +1263,15 @@ class EditorialEngine:
         self._coverage_reviews_234: dict[str, list[float]] = {}
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # Source-only P0 veto is not delegated to a fallible AI selector.
+        if channel.mode == ChannelMode.MONITORING:
+            from .source_safety_2315 import monitoring_invite_bait_reason
+            bait = monitoring_invite_bait_reason(article)
+            if bait:
+                event("editorial", "source-owned disappearing invite rejected",
+                      level=30, channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0), reason=bait)
+                return EditorialOutcome(Decision.REJECT, reason=bait, fit_score=0)
         # 2.3.3: the source may contain several distinct lost/found pets.
         # A full-source writer cannot reliably attribute collars/places/photos.
         if channel.mode == ChannelMode.MONITORING:

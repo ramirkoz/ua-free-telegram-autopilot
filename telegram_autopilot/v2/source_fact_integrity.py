@@ -78,6 +78,9 @@ def source_fact_issues(article: Any, final_text: str) -> tuple[str, ...]:
     from .post_quality_231 import source_action_scope_issues_231
     issues.extend(source_action_scope_issues_231(article, final_text))
     issues.extend(source_final_fidelity_issues(article, final_text))
+    # 2.3.15: source-attested action/result upgrades (not generic semantic guessing).
+    from .source_safety_2315 import source_action_certainty_issues
+    issues.extend(source_action_certainty_issues(article, final_text))
     return tuple(dict.fromkeys(issues))
 
 
@@ -90,6 +93,10 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
     """
     issues: list[str] = []
     if channel.mode == ChannelMode.MONITORING:
+        from .source_safety_2315 import monitoring_invite_bait_reason
+        bait = monitoring_invite_bait_reason(article)
+        if bait:
+            issues.append(bait)
         from .multi_notice_integrity_233 import multi_pet_bulletin_reason
         bulletin = multi_pet_bulletin_reason(article)
         if bulletin:
