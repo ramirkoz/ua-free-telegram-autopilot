@@ -31,6 +31,8 @@ from .editorial_coverage_234 import eligible_recheck_234, independent_value_conf
 from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
+from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
+from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
 from .live_editorial_integrity_2311 import (
     LEGAL_ALLEGATION_WRITER_RULE_2311,
     national_criminal_case_without_local_2311,
@@ -418,6 +420,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     national_case = national_criminal_case_without_local_2311(article)
     if national_case:
         return national_case
+    # 2.3.12: P0 source-only editorial quality from verified live post audit.
+    civic_false_positive = monitoring_editorial_integrity_2312(article)
+    if civic_false_positive:
+        return civic_false_positive
     # Evaluate the SOURCE, not AI rewrite/title/forwarding channel, at both
     # selection and final Telegram send. This also catches existing READY rows
     # imported from older versions after their media blockers are resolved.
@@ -1451,6 +1457,11 @@ SOURCE:
                   reason=source_problem)
             return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
         p = channel.policy
+        calibrated_role = calibrated_editorial_role(channel)
+        # Editorial preference only, not a Fact/Media/Telegram hard-stop.
+        operator_promo = source_only_promotion_veto_2312(calibrated_role, article)
+        if operator_promo:
+            return EditorialOutcome(Decision.REJECT, reason=operator_promo, fit_score=0)
         learning = self.learning.topic_assessment(channel.id, article)
         if learning.hard_suppress:
             reason = (
@@ -1460,7 +1471,6 @@ SOURCE:
             event("learning", "topic hard suppress", channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), detail=reason)
             return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         topic_memory = self.learning.topic_memory_block(channel.id, article)
-        calibrated_role = calibrated_editorial_role(channel)
         commercial_audience_instruction = (
             COMMERCIAL_READER_RULE_256 + "\nA well-documented surprising consumer or culture story "
             "may pass without campaign ROI, professional marketing jargon or B2B strategy. "
@@ -1516,6 +1526,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {science_audience_instruction}
 {commercial_audience_instruction}
 {commercial_mix_instruction}
+{calibrated_feedback_2312(calibrated_role)}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 {output_contract}"""
 
