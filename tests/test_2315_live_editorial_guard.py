@@ -164,3 +164,32 @@ def test_actual_document_approval_supported_when_source_explicit():
 
 def test_non_monitoring_channel_keeps_source_bait_policy_isolated():
     assert hard_editorial_reject(channel(ChannelMode.EDITORIAL), row(BAIT), BAIT_FINAL) == ""
+
+
+def test_source_91518_thanks_must_not_become_our_voice():
+    from telegram_autopilot.v2.monitoring_source_voice_230 import source_voice_output_reason
+    article = row(
+        "4 листопада громаді передали гуманітарну допомогу. "
+        "Одяг, взуття та ковдри отримали мешканці. "
+        "Щиро дякуємо нашим німецьким партнерам за підтримку.",
+        url="https://t.me/dniprorudnevma/27116",
+    )
+    faulty = (
+        "Мешканці отримали гуманітарну допомогу від партнерів. "
+        "\nДякуємо всім, хто долучився до передачі."
+    )
+    sober = (
+        "4 листопада мешканці отримали гуманітарну допомогу від німецьких партнерів. "
+        "Передали одяг, взуття та ковдри."
+    )
+    assert source_voice_output_reason(article, faulty) == "MONITORING_BORROWED_THANKS_VOICE_2315"
+    assert "MONITORING_BORROWED_THANKS_VOICE_2315" == hard_editorial_reject(channel(), article, faulty)
+    assert source_voice_output_reason(article, sober) == ""
+
+
+def test_observed_ctrl_ua_grammar_blocks_but_correct_variants_pass():
+    from telegram_autopilot.ukrainian_quality import final_language_blockers
+    assert final_language_blockers("Це рідкісний знахід у стародавній печері.")
+    assert final_language_blockers("Птаха майже не зустрічають у дикій природи.")
+    assert not final_language_blockers("Це рідкісна знахідка у стародавній печері.")
+    assert not final_language_blockers("Птаха майже не зустрічають у дикій природі.")
