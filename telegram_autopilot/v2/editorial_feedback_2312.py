@@ -87,9 +87,9 @@ def source_only_promotion_veto_2312(role: str, article: Any) -> str:
         return ""
     title = field("title").casefold()
     if re.search(
-        r"(?iu)\\b(?:discount\\w*|cheaper|savings?|deals?|sales?|"
-        r"знижк\\w*|дешевш\\w*|розпродаж\\w*|заощад\\w*)\\b|"
-        r"\\bsave\\s*[$€£]?\\d+", title,
+        r"(?iu)\b(?:discount\w*|cheaper|savings?|deals?|sales?|"
+        r"знижк\w*|дешевш\w*|розпродаж\w*|заощад\w*)\b|"
+        r"\bsave\s*[$€£]?\d+", title,
     ):
         return "EDITORIAL_OPERATOR_PRICE_PROMO_2312"
     return ""
