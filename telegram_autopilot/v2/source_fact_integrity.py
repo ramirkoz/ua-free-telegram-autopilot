@@ -97,6 +97,12 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
         bait = monitoring_invite_bait_reason(article)
         if bait:
             issues.append(bait)
+        # Manual/force-publish and old READY rows cannot override v2.3.17
+        # source-only opt-in regional and promotional publication vetoes.
+        from .monitoring_source_scope_2317 import monitoring_source_scope_reason_2317
+        source_scope = monitoring_source_scope_reason_2317(channel, article)
+        if source_scope:
+            issues.append(source_scope)
         from .multi_notice_integrity_233 import multi_pet_bulletin_reason
         bulletin = multi_pet_bulletin_reason(article)
         if bulletin:
