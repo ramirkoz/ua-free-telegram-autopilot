@@ -31,11 +31,9 @@ def priority_sort_sql_2316() -> str:
     )
     def contains_any(keys: str) -> str:
         # All terms are fixed literals, not user strings or dynamic SQL inputs.
-        return "(" + " OR ".join(
-            f"instr({subject},'{term}')>0"
-            for term in keys.strip("()").split(",")
-            if (term := term.strip().strip("'"))
-        ) + ")"
+        literals = [item.strip().strip("'") for item in keys.strip("()").split(",")]
+        return "(" + " OR ".join(f"instr({subject},'{term}')>0"
+                               for term in literals if term) + ")"
     good_science = contains_any(science)
     good_creative = contains_any(creative)
     noisy = contains_any(noise)
