@@ -1822,6 +1822,7 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
 потім поясни його зміст простими словами, додай лише перевірені подробиці.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
+Якщо SOURCE містить кілька незалежних тем (наприклад, ювілей будівлі й прогноз погоди), вибери лише одну підтверджену подію, відповідну SOURCE TITLE; не домішуй сторонній прогноз до культурної новини.
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
@@ -1858,6 +1859,11 @@ SOURCE:
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
+            if channel.mode == ChannelMode.MONITORING:
+                from .post_quality_2316 import mixed_topic_issues_2316
+                mixed = mixed_topic_issues_2316(article, candidate)
+                if mixed:
+                    raise ValueError("Source-coherence QA: " + "; ".join(mixed))
             validate_writer_output(
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
@@ -1999,6 +2005,7 @@ SOURCE:
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
+Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
@@ -2028,6 +2035,11 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
+            if channel.mode == ChannelMode.MONITORING:
+                from .post_quality_2316 import mixed_topic_issues_2316
+                mixed = mixed_topic_issues_2316(article, candidate)
+                if mixed:
+                    raise ValueError("Source-coherence QA: " + "; ".join(mixed))
             validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
