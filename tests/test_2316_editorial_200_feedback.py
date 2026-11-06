@@ -64,10 +64,10 @@ def test_short_current_rss_prioritizes_same_publisher_hydration(monkeypatch):
     source = SimpleNamespace(kind="rss",url="https://publisher.example/feed.xml")
     now = datetime.now(timezone.utc).isoformat()
     old = (datetime.now(timezone.utc)-timedelta(days=3)).isoformat()
-    short = SimpleNamespace(raw_text="Одна фраза.",published_at=now)
+    short = SimpleNamespace(raw_text="Одна фраза.",published_at=now,media_urls=[])
     complete = SimpleNamespace(raw_text=("Дослідники отримали результат. "
-                                           "Вчені його пояснили та перевірили. ")*40,published_at=now)
-    expired = SimpleNamespace(raw_text="Одна фраза.",published_at=old)
+                                           "Вчені його пояснили та перевірили. ")*40,published_at=now,media_urls=["image|https://publisher.example/existing.jpg"])
+    expired = SimpleNamespace(raw_text="Одна фраза.",published_at=old,media_urls=[])
     calls=[]
     def spy(src, **kw):
         calls.append(kw["rss_enrich_eligible"])
@@ -77,6 +77,8 @@ def test_short_current_rss_prioritizes_same_publisher_hydration(monkeypatch):
     assert calls[0](short)
     assert not calls[0](complete)
     assert not calls[0](expired)
+    unpictured = SimpleNamespace(raw_text=complete.raw_text, published_at=now, media_urls=[])
+    assert calls[0](unpictured)  # preserve required verified publisher media opportunity
 
 
 def test_only_observed_live_language_corruptions_rejected():
