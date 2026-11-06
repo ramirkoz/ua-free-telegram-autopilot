@@ -42,14 +42,14 @@ _REMOTE_NATURE_EVENT = re.compile(
 # AND absence of an original-source Zaporizhzhia connection; generic national
 # laws, national aid and weather genuinely reported for the region remain eligible.
 _REMOTE_WEATHER_PLACE_2318 = re.compile(
-    r"(?iu)\\b(?:львівщин\\w*|львівськ\\w*\\s+област\\w*|"
-    r"івано[- ]франківщин\\w*|івано[- ]франківськ\\w*\\s+област\\w*|"
-    r"черкащин\\w*|черкаськ\\w*\\s+област\\w*|"
-    r"закарпат\\w*|волин\\w*|прикарпат\\w*)\\b"
+    r"(?iu)\b(?:львівщин\w*|львівськ\w*\s+област\w*|"
+    r"івано[- ]франківщин\w*|івано[- ]франківськ\w*\s+област\w*|"
+    r"черкащин\w*|черкаськ\w*\s+област\w*|"
+    r"закарпат\w*|волин\w*|прикарпат\w*)\b"
 )
 _REMOTE_WEATHER_EVENT_2318 = re.compile(
-    r"(?iu)\\b(?:сніг\\w*|сніж\\w*|дощ\\w*|злив\\w*|"
-    r"заморозк\\w*|ожелед\\w*|хуртовин\\w*|мороз\\w*)\\b"
+    r"(?iu)\b(?:сніг\w*|сніж\w*|дощ\w*|злив\w*|"
+    r"заморозк\w*|ожелед\w*|хуртовин\w*|мороз\w*)\b"
 )
 
 _RETAIL_CONTEXT = re.compile(
