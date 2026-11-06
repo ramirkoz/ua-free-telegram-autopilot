@@ -16,6 +16,8 @@ _CORRECTIONS = (
     (re.compile(r"(?iu)\bцієїєї\b"), "цієї"),
     (re.compile(r"(?iu)\bтаскати\b"), "носити"),
     (re.compile(r"(?iu)\bспівпадають\b"), "збігаються"),
+    # LIVE 2.3.18 #92398: repair one attested broken word, with no new facts.
+    (re.compile(r"(?iu)\bви[ \t]*\n[ \t]*пав\b"), "випав"),
 )
 
 

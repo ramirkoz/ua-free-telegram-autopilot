@@ -182,6 +182,12 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     if channel.mode != ChannelMode.MONITORING:
         return ""
     source = " ".join((str(_v(article, "title", "")), _source_text(article))).casefold()
+    # 2.3.18: a future modular shelter with an incidental reference to
+    # waiting out an air-raid alert is a planned civic improvement, not
+    # an unconfirmed active threat. This does not exempt actual attack news.
+    from .monitoring_live_now import civic_shelter_plan_not_alert_2318
+    if civic_shelter_plan_not_alert_2318(source):
+        return ""
     security = re.search(r"(?iu)(?:вибух\w*|дим\w*|тривог\w*|відбій|дрон\w*|фпв|fpv|бпла|ланцет\w*|ракет\w*|шахед\w*|обстріл\w*|атак\w*|удар\w*)", source)
     if not security:
         return ""
