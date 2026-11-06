@@ -445,6 +445,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_promo = monitoring_source_promo_reason(article)
     if source_promo:
         return source_promo
+    # 2.3.17: regional source content and hard retail-promotion floor.
+    # This is repeated here for READY/manual sends from older versions.
+    from .monitoring_source_scope_2317 import monitoring_source_scope_reason_2317
+    source_scope = monitoring_source_scope_reason_2317(channel, article)
+    if source_scope:
+        return source_scope
     source_unverified = monitoring_unverified_teaser_reason(article)
     if source_unverified:
         return source_unverified
@@ -1281,6 +1287,16 @@ class EditorialEngine:
                       level=30, channel_id=channel.id,
                       article_id=int(_v(article, "id", 0) or 0), reason=bait)
                 return EditorialOutcome(Decision.REJECT, reason=bait, fit_score=0)
+        # 2.3.17: do not spend AI on a proven out-of-region nature story
+        # or a local shop's price/discount flyer. Source-only, channel-opt-in.
+        if channel.mode == ChannelMode.MONITORING:
+            from .monitoring_source_scope_2317 import monitoring_source_scope_reason_2317
+            scope = monitoring_source_scope_reason_2317(channel, article)
+            if scope:
+                event("editorial", "2.3.17 source scope veto",
+                      channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0), reason=scope)
+                return EditorialOutcome(Decision.REJECT, reason=scope, fit_score=0)
         # 2.3.3: the source may contain several distinct lost/found pets.
         # A full-source writer cannot reliably attribute collars/places/photos.
         if channel.mode == ChannelMode.MONITORING:
