@@ -84,7 +84,7 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     # Original source and final text remain untouched.
     if civic_shelter_plan_not_alert_2318(low):
         low = re.sub(
-            r"(?iu)\\bперечекати\\s+повітрян\\w*\\s+тривог\\w*\\b",
+            r"(?iu)\bперечекати\s+повітрян\w*\s+тривог\w*\b",
             "перечекати небезпеку", low,
         )
 
