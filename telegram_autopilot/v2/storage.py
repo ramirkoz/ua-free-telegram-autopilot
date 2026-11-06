@@ -2289,7 +2289,13 @@ class V2Store:
                           f"WHEN {age}<6 THEN 0 WHEN {age}<12 THEN 1 "
                           f"WHEN {age}<18 THEN 2 WHEN {age}<24 THEN 3 "
                           f"ELSE 4 END")
-                    ordering=f"{tier} ASC,j.priority ASC,{source_time} DESC,j.id ASC"
+                    # 2.3.16: prefer plausible reader-interest headlines *within*
+                    # the existing six-hour freshness tier. This is only a
+                    # work-order hint, never a publication or safety verdict.
+                    from .editorial_queue_2316 import priority_sort_sql_2316
+                    editorial_hint = priority_sort_sql_2316()
+                    ordering=(f"{tier} ASC,{editorial_hint} ASC,"
+                              f"j.priority ASC,{source_time} DESC,j.id ASC")
                 else:
                     # Existing near-TTL rescue lane remains active when the
                     # backlog can realistically fit inside publication capacity.

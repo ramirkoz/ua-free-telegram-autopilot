@@ -32,6 +32,7 @@ from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
+from .editorial_feedback_2316 import calibrated_feedback_2316
 from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
 from .schedule_digest_2314 import schedule_digest_limits_2314, schedule_digest_instruction_2314
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
@@ -923,6 +924,10 @@ def validate_writer_output(
         apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip(),
         paragraph_limit=420 if int(hard_max_chars or max_chars) <= 900 else 620,
     )
+    from .post_quality_2316 import post_language_issues_2316
+    language_2316 = post_language_issues_2316(value)
+    if language_2316:
+        raise ValueError("2.3.16 мовний QA: " + "; ".join(language_2316))
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
@@ -1173,6 +1178,10 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
         return ("порожній final_text",)
     from .editorial_copyedit_237 import copyedit_issues_237
     issues.extend(copyedit_issues_237(value))
+    from .post_quality_2316 import post_language_issues_2316, mixed_topic_issues_2316
+    issues.extend(post_language_issues_2316(value))
+    if channel.mode == ChannelMode.MONITORING:
+        issues.extend(mixed_topic_issues_2316(article, value))
     from .live_editorial_integrity_239 import final_integrity_issues
     issues.extend(final_integrity_issues(article, value))
     # Independent final publish-boundary language sentinel. Run BEFORE source
@@ -1543,6 +1552,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {commercial_audience_instruction}
 {commercial_mix_instruction}
 {calibrated_feedback_2312(calibrated_role)}
+{calibrated_feedback_2316(calibrated_role)}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 {output_contract}"""
 
@@ -1812,6 +1822,7 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
 потім поясни його зміст простими словами, додай лише перевірені подробиці.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
+Якщо SOURCE містить кілька незалежних тем (наприклад, ювілей будівлі й прогноз погоди), вибери лише одну підтверджену подію, відповідну SOURCE TITLE; не домішуй сторонній прогноз до культурної новини.
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
@@ -1848,6 +1859,11 @@ SOURCE:
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
+            if channel.mode == ChannelMode.MONITORING:
+                from .post_quality_2316 import mixed_topic_issues_2316
+                mixed = mixed_topic_issues_2316(article, candidate)
+                if mixed:
+                    raise ValueError("Source-coherence QA: " + "; ".join(mixed))
             validate_writer_output(
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
@@ -1875,11 +1891,27 @@ SOURCE:
                 article_id=int(_v(article, "id", 0) or 0), generator=result.provider,
                 monitoring=channel.mode == ChannelMode.MONITORING, quality=quality.score,
             )
-            final = self._final_edit(
-                channel, article, draft, min_chars=effective_min, max_chars=effective_max,
-                hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
-                editorial_angle=selection.angle,
-            )
+            try:
+                final = self._final_edit(
+                    channel, article, draft, min_chars=effective_min, max_chars=effective_max,
+                    hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
+                    editorial_angle=selection.angle,
+                )
+            except GatewayExhausted:
+                # 2.3.16: an independently QA-passing source-grounded DRAFT is
+                # safer than discarding a valuable story just because a second
+                # AI editor is unavailable or keeps inventing claims. Never
+                # fall back when any final hard/factual/media/text gate objects.
+                from .source_fact_integrity import non_overridable_quality_issues
+                remaining = (*non_overridable_quality_issues(channel, article, draft),
+                             *prepublish_quality_issues(channel, article, draft))
+                if remaining:
+                    raise
+                final = draft
+                event("editorial", "2.3.16 final editor exhausted, verified draft retained",
+                      channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0),
+                      full_final_qa=True, no_safety_bypass=True)
         else:
             final = draft
 
@@ -1973,6 +2005,7 @@ SOURCE:
 ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
+Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
@@ -2002,6 +2035,11 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
             source_policy = _source_body_policy_issues(channel, article, candidate)
             if source_policy:
                 raise ValueError("Source-body QA: " + "; ".join(source_policy))
+            if channel.mode == ChannelMode.MONITORING:
+                from .post_quality_2316 import mixed_topic_issues_2316
+                mixed = mixed_topic_issues_2316(article, candidate)
+                if mixed:
+                    raise ValueError("Source-coherence QA: " + "; ".join(mixed))
             validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,

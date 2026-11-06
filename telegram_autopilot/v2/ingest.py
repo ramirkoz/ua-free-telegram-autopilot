@@ -384,7 +384,25 @@ def collect_telegram(source: Source) -> list[CollectedArticle]:
 
 
 def collect(source: Source) -> list[CollectedArticle]:
-    return collect_telegram(source) if source.kind=="telegram" else collector.collect_source(source)
+    if source.kind == "telegram":
+        return collect_telegram(source)
+    if source.kind != "rss":
+        return collector.collect_source(source)
+    # Six existing bounded publisher hydration slots are scarce.
+    # Spend them on short, timely source articles before rejecting them.
+    # Preserve the exact publisher identity, current network guards, media,
+    # the existing source date fence and original freshness semantics.
+    from .editorial_hard_floor import facts
+    def needs_verified_fulltext(item: CollectedArticle) -> bool:
+        if _stale_at_ingest(str(item.published_at or ""), 24):
+            return False
+        raw = str(item.raw_text or "")
+        # Publisher-owned image recovery also belongs at ingest: a complete
+        # RSS description with no media can still have verified article media.
+        # This is a bounded hydration attempt, never a media policy bypass.
+        return (len(raw) < 380 or len(facts(raw)) < 2
+                or not list(item.media_urls or []))
+    return collector.collect_source(source, rss_enrich_eligible=needs_verified_fulltext)
 
 
 _GLOBAL_SOURCE_FETCH_LIMIT = threading.BoundedSemaphore(6)

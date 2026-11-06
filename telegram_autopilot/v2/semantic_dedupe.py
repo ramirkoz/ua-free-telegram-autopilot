@@ -288,6 +288,13 @@ def semantic_same_event(current: Any, candidate: Any) -> tuple[bool, str]:
     if same_source:
         return False, reason
 
+    # 2.3.16: cross-source repost of the same mobile-app notification feature.
+    # Never merge an actual new schedule with precise group/hours into it.
+    from .app_notification_dedupe_2316 import app_notification_same_event_2316
+    app_same, app_reason = app_notification_same_event_2316(current, candidate)
+    if app_same:
+        return True, app_reason
+
     community_same, community_reason = _community_notice_same_event(current, candidate)
     if community_same:
         return True, community_reason
