@@ -21,7 +21,10 @@ _RECOVERABLE_READY_MEDIA_CODES = {
     "MEDIA_REQUIRED",
     "MEDIA_INCOMPLETE",
     "MEDIA_DOWNLOAD_FAILED",
-    "MEDIA_DOWNLOAD_RETRY",
+    # 2.3.18: a failed binary download is NOT a missing source media URL.
+    # It may be retried only when ready_articles() reaches next_retry_at.
+    # Fresh feed snapshots cannot clear its 10-minute backoff.
+
 }
 
 
