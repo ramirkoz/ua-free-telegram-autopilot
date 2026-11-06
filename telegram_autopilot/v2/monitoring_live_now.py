@@ -29,6 +29,29 @@ _ATTACK_VERBS = re.compile(
 )
 
 
+def civic_shelter_plan_not_alert_2318(source: str) -> bool:
+    """Planned public shelter construction is not an active air-raid notice.
+
+    A quote about where pedestrians could *wait out* a future air raid is
+    background, not a current alert. Never exempt text with actual ongoing
+    attack, flight, damage or active-alert reporting.
+    """
+    low = str(source or "").casefold()
+    return bool(
+        re.search(r"(?iu)\\b(?:встановл\\w*|облашту\\w*|будівництв\\w*|"
+                  r"будуват\\w*|монту\\w*)\\b", low)
+        and re.search(r"(?iu)\\b(?:укритт\\w*|захисн\\w*\\s+споруд\\w*)\\b", low)
+        and re.search(r"(?iu)\\bперечекати\\s+повітрян\\w*\\s+тривог\\w*\\b", low)
+        and not re.search(
+            r"(?iu)\\b(?:зараз|щойно|цієї\\s+миті|відбій|"
+            r"оголосил\\w*\\s+тривог\\w*|тривог\\w*\\s+оголосил\\w*|"
+            r"чути\\s+вибух\\w*|бпла|дрон\\w*|шахед\\w*|ракет\\w*|"
+            r"влучан\\w*|обстріл\\w*|атакувал\\w*|пошкоджен\\w*)\\b",
+            low,
+        )
+    )
+
+
 def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
     """Reject minute-lived or still-unsettled monitoring events when policy opts in.
 
@@ -57,6 +80,13 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
         return stale_traffic
 
     low = (_value(article, "title") + "\n" + _value(article, "raw_text")).casefold()
+    # 2.3.18: remove only the incidental purpose clause from alert matching.
+    # Original source and final text remain untouched.
+    if civic_shelter_plan_not_alert_2318(low):
+        low = re.sub(
+            r"(?iu)\\bперечекати\\s+повітрян\\w*\\s+тривог\\w*\\b",
+            "перечекати небезпеку", low,
+        )
 
     # RC99: do not let AI invent a news item from a bare warning such as
     # "Новомиколаївка, уважно". A monitoring item must contain an actual event,
