@@ -32,6 +32,7 @@ from .science_reader_clarity_243 import science_plain_language_issue
 from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRANSLATION_WRITER_RULE, POST_TRANSLATION_FINAL_RULE
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
+from .editorial_feedback_2316 import calibrated_feedback_2316
 from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
 from .schedule_digest_2314 import schedule_digest_limits_2314, schedule_digest_instruction_2314
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
@@ -1543,6 +1544,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {commercial_audience_instruction}
 {commercial_mix_instruction}
 {calibrated_feedback_2312(calibrated_role)}
+{calibrated_feedback_2316(calibrated_role)}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 {output_contract}"""
 
