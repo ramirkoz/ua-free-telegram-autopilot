@@ -924,6 +924,10 @@ def validate_writer_output(
         apply_safe_ukrainian_fixes(sanitize_text(str(text or ""))).strip(),
         paragraph_limit=420 if int(hard_max_chars or max_chars) <= 900 else 620,
     )
+    from .post_quality_2316 import post_language_issues_2316
+    language_2316 = post_language_issues_2316(value)
+    if language_2316:
+        raise ValueError("2.3.16 мовний QA: " + "; ".join(language_2316))
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
@@ -1174,6 +1178,10 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
         return ("порожній final_text",)
     from .editorial_copyedit_237 import copyedit_issues_237
     issues.extend(copyedit_issues_237(value))
+    from .post_quality_2316 import post_language_issues_2316, mixed_topic_issues_2316
+    issues.extend(post_language_issues_2316(value))
+    if channel.mode == ChannelMode.MONITORING:
+        issues.extend(mixed_topic_issues_2316(article, value))
     from .live_editorial_integrity_239 import final_integrity_issues
     issues.extend(final_integrity_issues(article, value))
     # Independent final publish-boundary language sentinel. Run BEFORE source
@@ -1877,11 +1885,27 @@ SOURCE:
                 article_id=int(_v(article, "id", 0) or 0), generator=result.provider,
                 monitoring=channel.mode == ChannelMode.MONITORING, quality=quality.score,
             )
-            final = self._final_edit(
-                channel, article, draft, min_chars=effective_min, max_chars=effective_max,
-                hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
-                editorial_angle=selection.angle,
-            )
+            try:
+                final = self._final_edit(
+                    channel, article, draft, min_chars=effective_min, max_chars=effective_max,
+                    hard_max_chars=validation_hard_max, trusted_only=True, fail_closed=True,
+                    editorial_angle=selection.angle,
+                )
+            except GatewayExhausted:
+                # 2.3.16: an independently QA-passing source-grounded DRAFT is
+                # safer than discarding a valuable story just because a second
+                # AI editor is unavailable or keeps inventing claims. Never
+                # fall back when any final hard/factual/media/text gate objects.
+                from .source_fact_integrity import non_overridable_quality_issues
+                remaining = (*non_overridable_quality_issues(channel, article, draft),
+                             *prepublish_quality_issues(channel, article, draft))
+                if remaining:
+                    raise
+                final = draft
+                event("editorial", "2.3.16 final editor exhausted, verified draft retained",
+                      channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0),
+                      full_final_qa=True, no_safety_bypass=True)
         else:
             final = draft
 
