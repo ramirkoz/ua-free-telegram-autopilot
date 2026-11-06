@@ -37,6 +37,21 @@ _REMOTE_NATURE_EVENT = re.compile(
     r"біолог\w*|природ\w*|станці\w*\s*[«„\"]?вернадськ\w*)\b"
 )
 
+# 2.3.18: a local publisher's unrelated weather clip from other regions
+# is not a Zaporizhzhia event. Require named remote geography + weather
+# AND absence of an original-source Zaporizhzhia connection; generic national
+# laws, national aid and weather genuinely reported for the region remain eligible.
+_REMOTE_WEATHER_PLACE_2318 = re.compile(
+    r"(?iu)\\b(?:львівщин\\w*|львівськ\\w*\\s+област\\w*|"
+    r"івано[- ]франківщин\\w*|івано[- ]франківськ\\w*\\s+област\\w*|"
+    r"черкащин\\w*|черкаськ\\w*\\s+област\\w*|"
+    r"закарпат\\w*|волин\\w*|прикарпат\\w*)\\b"
+)
+_REMOTE_WEATHER_EVENT_2318 = re.compile(
+    r"(?iu)\\b(?:сніг\\w*|сніж\\w*|дощ\\w*|злив\\w*|"
+    r"заморозк\\w*|ожелед\\w*|хуртовин\\w*|мороз\\w*)\\b"
+)
+
 _RETAIL_CONTEXT = re.compile(
     r"(?iu)\b(?:магазин\w*|супермаркет\w*|гіпермаркет\w*|"
     r"торгов\w*\s+(?:мереж\w*|центр\w*|точк\w*)|"
@@ -76,6 +91,11 @@ def monitoring_source_scope_reason_2317(channel: Any, article: Any) -> str:
             and _REMOTE_NATURE_PLACE.search(original)
             and _REMOTE_NATURE_EVENT.search(original)):
         return "MONITORING_NONLOCAL_NATURE_2317"
+
+    if (not _LOCAL_EVENT.search(original)
+            and _REMOTE_WEATHER_PLACE_2318.search(original)
+            and _REMOTE_WEATHER_EVENT_2318.search(original)):
+        return "MONITORING_NONLOCAL_UA_WEATHER_2318"
 
     # A neutral, factual opening of a local business is not automatically an ad.
     # A retailer's discount flyer with prices or 'buy now' language is.
