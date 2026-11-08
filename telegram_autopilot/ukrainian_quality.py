@@ -6,6 +6,13 @@ import re
 # autopilot posts.  They only repair spelling/standard Ukrainian wording and do
 # not add facts, names, numbers, attribution or new conclusions.
 _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 2.3.19: confirmed 08 Nov source-to-final Ukrainian defects;
+    # strictly local agreements, no entity/number/claim changes.
+    (re.compile(r"(?iu)\b(у|в)\s+середмісті\s+Запоріжжі\b"), r"\1 середмісті Запоріжжя"),
+    (re.compile(r"(?iu)\bвсесохли\s+берези\b"), "висохли берези"),
+    (re.compile(r"(?iu)\b(\d+)\s+парків\s+і\s+сквери\b"), r"\1 парків і скверів"),
+    (re.compile(r"(?iu)\b(поки)\s+не\s+підтвердилося\s+його\s+загибель\b"), r"\1 не підтвердилася його загибель"),
+    (re.compile(r"(?iu)\bрозміром\s+з\s+індіку\b"), "розміром з індика"),
     # 2.2.63: LIVE #87860 study age-range agreement; narrow participant-only
     # construction preserves the exact reported 210 people and 11–18 ages.
     (re.compile(r"(?iu)\b(учасник(?:ів|и)|підлітк(?:ів|и)|діт(?:ей|и))\s+(\d{1,2})\s*[–—-]\s*(\d{1,2})\s+рік\b"),
@@ -228,6 +235,9 @@ def language_quality_issues(value: str) -> tuple[str, ...]:
 
 
 _HARD_LANGUAGE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # 2.3.19: stop known semantic contradiction before automatic Telegram send.
+    (re.compile(r"(?iu)\bзмінювати\s+джерело\s+світла\s+без\s+потреби\s+замінювати\s+саму\s+лампу\b"),
+     "суперечність щодо заміни джерела світла й лампи"),
     # 05 Nov 2.3.14 natural CTRL+UA: observed high-confidence case errors.
     (re.compile(r"(?iu)\bрідкісн(?:ий|ого|им)\s+знахід\b"), "неправильний рід «рідкісний знахід»"),
     (re.compile(r"(?iu)\b(?:у|в)\s+дикій\s+природи\b"), "неправильний відмінок «у дикій природи»"),

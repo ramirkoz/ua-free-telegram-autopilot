@@ -56,7 +56,7 @@ FALLBACK_MODEL_SLOTS: tuple[Slot, ...] = (
     Slot(4, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
     Slot(5, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
     Slot(6, "groq", "qwen/qwen3.6-27b", "Qwen 3.6 27B / Groq"),
-    Slot(7, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
+    Slot(7, "cloudflare", "@cf/google/gemma-4-26b-a4b-it", "Gemma 4 26B / Cloudflare"),
     Slot(8, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
     Slot(9, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
 )

@@ -77,7 +77,7 @@ PRODUCTION_SLOTS: tuple[legacy_ai.Slot, ...] = (
     legacy_ai.Slot(3, "groq", "openai/gpt-oss-120b", "GPT-OSS 120B / Groq"),
     legacy_ai.Slot(4, "nvidia", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super 120B / NVIDIA"),
     legacy_ai.Slot(5, "groq", "qwen/qwen3.8-27b", "Qwen 3.8 27B / Groq"),
-    legacy_ai.Slot(6, "cloudflare", "@cf/nvidia/nemotron-3-120b-a12b", "Nemotron 3 120B / Cloudflare"),
+    legacy_ai.Slot(6, "cloudflare", "@cf/google/gemma-4-26b-a4b-it", "Gemma 4 26B / Cloudflare"),
     legacy_ai.Slot(7, "cloudflare", "@cf/zai-org/glm-4.7-flash", "GLM-4.7 Flash / Cloudflare"),
     legacy_ai.Slot(8, "local", "local-model", "Локальний AI · авто: Ollama → llama.cpp", "local"),
     legacy_ai.Slot(9, "codex", "codex-chatgpt", "Codex / ChatGPT", "codex"),
@@ -93,7 +93,7 @@ _RC109_CHEAP_MODEL_RANK: dict[str, int] = {
     "openai/gpt-oss-120b": 25,
     "nvidia/nemotron-3-super-120b-a12b": 30,
     "@cf/zai-org/glm-4.7-flash": 35,
-    "@cf/nvidia/nemotron-3-120b-a12b": 40,
+    "@cf/google/gemma-4-26b-a4b-it": 40,
     "nvidia/nemotron-3-ultra-550b-a55b": 80,
     "local-model": 90,
     "codex-chatgpt": 100,
@@ -814,22 +814,32 @@ class AIGateway:
             if slot.provider == "codex"
         ] if mode == "codex" else []
 
-        # Writer and final-editor may consume significant OpenRouter spend.
-        # In 2.3.1 these routes tried paid Grok before healthy free models.
-        # Use free reviewed routes first, then at most two paid candidates.
+        # 2.3.19 operator contract: OpenRouter serves every AI purpose while
+        # usable. Individual model QA/reasoning failures never enable free AI.
+        # Emergency direct routing requires a service outage or budget exhaustion.
         editorial_cost_guard = str(purpose or "").casefold() in PAID_EDITORIAL_PURPOSES
         if mode == "codex":
             route_slots = codex_slots + (free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots)
         elif mode == "openrouter":
-            route_slots = free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots
+            route_slots = openrouter_slots + free_slots
         else:
             route_slots = free_slots
+        openrouter_transport_failures = 0
+        openrouter_failover_allowed = bool(
+            mode == "openrouter"
+            and (not self._configured("openrouter", cfg)
+                 or not self._openrouter_budget_status(cfg)[0]
+                 or self._provider_blocked("openrouter"))
+        )
         paid_attempts_232 = 0
         paid_spend_232 = 0.0
         paid_attempt_limit_232 = 2
         paid_spend_limit_232 = 0.006  # USD per gateway invocation, not a per-day budget.
         for slot in route_slots:
             provider = slot.provider
+            if mode == "openrouter" and provider != "openrouter" and not openrouter_failover_allowed:
+                # QA rejection of a valid OpenRouter answer is not an outage.
+                continue
             if allowed is not None and provider not in allowed:
                 continue
             if not self._configured(provider, cfg):
@@ -837,12 +847,16 @@ class AIGateway:
             configured.add(provider)
             if provider == "openrouter":
                 if editorial_cost_guard and (paid_attempts_232 >= paid_attempt_limit_232 or paid_spend_232 >= paid_spend_limit_232):
-                    event("ai", "2.3.2 paid editorial attempt cap", purpose=str(purpose or ""),
+                    event("ai", "2.3.19 paid editorial attempt cap", purpose=str(purpose or ""),
                           attempts=paid_attempts_232, actual_usd=round(paid_spend_232, 6))
+                    if mode == "openrouter" and openrouter_failover_allowed:
+                        continue
                     break
                 budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
                 if not budget_ok:
                     self._mark_openrouter_budget_block(cfg)
+                    if mode == "openrouter":
+                        openrouter_failover_allowed = True
                     continue
             if provider in provider_suppressed or self._provider_blocked(provider):
                 continue
@@ -1028,6 +1042,16 @@ class AIGateway:
                           operator_configuration_unchanged=True)
                 if scope == "provider":
                     provider_suppressed.add(provider)
+                    if mode == "openrouter" and provider == "openrouter":
+                        openrouter_failover_allowed = True
+                if mode == "openrouter" and provider == "openrouter" and state in {
+                    ProviderState.NETWORK_DOWN, ProviderState.TIMEOUT,
+                }:
+                    # Repeated failures to reach the shared API endpoint may
+                    # trigger emergency fallback; one model timeout cannot.
+                    openrouter_transport_failures += 1
+                    if openrouter_transport_failures >= 2:
+                        openrouter_failover_allowed = True
                 if suppress_reasoning_only_route(provider, exc):
                     # A second Cloudflare model with the same reasoning-only
                     # response contract wastes tokens in THIS task. The next
