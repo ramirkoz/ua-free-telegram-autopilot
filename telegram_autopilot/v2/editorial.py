@@ -33,6 +33,11 @@ from .ukrainian_agreement_245 import high_confidence_agreement_issues, POST_TRAN
 from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
 from .editorial_feedback_2316 import calibrated_feedback_2316
+from .editorial_feedback_2320 import calibrated_feedback_2320
+from .editorial_second_opinion_2320 import (
+    eligible_second_opinion_2320, verified_second_opinion_2320,
+    SECOND_OPINION_INSTRUCTION_2320,
+)
 from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
 from .schedule_digest_2314 import schedule_digest_limits_2314, schedule_digest_instruction_2314
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
@@ -1501,6 +1506,69 @@ SOURCE:
                   detail=str(exc)[:160])
             return None
 
+    def _operator_recheck_2320(
+        self, channel: ChannelConfig, article: Any, role: str,
+        fit: Mapping[str, Any], fit_result: Any
+    ) -> EditorialOutcome | None:
+        """One source-quoted independent opinion, never a safety override."""
+        code = str(fit.get("reject_code") or "").strip().casefold()
+        if not eligible_second_opinion_2320(article, role, code):
+            return None
+        now = time.monotonic()
+        key = str(channel.id) + ":operator_2320"
+        reviews = getattr(self, "_coverage_reviews_234", None)
+        if reviews is None:
+            reviews = {}
+            self._coverage_reviews_234 = reviews
+        current = [t for t in reviews.get(key, []) if now - t < 900]
+        reviews[key] = current
+        if len(current) >= 6:
+            return None
+        current.append(now)
+        prompt = (
+            SECOND_OPINION_INSTRUCTION_2320 + "\n"
+            + calibrated_feedback_2320(role) + "\n"
+            + "SOURCE TITLE: " + _clean(_v(article, "title", ""), 700) + "\n"
+            + "SOURCE BODY:\n" + _clean(_v(article, "raw_text", ""), 3600)
+        )
+        try:
+            def validate(raw: str) -> Mapping[str, Any]:
+                data = _parse_json(raw)
+                if str(data.get("decision") or "").strip().casefold() not in {
+                    "publish", "reject"
+                }:
+                    raise ValueError("SECOND_OPINION_2320_INVALID_DECISION")
+                if data["decision"].casefold() == "publish" and not (
+                    verified_second_opinion_2320(data, article)
+                ):
+                    raise ValueError("SECOND_OPINION_2320_QUOTE_UNVERIFIED")
+                return data
+            result = self.gateway.run(
+                prompt, validator=validate, max_output_tokens=240,
+                timeout_seconds=25, purpose="editorial_selector",
+            )
+            data = validate(result.text)
+            if not verified_second_opinion_2320(data, article):
+                return None
+            event("editorial", "operator 2.3.20 source-confirmed second opinion",
+                  channel_id=channel.id,
+                  article_id=int(_v(article, "id", 0) or 0),
+                  original_reason=_clean(fit.get("reason"), 180),
+                  review="confirmed", operator_data_mutated=False)
+            return EditorialOutcome(
+                Decision.PUBLISH,
+                reason="SECOND_OPINION_2320_SOURCE_CONFIRMED",
+                fit_score=max(60, int(fit.get("fit_score", 0) or 0)),
+                angle=_clean(data.get("reason"), 300),
+                provider=result.provider, model=result.model,
+            )
+        except Exception as exc:
+            event("editorial", "operator 2.3.20 independent review declined",
+                  level=30, channel_id=channel.id,
+                  article_id=int(_v(article, "id", 0) or 0),
+                  detail=str(exc)[:160])
+            return None
+
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         from .source_integrity import multi_story_page_cards_reason
         source_problem = multi_story_page_cards_reason(article)
@@ -1581,6 +1649,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {commercial_mix_instruction}
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
+{calibrated_feedback_2320(calibrated_role)}
 SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
 {output_contract}"""
 
@@ -1612,9 +1681,14 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             # guessing a category from free text. Unknown/missing codes stay uncoded.
             code = str(fit.get("reject_code") or "").strip().casefold()
             prefix = f"[{code}] " if code in SELECTOR_REJECT_CODES else ""
-            review = (None if calibrated_role else self._evidence_recheck_234(
-                channel, article, code, score, fit,
-                fit_result.provider, fit_result.model))
+            review = (
+                self._operator_recheck_2320(channel, article, calibrated_role, fit, fit_result)
+                if calibrated_role else
+                self._evidence_recheck_234(
+                    channel, article, code, score, fit,
+                    fit_result.provider, fit_result.model
+                )
+            )
             if review is not None:
                 return review
             return EditorialOutcome(Decision.REJECT, reason=prefix + _clean(fit.get("reason"), 600), fit_score=score, provider=fit_result.provider, model=fit_result.model)

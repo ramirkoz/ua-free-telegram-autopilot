@@ -241,6 +241,15 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.6 Trend Hunter feed restore failed; Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.20: import three verified candidate creative feeds, only for
+            # canonical commercial channel; zero operator Data/history replay.
+            try:
+                from .commercial_sources_2320 import apply_commercial_sources_2320
+                restored = apply_commercial_sources_2320(store)
+                event("ingest", "2.3.20 commercial inputs checked", **restored)
+            except Exception as exc:
+                event("ingest", "2.3.20 source expansion safely skipped",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
