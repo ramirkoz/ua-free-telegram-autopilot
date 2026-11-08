@@ -819,7 +819,7 @@ class AIGateway:
         # Emergency direct routing requires a service outage or budget exhaustion.
         editorial_cost_guard = str(purpose or "").casefold() in PAID_EDITORIAL_PURPOSES
         if mode == "codex":
-            route_slots = codex_slots + openrouter_slots + free_slots
+            route_slots = codex_slots + (free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots)
         elif mode == "openrouter":
             route_slots = openrouter_slots + free_slots
         else:
@@ -847,8 +847,10 @@ class AIGateway:
             configured.add(provider)
             if provider == "openrouter":
                 if editorial_cost_guard and (paid_attempts_232 >= paid_attempt_limit_232 or paid_spend_232 >= paid_spend_limit_232):
-                    event("ai", "2.3.2 paid editorial attempt cap", purpose=str(purpose or ""),
+                    event("ai", "2.3.19 paid editorial attempt cap", purpose=str(purpose or ""),
                           attempts=paid_attempts_232, actual_usd=round(paid_spend_232, 6))
+                    if mode == "openrouter" and openrouter_failover_allowed:
+                        continue
                     break
                 budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
                 if not budget_ok:
