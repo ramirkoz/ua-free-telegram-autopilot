@@ -11,7 +11,7 @@ _SAFE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?iu)\b(у|в)\s+середмісті\s+Запоріжжі\b"), r"\1 середмісті Запоріжжя"),
     (re.compile(r"(?iu)\bвсесохли\s+берези\b"), "висохли берези"),
     (re.compile(r"(?iu)\b(\d+)\s+парків\s+і\s+сквери\b"), r"\1 парків і скверів"),
-    (re.compile(r"(?iu)\bпоки\s+не\s+підтвердилося\s+його\s+загибель\b"), "поки не підтвердилася його загибель"),
+    (re.compile(r"(?iu)\b(поки)\s+не\s+підтвердилося\s+його\s+загибель\b"), r"\1 не підтвердилася його загибель"),
     (re.compile(r"(?iu)\bрозміром\s+з\s+індіку\b"), "розміром з індика"),
     # 2.2.63: LIVE #87860 study age-range agreement; narrow participant-only
     # construction preserves the exact reported 210 people and 11–18 ages.
