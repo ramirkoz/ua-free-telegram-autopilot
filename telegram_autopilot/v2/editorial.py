@@ -422,6 +422,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         source_problem = multi_story_page_cards_reason(article)
         if source_problem:
             return source_problem
+        # 2.3.19: the LIVE #93640 WIRED vacation-advice false positive must
+        # not bypass science topic admission, including stored READY rows.
+        from .editorial_source_topic_2319 import editorial_source_topic_reason_2319
+        science_topic_problem = editorial_source_topic_reason_2319(channel, article)
+        if science_topic_problem:
+            return science_topic_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
     if _denied_original_monitoring_source(channel, article):
