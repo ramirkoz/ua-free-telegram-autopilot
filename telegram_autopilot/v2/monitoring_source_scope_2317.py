@@ -52,6 +52,37 @@ _REMOTE_WEATHER_EVENT_2318 = re.compile(
     r"заморозк\w*|ожелед\w*|хуртовин\w*|мороз\w*)\b"
 )
 
+# 2.3.19: source-only exclusions from 08 Nov published editorial audit.
+# Do not treat a publisher's own location or generic repost footer as a
+# connection of an overseas/distant event to Zaporizhzhia.
+_TRIVIAL_SOCIAL_GREETING_2319 = re.compile(
+    r"(?iu)(?:маєте\\s+ідеї\\s+до\\s+обіду|всім\\s+смачного|"
+    r"смачного\\s+обіду|що\\s+сьогодні\\s+на\\s+обід|"
+    r"побажаємо\\s+(?:гарного\\s+дня|смачного))"
+)
+_CONCRETE_CIVIC_EVENT_2319 = re.compile(
+    r"(?iu)\\b(?:відкрили|відкриють|відбудеться|відбулася|стартував|"
+    r"запрацював|організували|розпочинається|оголосили\\s+(?:набір|конкурс)|"
+    r"безкоштовн\\w*\\s+(?:занятт\\w*|послуг\\w*|захід))\\b"
+)
+_REMOTE_DIPLOMACY_2319 = re.compile(
+    r"(?iu)\\b(?:абу[- ]дабі|об’єднан\\w*\\s+арабськ\\w*\\s+емірат\\w*)\\b"
+)
+_DIPLOMATIC_EVENT_2319 = re.compile(
+    r"(?iu)\\b(?:переговор\\w*|дипломат\\w*|саміт\\w*|зустріч\\w*\\s+делегац\\w*)\\b"
+)
+_REMOTE_CHERKASY_2319 = re.compile(r"(?iu)\\b(?:черкащин\\w*|черкаськ\\w*\\s+област\\w*)\\b")
+_REMOTE_TRAGEDY_2319 = re.compile(
+    r"(?iu)\\b(?:військов\\w*|медик\\w*|загиб\\w*|трагеді\\w*|злочин\\w*)\\b"
+)
+_CENTRAL_ASIA_2319 = re.compile(
+    r"(?iu)\\b(?:центральн\\w*\\s+азі\\w*|таджикистан\\w*|узбекистан\\w*|"
+    r"киргизстан\\w*|казахстан\\w*)\\b"
+)
+_CENTRAL_ASIA_RECRUITMENT_2319 = re.compile(
+    r"(?iu)\\b(?:вербуван\\w*|рекрут\\w*|найманц\\w*|армі\\w*|військ\\w*)\\b"
+)
+
 _RETAIL_CONTEXT = re.compile(
     r"(?iu)\b(?:магазин\w*|супермаркет\w*|гіпермаркет\w*|"
     r"торгов\w*\s+(?:мереж\w*|центр\w*|точк\w*)|"
@@ -96,6 +127,19 @@ def monitoring_source_scope_reason_2317(channel: Any, article: Any) -> str:
             and _REMOTE_WEATHER_PLACE_2318.search(original)
             and _REMOTE_WEATHER_EVENT_2318.search(original)):
         return "MONITORING_NONLOCAL_UA_WEATHER_2318"
+
+    if (_TRIVIAL_SOCIAL_GREETING_2319.search(original)
+            and len(original) <= 650
+            and not _CONCRETE_CIVIC_EVENT_2319.search(original)):
+        return "MONITORING_SOCIAL_GREETING_NOT_NEWS_2319"
+
+    if not _LOCAL_EVENT.search(original) and not _PUBLIC_BENEFIT.search(original):
+        if _REMOTE_DIPLOMACY_2319.search(original) and _DIPLOMATIC_EVENT_2319.search(original):
+            return "MONITORING_NONLOCAL_DIPLOMACY_2319"
+        if _REMOTE_CHERKASY_2319.search(original) and _REMOTE_TRAGEDY_2319.search(original):
+            return "MONITORING_NONLOCAL_CHERKASY_EVENT_2319"
+        if _CENTRAL_ASIA_2319.search(original) and _CENTRAL_ASIA_RECRUITMENT_2319.search(original):
+            return "MONITORING_NONLOCAL_CENTRAL_ASIA_2319"
 
     # A neutral, factual opening of a local business is not automatically an ad.
     # A retailer's discount flyer with prices or 'buy now' language is.
