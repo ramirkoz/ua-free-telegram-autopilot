@@ -38,7 +38,7 @@ def test_157_actual_human_labels_scope_and_policy_are_preserved():
     assert "E Ink" in creative and "GTA VI" in creative and "водоростей" in creative
     assert "Artemis II" in sci and "сенсорні" in sci
     assert calibrated_feedback_2320("monitoring") == ""
-    assert "Fact" in sci and "Telegram" in creative
+    assert "факти" in sci and "Telegram" in creative
 
 
 def test_second_opinion_is_content_scoped_not_article_id_whitelist():
