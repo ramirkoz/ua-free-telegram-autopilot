@@ -63,6 +63,11 @@ _PRIVATE_ACCUSATION = re.compile(
     r"(?iu)(?:покинул\w*|прив[’']?язал\w*|залишил\w*)"
     r"[^.!?\n]{0,120}(?:собак\w*|тварин\w*|цуцен\w*)"
 )
+_PURE_ANNOUNCEMENT = re.compile(
+    r"(?iu)^\s*(?:[📢🔔❗️]\s*)?(?:оголошення|"
+    r"дошка\s+оголошень|афіша\s+(?:заходів|подій))\b"
+)
+
 _GENERIC_GREETING = re.compile(
     r"(?iu)(?:\b(?:зі?\s+святом|вітаємо\s+з\s+днем|"
     r"всім\s+(?:гарного|приємного|смачного)|"
@@ -86,6 +91,8 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_CLASSIFIED_LOST_FOUND_2322"
     if _PRIVATE_ACCUSATION.search(original) and _PHONE.search(original):
         return "MONITORING_PRIVATE_ALLEGATION_CONTACT_2322"
+    if _PURE_ANNOUNCEMENT.search(original):
+        return "MONITORING_STANDALONE_ANNOUNCEMENT_2322"
     if _PRIVATE_CLASSIFIED.search(original):
         return "MONITORING_PRIVATE_CLASSIFIED_2322"
     if _PRIVATE_RECRUITMENT.search(original):
@@ -93,7 +100,7 @@ def no_announcement_reason_2322(article: Any) -> str:
     if _SALE_AD.search(original):
         return "MONITORING_SALES_ADVERTISEMENT_2322"
     # Bare prospective participation notice, not a report about a finished event.
-    if _BARE_INVITATION.search(original) and _TICKET_OR_EVENT_AD.search(original):
+    if _BARE_INVITATION.search(original):
         return "MONITORING_EVENT_INVITATION_2322"
     if _GENERIC_GREETING.search(original) and len(original) < 500:
         return "MONITORING_GREETING_2322"
