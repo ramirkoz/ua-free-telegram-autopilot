@@ -63,6 +63,7 @@ def restart_source_rejection(
     *,
     discovered_at: str | None = None,
     now: datetime | None = None,
+    rolling_window_hours: int = 0,
 ) -> str:
     """v2.2.60: bounded continuation of a previously polled source.
 
@@ -76,6 +77,42 @@ def restart_source_rejection(
     discovered_at checks time only; storage identity and delivery preflight are
     independently mandatory.
     """
+    # v2.3.21: editorial-only rolling freshness, opt-in from runtime.
+    # Preserve the old day fence by default for monitoring / external callers.
+    # Historical backlog remains protected by runtime-start and checkpoint rules.
+    if rolling_window_hours:
+        current = now if now is not None else datetime.now().astimezone()
+        if current.tzinfo is None:
+            return "CLOCK_UNVERIFIED"
+        published = _aware(source_published_at)
+        started = _aware(runtime_started_at)
+        if started is None:
+            return "RUNTIME_START_UNVERIFIED"
+        if published is None:
+            return "SOURCE_DATE_UNVERIFIED"
+        current_utc = current.astimezone(timezone.utc)
+        if published > current_utc + timedelta(minutes=2):
+            return "SOURCE_DATE_IN_FUTURE"
+        max_hours = max(1, min(48, int(rolling_window_hours)))
+        if published < current_utc - timedelta(hours=max_hours):
+            return "SOURCE_TOO_OLD_2321"
+        if published >= started:
+            if discovered_at is not None:
+                discovered = _aware(discovered_at)
+                if not discovered or discovered < started or discovered > current_utc + timedelta(minutes=2):
+                    return "SOURCE_DISCOVERY_UNVERIFIED_2321"
+            return ""
+        checkpoint = _aware(source_last_successful_check_at)
+        if not checkpoint or not (checkpoint < started and
+                                  timedelta(0) <= started - checkpoint <= timedelta(hours=2)):
+            return "SOURCE_PREDATES_RUNTIME_START"
+        if not (checkpoint <= published < started):
+            return "SOURCE_PREDATES_RUNTIME_START"
+        if discovered_at is not None:
+            discovered = _aware(discovered_at)
+            if not discovered or discovered < started or discovered > current_utc + timedelta(minutes=2):
+                return "SOURCE_DISCOVERY_UNVERIFIED_2321"
+        return ""
     reason = source_freshness_rejection(
         source_published_at, runtime_started_at, now=now
     )
