@@ -481,6 +481,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     from .private_document_contact_2322 import no_announcement_reason_2322
     notice = no_announcement_reason_2322(article)
     if notice:
+        # Preserve the older, more specific mixed-story diagnostic when a
+        # notice stitches lost property to a completely different event.
+        # The 2.3.22 no-classifieds gate remains fail-closed either way.
+        if "MONITORING_MULTIPLE_UNRELATED_NOTICES" in assess_monitoring_source(
+                article, final_text=text).reasons:
+            return "MONITORING_MULTIPLE_UNRELATED_NOTICES"
         return notice
     source_unverified = monitoring_unverified_teaser_reason(article)
     if source_unverified:
