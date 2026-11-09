@@ -308,8 +308,8 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     ))
     if citizen_claim and not confirmed_independently:
         return "MONITORING_READER_RUMOR_NOT_OFFICIAL"
-    from .private_document_contact_2322 import private_document_contact_reason_2322
-    contact_problem = private_document_contact_reason_2322(article)
+    from .private_document_contact_2322 import no_announcement_reason_2322
+    contact_problem = no_announcement_reason_2322(article)
     if contact_problem:
         return contact_problem
     if _MONITORING_PRIVATE_NOTICES.search(raw):
@@ -443,8 +443,8 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if channel.mode != ChannelMode.MONITORING:
         return ""
     # Apply to READY and operator-approved sends too, not just fresh selection.
-    from .private_document_contact_2322 import private_document_contact_reason_2322
-    private_notice = private_document_contact_reason_2322(article)
+    from .private_document_contact_2322 import no_announcement_reason_2322
+    private_notice = no_announcement_reason_2322(article)
     if private_notice:
         return private_notice
     if _denied_original_monitoring_source(channel, article):
