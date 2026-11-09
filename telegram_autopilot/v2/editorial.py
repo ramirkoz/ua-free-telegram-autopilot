@@ -1732,7 +1732,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         # RC54: a categorical PUBLISH with fit=9 is internally contradictory. For
         # channels with the explicit commercial editorial profile, trust the categorical channel-fit decision and let the dedicated
         # commercial value gate make the second decision instead of killing it here.
-        if _is_commercial_editorial(channel) and fit["decision"] == "publish" and raw_score < 60:
+        if _is_commercial_editorial(channel) and not calibrated_role and fit["decision"] == "publish" and raw_score < 60:
             event("editorial", "normalized contradictory sold fit score", level=30, channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0), raw_fit=raw_score, normalized_fit=60)
             raw_score = 60
         score = max(0, min(100, raw_score + int(learning.fit_adjustment)))
