@@ -241,7 +241,15 @@ def _install_ai_efficiency_contract() -> None:
     from .editorial_human_calibration_236 import calibrated_editorial_role
     from .editorial_feedback_2310 import calibrated_feedback_2310
 
+    # v2.3.21 P0: the old RC102 monkeypatch silently replaced the complete
+    # modern calibrated selector (2.3.20 human feedback/second opinion) in LIVE.
+    # Keep the combined fallback for uncalibrated channels only; use the real
+    # current source-grounded selector for operator-calibrated channels.
+    modern_editorial_select = ed.EditorialEngine._select_editorial
+
     def combined_select(self, channel, article):
+        if calibrated_editorial_role(channel):
+            return modern_editorial_select(self, channel, article)
         p = channel.policy
         learning = self.learning.topic_assessment(channel.id, article)
         if learning.hard_suppress:

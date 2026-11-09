@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .ai_gateway import AIGateway, GatewayExhausted
 from .dedupe import DedupeEngine
-from .domain import BlockedBy, Decision, Stage
+from .domain import BlockedBy, Decision, Stage, ChannelMode
 from .editorial import EditorialEngine
 from .ingest import IngestService
 from .loghub import event
@@ -388,10 +388,20 @@ class RuntimeEngine:
         # Existing DB rows cannot be rescued into publication by a restart.
         # Apply the source's own date before dedupe, media or any paid AI.
         if self.started_at:
+            channel_for_freshness = self.store.get_channel(channel_id)
+            # Cross-midnight editorial news is eligible only inside the original
+            # channel's age cap. Old runs cannot replay historic source rows.
+            editorial_hours = (
+                min(24, max(1, int(channel_for_freshness.max_age_hours or 24)))
+                if channel_for_freshness is not None
+                and channel_for_freshness.mode == ChannelMode.EDITORIAL
+                else 0
+            )
             stale_reason = restart_source_rejection(
                 str(article["source_published_at"] or ""), self.started_at,
                 self.restart_checkpoints_260.get(str(article["source_id"]), ""),
                 discovered_at=str(article["discovered_at"] or ""),
+                rolling_window_hours=editorial_hours,
             )
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
