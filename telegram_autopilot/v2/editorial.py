@@ -2041,7 +2041,32 @@ SOURCE:
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
 
-        result = self.gateway.run(prompt, validator=validator, max_output_tokens=1100, timeout_seconds=30, purpose="writer")
+        try:
+            result = self.gateway.run(
+                prompt, validator=validator, max_output_tokens=1100,
+                timeout_seconds=30, purpose="writer",
+            )
+        except GatewayExhausted as exc:
+            # v2.3.21: one source-only salvage pass for invented numerals.
+            # This does NOT weaken the validator or permit fabricated claims.
+            if (channel.mode != ChannelMode.EDITORIAL or exc.provider_outage
+                    or "AI додав число" not in str(exc)):
+                raise
+            numeric_salvage_prompt = (
+                prompt + "\n\nПОПЕРЕДНІЙ ТЕКСТ ВІДХИЛЕНО: ти додав цифри, "
+                "яких SOURCE не містить. Напиши заново простими словами. "
+                "Вилучи усі необов'язкові цифри, номери, роки та суми. "
+                "Якщо число необхідне, скопіюй його ДОСЛІВНО з SOURCE. "
+                "Не додавай приблизних чисел або статистики. "
+                "Перевірка усіх чисел, фактів і форматів залишається незмінною."
+            )
+            event("editorial", "2.3.21 numeric source-only salvage attempt",
+                  channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                  bypass_fact_guard=False)
+            result = self.gateway.run(
+                numeric_salvage_prompt, validator=validator,
+                max_output_tokens=1000, timeout_seconds=30, purpose="writer",
+            )
         draft = validate_writer_output(
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
