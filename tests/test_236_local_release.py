@@ -172,7 +172,7 @@ def test_sports_cross_source_duplicate_and_distinct_competition():
 
 
 def test_actual_235_editorial_selector_is_calibrated_and_does_not_run_old_value_veto():
-    """The installed 2.3.5 has a direct EditorialEngine selector, not RC102 auto-install."""
+    """Calibrated selector keeps source citation verification, not old value veto."""
     from telegram_autopilot.v2.editorial import EditorialEngine
     from telegram_autopilot.v2.domain import ChannelPolicy, Decision
 
@@ -187,8 +187,12 @@ def test_actual_235_editorial_selector_is_calibrated_and_does_not_run_old_value_
         def run(self, prompt, *, validator=None, **kwargs):
             self.prompts.append(prompt)
             assert kwargs['purpose']=='editorial_selector'
-            assert kwargs['max_output_tokens']<=210
-            payload='{"decision":"publish","fit_score":22,"reason":"цікава ідея","angle":"суть"}'
+            assert kwargs['max_output_tokens']<=240
+            payload = (
+                '{"decision":"publish","source_quote":"Виробники зробили новий продукт із незвичною функцією.","reason":"конкретна нова функція"}'
+                if "НЕЗАЛЕЖНИЙ РЕДАКТОР" in prompt
+                else '{"decision":"publish","fit_score":22,"reason":"цікава ідея","angle":"суть"}'
+            )
             if validator: validator(payload)
             return SimpleNamespace(text=payload,provider='mock',model='fixture')
 
@@ -211,6 +215,6 @@ def test_actual_235_editorial_selector_is_calibrated_and_does_not_run_old_value_
             'title':'Цікавий новий продукт', 'raw_text':'Виробники зробили новий продукт із незвичною функцією. Автори підтвердили факти.',
             'source_name':'test'})
         assert out.decision==Decision.PUBLISH
-        assert out.reason.startswith('HUMAN_EDITORIAL_236_PASS')
-        assert len(engine.gateway.prompts)==1
+        assert out.reason.startswith('EDITOR_2321_SOURCE_CONFIRMED')
+        assert len(engine.gateway.prompts)==2
         assert 'COMMERCIAL_READER_RULE_256' not in engine.gateway.prompts[0]
