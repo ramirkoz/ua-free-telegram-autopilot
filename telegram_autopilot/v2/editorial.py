@@ -442,11 +442,6 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
             return science_topic_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
-    # Apply to READY and operator-approved sends too, not just fresh selection.
-    from .private_document_contact_2322 import no_announcement_reason_2322
-    private_notice = no_announcement_reason_2322(article)
-    if private_notice:
-        return private_notice
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
     # 2.3.11: source content, not the Telegram channel brand,
@@ -480,6 +475,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_scope = monitoring_source_scope_reason_2317(channel, article)
     if source_scope:
         return source_scope
+    # Preserve more specific legacy diagnostics (mixed-source notices and
+    # retail flyer) while enforcing the 2.3.22 blanket no-classifieds rule
+    # at selection AND immediately before a Telegram send.
+    from .private_document_contact_2322 import no_announcement_reason_2322
+    notice = no_announcement_reason_2322(article)
+    if notice:
+        return notice
     source_unverified = monitoring_unverified_teaser_reason(article)
     if source_unverified:
         return source_unverified
