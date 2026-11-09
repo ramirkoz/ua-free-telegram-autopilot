@@ -498,6 +498,11 @@ def event_fingerprint_same_event(
         "ai", "agents", "agent", "new", "technology", "tech", "research",
         "study", "could", "more", "first", "world", "helps", "what",
         "reveals", "computer", "power", "using", "model", "models",
+        # Boilerplate from page navigation and unrelated headlines must never
+        # become a product object or a distinctive event identity.
+        "here", "without", "there", "your", "ours", "these", "those",
+        "much", "many", "some", "things", "after", "before", "inside",
+        "read", "click", "more", "subscribe", "continue",
     }
     a_words = _title_words(current) - generic_headline
     b_words = _title_words(candidate) - generic_headline
@@ -577,8 +582,18 @@ def event_fingerprint_same_event(
     # identical product stories share a named actor, an uncommon title object,
     # and several independent source-owned facts. Never use a brand alone.
     if commercial_profile and not same_source and shared_entities:
-        common_headline = left_title & right_title
-        named = {word.casefold() for word in shared_entities}
+        # An HTML navigation token ('here') is not a named commercial actor.
+        # Shared connective words ('without') are not a concrete product object.
+        valid_entities = {
+            name for name in shared_entities
+            if name.casefold() not in {
+                "here", "without", "there", "news", "email", "author",
+                "facebook", "twitter", "instagram", "subscribe", "contact",
+                "advertising", "media", "world", "read", "website",
+            }
+        }
+        common_headline = (left_title & right_title) - generic_headline
+        named = {word.casefold() for word in valid_entities}
         objects = {word for word in common_headline if len(word) >= 3 and word.casefold() not in named}
         # Ignore generic commercial-story vocabulary, not the actor/object.
         objects -= {"brand", "brands", "campaign", "marketing", "advertising", "launch", "launches", "news", "new", "makes", "drops"}
@@ -586,12 +601,12 @@ def event_fingerprint_same_event(
         candidate_tokens = set(_concept_sequence(str(_value(candidate, "raw_text", "") or "")[:2200]))
         common_facts = (source_tokens & candidate_tokens) - {w.casefold() for w in common_headline} - named
         if (
-            objects and len(common_facts) >= 4 and len(salient_shared) >= 6
+            valid_entities and objects and len(common_facts) >= 4 and len(salient_shared) >= 6
             and (len(salient_long_shared) >= 3 or len(common_facts) >= 7)
         ):
             return True, (
                 "cross-source actor+object+facts fingerprint "
-                f"entities={','.join(sorted(shared_entities))} "
+                f"entities={','.join(sorted(valid_entities))} "
                 f"objects={','.join(sorted(objects))} facts={len(common_facts)}"
             )
 
