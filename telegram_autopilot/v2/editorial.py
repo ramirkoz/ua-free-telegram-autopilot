@@ -34,6 +34,9 @@ from .evidence_first import assess_monitoring_source, assess_monitoring_media
 from .editorial_feedback_2312 import calibrated_feedback_2312, source_only_promotion_veto_2312
 from .editorial_feedback_2316 import calibrated_feedback_2316
 from .editorial_feedback_2320 import calibrated_feedback_2320
+from .editorial_operator_2321 import (
+    concrete_routine_pr_reason, verify_low_confidence_publish, VERIFY_PUBLISH_PROMPT_2321,
+)
 from .editorial_second_opinion_2320 import (
     eligible_second_opinion_2320, verified_second_opinion_2320,
     SECOND_OPINION_INSTRUCTION_2320,
@@ -1569,6 +1572,65 @@ SOURCE:
                   detail=str(exc)[:160])
             return None
 
+    def _operator_verify_publish_2321(
+        self, channel: ChannelConfig, article: Any, role: str, score: int
+    ) -> EditorialOutcome:
+        """Source-cited independent second opinion for a risky primary PUBLISH."""
+        now = time.monotonic()
+        key = str(channel.id) + ":publish_2321"
+        reviews = getattr(self, "_coverage_reviews_234", None)
+        if reviews is None:
+            reviews = {}
+            self._coverage_reviews_234 = reviews
+        recent = [t for t in reviews.get(key, []) if now - t < 900]
+        reviews[key] = recent
+        if len(recent) >= 8:
+            return EditorialOutcome(
+                Decision.REJECT, reason="EDITOR_2321_REVIEW_CAP_REJECT", fit_score=score
+            )
+        recent.append(now)
+        prompt = (
+            VERIFY_PUBLISH_PROMPT_2321 + "\n"
+            + "CHANNEL: " + role + "\n"
+            + "TITLE: " + _clean(_v(article, "title", ""), 600) + "\n"
+            + "SOURCE BODY:\n" + _clean(_v(article, "raw_text", ""), 3600)
+        )
+        try:
+            def validate(raw: str) -> Mapping[str, Any]:
+                value = _parse_json(raw)
+                decision = str(value.get("decision") or "").strip().casefold()
+                if decision not in {"publish", "reject"}:
+                    raise ValueError("EDITOR_2321_INVALID_DECISION")
+                if decision == "publish" and not verified_second_opinion_2320(value, article):
+                    raise ValueError("EDITOR_2321_UNVERIFIED_QUOTE")
+                return value
+
+            result = self.gateway.run(
+                prompt, validator=validate, max_output_tokens=240,
+                timeout_seconds=25, purpose="editorial_selector",
+            )
+            verdict = validate(result.text)
+            if str(verdict.get("decision")).casefold() == "publish":
+                return EditorialOutcome(
+                    Decision.PUBLISH, reason="EDITOR_2321_SOURCE_CONFIRMED",
+                    fit_score=score, provider=result.provider, model=result.model,
+                    angle=_clean(verdict.get("reason"), 300),
+                )
+            return EditorialOutcome(
+                Decision.REJECT,
+                reason="EDITOR_2321_SECOND_OPINION_REJECT: "
+                       + _clean(verdict.get("reason"), 300),
+                fit_score=score, provider=result.provider, model=result.model,
+            )
+        except Exception as exc:
+            event("editorial", "2.3.21 uncertain publish rejected",
+                  level=30, article_id=int(_v(article, "id", 0) or 0),
+                  channel_id=channel.id, error=str(exc)[:200])
+            return EditorialOutcome(
+                Decision.REJECT, reason="EDITOR_2321_REVIEW_UNVERIFIED_REJECT",
+                fit_score=score,
+            )
+
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         from .source_integrity import multi_story_page_cards_reason
         source_problem = multi_story_page_cards_reason(article)
@@ -1583,6 +1645,10 @@ SOURCE:
         operator_promo = source_only_promotion_veto_2312(calibrated_role, article)
         if operator_promo:
             return EditorialOutcome(Decision.REJECT, reason=operator_promo, fit_score=0)
+        # v2.3.21: a future promised campaign is not a released creative work.
+        appointment = concrete_routine_pr_reason(article, calibrated_role)
+        if appointment:
+            return EditorialOutcome(Decision.REJECT, reason=appointment, fit_score=0)
         learning = self.learning.topic_assessment(channel.id, article)
         if learning.hard_suppress:
             reason = (
@@ -1698,6 +1764,10 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
         # enough. Fact, freshness, media, duplicate and Telegram guards are
         # independent and are NOT bypassed by this branch.
         if calibrated_role:
+            if verify_low_confidence_publish(calibrated_role, score, article):
+                return self._operator_verify_publish_2321(
+                    channel, article, calibrated_role, score,
+                )
             return EditorialOutcome(
                 Decision.PUBLISH,
                 reason=f"HUMAN_EDITORIAL_236_PASS role={calibrated_role}; fit={score}",
@@ -2241,6 +2311,27 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
                     "editorial", "targeted source rewrite insufficient",
                     level=30, article_id=article_id, channel_id=channel.id,
                     error=type(exc).__name__, detail=str(exc)[:350],
+                )
+        # v2.3.21: exact first-party full article before a short-RSS reject.
+        # Only the verified exact article may enrich raw_text; source date,
+        # URL, media identity and every downstream fact gate remain unchanged.
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .editorial_hard_floor import two_sentence_reason
+            if two_sentence_reason(article):
+                from types import SimpleNamespace
+                from .commercial_fulltext_233 import enrich_exact_commercial_article_233
+                candidate = SimpleNamespace(
+                    url=canonical, title=str(_v(article, "title", "") or ""),
+                    raw_text=str(_v(article, "raw_text", "") or ""),
+                )
+                enriched, status = enrich_exact_commercial_article_233(candidate, canonical)
+                if status == "exact_publisher_fulltext_verified":
+                    self.store.update_article(article_id, raw_text=enriched.raw_text)
+                    article = self.store.get_article(article_id)
+                event(
+                    "editorial", "2.3.21 exact publisher source completion",
+                    channel_id=channel.id, article_id=article_id,
+                    outcome=status, verified=status == "exact_publisher_fulltext_verified",
                 )
         selection = self.select(channel, article)
         if heartbeat is not None:
