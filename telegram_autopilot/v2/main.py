@@ -250,6 +250,17 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.20 source expansion safely skipped",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.22: replace professional marketing trade feeds with
+            # consumer-facing creativity, oddities and design, without
+            # deleting historic source rows, custom sources or old Data.
+            try:
+                from .commercial_sources_2322 import apply_commercial_sources_2322
+                consumer_portfolio = apply_commercial_sources_2322(store)
+                event("ingest", "2.3.22 consumer commercial portfolio checked",
+                      **consumer_portfolio)
+            except Exception as exc:
+                event("ingest", "2.3.22 source transition skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
