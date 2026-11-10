@@ -104,4 +104,8 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_EVENT_INVITATION_2322"
     if _GENERIC_GREETING.search(original) and len(original) < 500:
         return "MONITORING_GREETING_2322"
-    return ""
+    # 2.3.23: surveys, giveaways, application calls, future-event invitations
+    # and relayed reader complaints. Same entry point, so the rule applies at
+    # selection and again right before a Telegram send for older READY rows.
+    from .monitoring_call_to_action import call_to_action_reason
+    return call_to_action_reason(article)

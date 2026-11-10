@@ -37,6 +37,18 @@ class AIResult:
     actual_openrouter_usd: float = 0.0
 
 
+_CONTRACT_FAILURE_MARKERS = (
+    "не повернув json", "no json", "invalid json", "порожн", "empty", "reasoning but no final",
+    "no final content", "invalid decision", "placeholder", "must be boolean", "invalid event_type",
+)
+
+
+def _contract_class_failure(error: object) -> bool:
+    """True when the model broke the OUTPUT CONTRACT (not when the text was judged)."""
+    text = str(error or "").casefold()
+    return any(marker in text for marker in _CONTRACT_FAILURE_MARKERS)
+
+
 class GatewayExhausted(RuntimeError):
     def __init__(
         self,
@@ -404,6 +416,43 @@ class AIGateway:
             legacy_ai.Slot(20 + index, "openrouter", model_id, f"{model_id} / OpenRouter")
             for index, model_id in enumerate(eligible, start=1)
         ]
+
+    # 2.3.23: measured output-contract success per (purpose, model). A model that
+    # keeps failing a task's contract (no JSON, empty answer, reasoning only) is
+    # tried last for that task instead of burning the first attempt of every
+    # article. In-memory only: operator configuration and saved health untouched.
+    _CONTRACT_MIN_SAMPLES = 4
+    _CONTRACT_BAD_RATE = 0.34
+
+    def _contract_stats(self) -> dict[tuple[str, str], list[int]]:
+        stats = getattr(self, "_contract_outcomes", None)
+        if stats is None:
+            stats = {}
+            self._contract_outcomes = stats
+        return stats
+
+    def _note_contract_outcome(self, purpose: str, model: str, *, ok: bool, error: object = None) -> None:
+        if not ok and not _contract_class_failure(error):
+            return   # a factual/readability objection is about the article, not the model
+        key = (str(purpose or "content").casefold(), str(model or "").casefold())
+        record = self._contract_stats().setdefault(key, [0, 0])
+        record[0 if ok else 1] += 1
+        if sum(record) > 40:          # keep a moving picture, not a lifetime verdict
+            record[0], record[1] = record[0] // 2, record[1] // 2
+
+    def _contract_unreliable(self, purpose: str, model: str) -> bool:
+        ok, bad = self._contract_stats().get(
+            (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))
+        total = ok + bad
+        return total >= self._CONTRACT_MIN_SAMPLES and ok / total < self._CONTRACT_BAD_RATE
+
+    def _order_by_contract_success(self, slots: list, purpose: str) -> list:
+        demoted = [s for s in slots if self._contract_unreliable(purpose, s.model)]
+        if not demoted or len(demoted) == len(slots):
+            return slots
+        event("ai", "unreliable models tried last for this task", purpose=str(purpose or "content"),
+              models=[s.model for s in demoted][:6], operator_configuration_unchanged=True)
+        return [s for s in slots if s not in demoted] + demoted
 
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
         if provider == "openrouter":
@@ -824,6 +873,7 @@ class AIGateway:
             route_slots = openrouter_slots + free_slots
         else:
             route_slots = free_slots
+        route_slots = self._order_by_contract_success(route_slots, purpose)
         openrouter_transport_failures = 0
         openrouter_failover_allowed = bool(
             mode == "openrouter"
@@ -840,7 +890,13 @@ class AIGateway:
             if mode == "openrouter" and provider != "openrouter" and not openrouter_failover_allowed:
                 # QA rejection of a valid OpenRouter answer is not an outage.
                 continue
-            if allowed is not None and provider not in allowed:
+            # 2.3.23: under the operator's "OpenRouter serves every AI purpose"
+            # contract a caller's provider whitelist (written for the free-provider
+            # era, e.g. the trusted final editor) must not exclude OpenRouter. It
+            # did, so with free providers skipped no route was left and a
+            # successfully written article died with "no AI provider configured".
+            openrouter_contract = mode == "openrouter" and provider == "openrouter"
+            if allowed is not None and provider not in allowed and not openrouter_contract:
                 continue
             if not self._configured(provider, cfg):
                 continue
@@ -974,6 +1030,7 @@ class AIGateway:
                                           purpose=str(purpose or "content"))
                         if not repaired_ok:
                             validation_failures += 1
+                            self._note_contract_outcome(purpose, runtime_model, ok=False, error=first_error)
                             signature=_rc111_qa_signature(first_error)
                             if signature:
                                 validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
@@ -1021,6 +1078,7 @@ class AIGateway:
 
                 self._route_circuit.clear(provider, slot.model)
                 self._mark_success(provider, slot.model, runtime_model)
+                self._note_contract_outcome(purpose, runtime_model, ok=True)
                 summary = self._refresh_provider_summary(provider, cfg)
                 event(
                     "ai", "AI success", provider=provider, model=runtime_model,
@@ -1034,6 +1092,7 @@ class AIGateway:
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
+                self._note_contract_outcome(purpose, slot.model, ok=False, error=exc)
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
                 if self._route_circuit.note_failure(provider, slot.model, exc):
                     event("ai", "model output-contract temporary cooldown",
