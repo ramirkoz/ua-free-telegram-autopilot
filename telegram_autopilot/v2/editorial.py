@@ -10,7 +10,7 @@ from typing import Any, Callable, Mapping
 from ..anti_slop import assess_ukrainian_slop, compact_feedback, sanitize_text
 from .editorial_reader_contract_252 import source_completeness_issue, final_reader_issue, READER_COMPLETENESS_RULE_252
 from ..evidence_pack import build_evidence_pack
-from ..fact_guard import actionable_source_urls, article_non_actionable_urls, source_urls_in_text, strip_non_actionable_article_urls, validate_fact_guard
+from ..fact_guard import actionable_source_urls, article_non_actionable_urls, source_urls_in_text, strip_non_actionable_article_urls, strip_monitoring_nonform_urls, validate_fact_guard
 from ..language import looks_ukrainian
 from ..grammar_guard import hard_grammar_blockers, needs_grammar_polish, preserves_content
 from ..language_tool_local import apply_local_languagetool_detailed
@@ -308,6 +308,10 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     ))
     if citizen_claim and not confirmed_independently:
         return "MONITORING_READER_RUMOR_NOT_OFFICIAL"
+    from .private_document_contact_2322 import no_announcement_reason_2322
+    contact_problem = no_announcement_reason_2322(article)
+    if contact_problem:
+        return contact_problem
     if _MONITORING_PRIVATE_NOTICES.search(raw):
         return "MONITORING_PRIVATE_ANNOUNCEMENT"
     if _MONITORING_UNOFFICIAL_POWER.search(source_owned) and not _MONITORING_OFFICIAL_ORIGIN.search(source_owned + " " + source_name):
@@ -471,6 +475,19 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_scope = monitoring_source_scope_reason_2317(channel, article)
     if source_scope:
         return source_scope
+    # Preserve more specific legacy diagnostics (mixed-source notices and
+    # retail flyer) while enforcing the 2.3.22 blanket no-classifieds rule
+    # at selection AND immediately before a Telegram send.
+    from .private_document_contact_2322 import no_announcement_reason_2322
+    notice = no_announcement_reason_2322(article)
+    if notice:
+        # Preserve the older, more specific mixed-story diagnostic when a
+        # notice stitches lost property to a completely different event.
+        # The 2.3.22 no-classifieds gate remains fail-closed either way.
+        if "MONITORING_MULTIPLE_UNRELATED_NOTICES" in assess_monitoring_source(
+                article, final_text=text).reasons:
+            return "MONITORING_MULTIPLE_UNRELATED_NOTICES"
+        return notice
     source_unverified = monitoring_unverified_teaser_reason(article)
     if source_unverified:
         return source_unverified
@@ -856,6 +873,9 @@ def _rc111_prepare_candidate(
     if channel.mode == ChannelMode.MONITORING:
         value=restore_practical_literals(article,value,hard_max_chars=hard_max_chars)
         value=strip_non_actionable_article_urls(article,value)
+        # A copied link to the original report (not a registration/form link)
+        # belongs in Telegram's separate footer. Remove before paid QA retries.
+        value=strip_monitoring_nonform_urls(article,value)
     value=strip_forbidden_source_body_attribution(channel,article,value)
     value=_trim_candidate_to_hard_limit(value,hard_max_chars,min_chars=min_chars)
     return value

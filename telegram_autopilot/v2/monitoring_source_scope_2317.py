@@ -83,6 +83,18 @@ _CENTRAL_ASIA_RECRUITMENT_2319 = re.compile(
     r"(?iu)\b(?:вербуван\w*|рекрут\w*|найманц\w*|армі\w*|військ\w*)\b"
 )
 
+# 2.3.22: national military paperwork, unrelated to a local civic event.
+_NATIONAL_MILITARY_PAPERWORK_2322 = re.compile(
+    r"(?iu)(?:\bміноборони\b|\bміністерств\w*\s+оборон\w*\b)"
+    r"[\s\S]{0,400}(?:військов\w*\s+облік\w*|"
+    r"облік\w*\s+(?:військов\w*|особов\w*\s+склад\w*))"
+)
+_NATIONAL_ORDER_2322 = re.compile(
+    r"(?iu)\b(?:наказ\w*|правил\w*|процедур\w*|змінює|"
+    r"змінил\w*|оновил\w*)\b"
+)
+
+
 _RETAIL_CONTEXT = re.compile(
     r"(?iu)\b(?:магазин\w*|супермаркет\w*|гіпермаркет\w*|"
     r"торгов\w*\s+(?:мереж\w*|центр\w*|точк\w*)|"
@@ -117,6 +129,11 @@ def monitoring_source_scope_reason_2317(channel: Any, article: Any) -> str:
     original = (_field(article, "title") + "\n" + _field(article, "raw_text"))[:10000]
     if not original.strip():
         return ""
+
+    if (not _LOCAL_EVENT.search(original)
+            and _NATIONAL_MILITARY_PAPERWORK_2322.search(original)
+            and _NATIONAL_ORDER_2322.search(original)):
+        return "MONITORING_NONLOCAL_MILITARY_PAPERWORK_2322"
 
     if (not _LOCAL_EVENT.search(original)
             and _REMOTE_NATURE_PLACE.search(original)
