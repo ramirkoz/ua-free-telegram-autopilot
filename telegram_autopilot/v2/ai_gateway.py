@@ -626,7 +626,15 @@ class AIGateway:
 
         models = {slot.model for slot in self._provider_slots(provider, cfg)}
         rows = [item for item in self.store.ai_model_health(provider) if item.model in models]
-        healthy = [item for item in rows if item.state == ProviderState.HEALTHY and not _cooldown_active(item.cooldown_until)]
+        # Even a HEALTHY model row is not live evidence when it predates the
+        # runtime. Otherwise a failed new probe can surface an old success.
+        with self.store.connect() as con:
+            boot_row = con.execute("SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'").fetchone()
+        boot_at = str(boot_row[0] or "") if boot_row else ""
+        healthy = [item for item in rows
+                   if item.state == ProviderState.HEALTHY
+                   and not _cooldown_active(item.cooldown_until)
+                   and (not boot_at or str(item.updated_at or "") >= boot_at)]
         total = len(models)
         if healthy:
             winner = max(healthy, key=lambda item: item.updated_at or "")
