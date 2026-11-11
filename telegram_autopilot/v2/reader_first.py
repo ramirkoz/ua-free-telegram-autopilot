@@ -130,7 +130,7 @@ def requires_final_reader_copyedit(*, monitoring: bool, legacy_quality_risk: boo
     This avoids a duplicate paid generation on every article.
     """
     # 2.3.27: draft already passes source/Fact/Language/Readability QA before
-    # this call. A second paid full generation is for observable problems,
-    # not for an unconditional editorial checkbox. All later independent
+    # this call.  A second paid full generation is for observable problems,
+    # not for an unconditional editorial checkbox.  All later independent
     # article/Telegram publication gates remain mandatory.
     return bool(legacy_quality_risk)
