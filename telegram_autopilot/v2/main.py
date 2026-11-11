@@ -33,7 +33,25 @@ class MainWindow(FastMainWindow):
     """Main UI with an explicit AI probe result instead of a generic completion message."""
 
     def test_ai(self) -> None:
-        self.status_text.set("Перевіряю налаштовані AI-провайдери…")
+        """Probe every configured AI provider from the visible toolbar.
+
+        In 2.3.25 the callback used self.status_text, which does not exist
+        in the V2 UI. The AttributeError prevented any probes from starting.
+        """
+        if getattr(self, "_manual_ai_test_running", False):
+            self.status.set("Тест усіх AI вже виконується…")
+            return
+        self._manual_ai_test_running = True
+        self.status.set("Перевіряю налаштовані AI-провайдери…")
+        event("ai", "manual AI toolbar button pressed", version=V2_VERSION)
+
+        def finish(message: str) -> None:
+            # Only the UI thread may update Tk widgets.
+            self._manual_ai_test_running = False
+            self.status.set(message)
+            self.refresh_ai()
+            self.refresh_codex_status()
+            self.refresh_home()
 
         def work() -> None:
             try:
@@ -55,15 +73,15 @@ class MainWindow(FastMainWindow):
                 tested = max(0, len(results) - skipped)
                 failed = max(0, tested - healthy)
                 if tested == 0:
-                    text = f"AI тест: 0 перевірено · пропущено {skipped}. Немає активних налаштованих маршрутів."
+                    message = f"AI тест: 0 перевірено · пропущено {skipped}. Немає активних налаштованих маршрутів."
                 else:
-                    text = f"AI тест: перевірено {tested} · працює {healthy} · помилки {failed} · пропущено {skipped}"
+                    message = f"AI тест: перевірено {tested} · працює {healthy} · помилки {failed} · пропущено {skipped}"
                 event("ai", "manual provider probe complete", tested=tested, healthy=healthy, failed=failed, skipped=skipped)
-                self.after(0, lambda: self.status_text.set(text))
+                self.after(0, lambda message=message: finish(message))
             except Exception as exc:
                 event("ai", "manual provider probe failed", level=40, detail=str(exc)[:1200])
-                msg = str(exc)
-                self.after(0, lambda msg=msg: self.status_text.set(f"Тест AI: помилка: {msg}"))
+                message = f"Тест AI: помилка: {exc}"
+                self.after(0, lambda message=message: finish(message))
 
         threading.Thread(target=work, name="AI-Manual-Probe", daemon=True).start()
 
