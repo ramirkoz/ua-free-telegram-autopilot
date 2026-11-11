@@ -28,6 +28,9 @@ _DATE = re.compile(r"(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?![\d.])")
 _CLOCK = re.compile(r"(?<![\d:.,])([01]?\d|2[0-4])([:.\-])([0-5]\d)(?![\d:])")
 _COLON = re.compile(r"(?<!\d)\d+(?::\d+)+(?!\d)")
 _THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?![\d.,])")
+# English-language reports use 3,500 as a thousands separator. Do not
+# interpret Ukrainian 8,3 or 8,300 as thousands without an English context.
+_COMMA_THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?:,\d{3})+(?![\d.,])")
 _DECIMAL = re.compile(r"(?<![\d.,])\d+[.,]\d+(?![\d.,])")
 _INT = re.compile(r"(?<![\d.,:])\d+(?![\d.,:])")
 
@@ -92,6 +95,16 @@ def _atoms(text: str, *, generous: bool) -> set[str]:
 
     take(_COLON, lambda m: out.add(m.group()))          # malformed times stay as written
     take(_THOUSANDS, lambda m: out.add(re.sub(r"\D", "", m.group())))
+    # v2.3.25: "3,500 laser robots" and "3500" must compare equal.
+    # Only source-side English-context comma groups add integer support;
+    # no blanket decimal-comma equivalence or output-side permission.
+    if generous:
+        english_thousands = set()
+        for found in _COMMA_THOUSANDS.finditer(clean):
+            near = clean[max(0, found.start() - 36):found.end() + 36]
+            if re.search(r"[A-Za-z]{3,}", near):
+                english_thousands.add(re.sub(r"\D", "", found.group()))
+        out.update(english_thousands)
 
     def decimal(match):
         value = match.group().replace(",", ".")
