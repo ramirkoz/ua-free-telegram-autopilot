@@ -470,7 +470,7 @@ class RuntimeEngine:
             event("worker", "job complete", channel_id=channel_id, article_id=article_id, job_id=job_id, decision=str(outcome.decision))
             return True
         except MediaPreflightPending as exc:
-            # This is not an AI/text failure. Source media can reappear after a
+            # This is not an AI/text failure.  Source media can reappear on a
             # later publisher page refresh; no costly writer has been called.
             self.store.defer_job(job_id,blocked_by=BlockedBy.MEDIA,
                                  error_code='MEDIA_PREWRITE',detail=str(exc),
