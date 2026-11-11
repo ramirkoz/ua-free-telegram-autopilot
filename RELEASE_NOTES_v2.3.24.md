@@ -4,7 +4,7 @@ Candidate emergency hotfix based on operator LIVE v2.3.23, 11.11.2026. All opera
 
 ## Changed
 
-1. Commercial web galleries: empty image captions/alt no longer prove that a photograph belongs to an article. Page-declared assets cannot bypass story-specific semantic evidence. The infamous black gadget image attached to unrelated Creative Bloq article in ПРОДАНО! #934 must fail the story-media gate.
+1. Commercial web media: genuine galleries with empty alt text and source-declared article images continue to work. Site-wide/related-story media are filtered by existing contextual rules; additionally, repeatedly reused image assets are now excluded by canonical source-asset identity. The black gadget image misattached to Creative Bloq's Gate of Vanaheimr story in ПРОДАНО! #934 is the specific regression scenario.
 2. A shared site image is excluded when it occurs on at least two different source stories, or was previously published for a different source story, even with resized CDN URLs. Same canonical source is not treated as unrelated.
 3. Actual published web-image identities (canonical asset key + binary SHA256) are recorded in an **additive** local SQLite table (`published_web_media_2324`) after confirmed Telegram delivery. Reuse on a different article is blocked before sending. Only actually delivered photos enter that ledger; there is no retroactive Telegram action.
 4. Regional news: source-only lost-pet/classified guard covers `пропала`, `зник`, `кіт`, `кішка`, `пес`, rather than only variants of `загубив` / `кот`.
