@@ -1746,7 +1746,7 @@ SOURCE:
             if is_science_general_channel(channel) and not calibrated_role else ""
         )
         # 2.3.27 reader-first direction is a SOFT preference, calibrated by
-        # owner labels. Does not override an approved original design concept.
+        # owner labels.  Does not override an approved original design concept.
         theme_direction = (
             "CTRL+UA: наукові відкриття простими словами, роботи, незвичайні "
             "гаджети, ШІ у повсякденному житті, практична кібербезпека, "
