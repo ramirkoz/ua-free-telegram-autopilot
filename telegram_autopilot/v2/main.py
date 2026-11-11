@@ -297,6 +297,16 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.23 source address repair skipped safely; Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.27 operator decision: install all 31 editorial RSS assignments
+            # in one idempotent migration. TG hints are isolated from publishable
+            # sources; no historic articles, receipts, Data or budgets touched.
+            try:
+                from .editorial_sources_237 import apply_editorial_sources_237
+                event("ingest", "2.3.27 complete editorial source portfolio checked",
+                      **apply_editorial_sources_237(store))
+            except Exception as exc:
+                event("ingest", "2.3.27 source portfolio not applied; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile
