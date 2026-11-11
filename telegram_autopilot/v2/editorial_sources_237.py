@@ -175,7 +175,7 @@ def source_portfolio_snapshot_237(store: Any) -> dict[str, Any]:
     """Read-only proof of 31 assignments and six non-publishing TG hints.
 
     HTTP health is based on actual collector runs, NEVER inferred from a
-    successful migration or an editorial model. Do not include all old feeds.
+    successful migration or an editorial model.  Do not include all old feeds.
     """
     channels = []
     with store.connect() as con:
