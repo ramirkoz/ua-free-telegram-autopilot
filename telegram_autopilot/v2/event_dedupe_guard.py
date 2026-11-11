@@ -319,6 +319,24 @@ def _identity_text(row: Any) -> str:
     return "\n".join(part for part in parts if part)[:5200]
 
 
+_HEADLINE_WORD = re.compile(r"[a-zа-яіїєґ0-9][a-zа-яіїєґ0-9'’\-]{3,}", re.I)
+_HEADLINE_STOP = frozenset(
+    "this that with from have will into about after before their there what when where which your "
+    "than over under more most news його вона вони який яка яке через після перед також було буде "
+    "щодо серед понад https http whatsapp instagram tiktok threads channel".split()
+)
+
+
+def _headline_terms(row: Any) -> set[str]:
+    """Content words of the source headline (first line for Telegram posts)."""
+    try:
+        title = str(row["title"] or "")
+    except (KeyError, IndexError, TypeError):
+        title = str(getattr(row, "title", "") or "")
+    title = re.sub(r"https?://\S+", " ", title).casefold()
+    return {w for w in _HEADLINE_WORD.findall(title) if w not in _HEADLINE_STOP}
+
+
 def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
     left_raw = _identity_text(current)
     right_raw = _identity_text(candidate)
@@ -350,6 +368,8 @@ def _fingerprint_stats(current: Any, candidate: Any) -> dict[str, Any]:
         "shared_scientific": _scientific_names(left_raw) & _scientific_names(right_raw),
         "shared_actions": _action_hits(left) & _action_hits(right),
         "shared_rare": _rare_terms(left) & _rare_terms(right),
+        "headline_shared": _headline_terms(current) & _headline_terms(candidate),
+        "headlines_known": bool(_headline_terms(current) and _headline_terms(candidate)),
     }
 
 
@@ -384,6 +404,12 @@ def _validated_cluster_same_event(stats: dict[str, Any], *, commercial_profile: 
     )
     threshold = 74.0 if commercial_profile else 70.0
     if confidence != "high" or score < threshold:
+        return False, ""
+    # 2.3.23: body overlap alone is usually a shared footer or series intro of
+    # one publisher (164 of 165 recorded cluster "duplicates" were same-source and
+    # 134 shared no headline word). Two reports of one event share a headline
+    # term; without it only an exact scientific-name anchor may confirm.
+    if stats.get("headlines_known") and not stats.get("headline_shared") and not scientific:
         return False, ""
     strong_anchor = (
         bool(scientific)

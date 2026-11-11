@@ -222,6 +222,15 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     )
     if completed or result:
         return ""
+    # 2.3.23: an operational signal is short. A long narrative that merely
+    # mentions drones or an attack (an escape from occupation, a rescue, a
+    # report about mannequins on roads) is not one; the typed selector and the
+    # live-now gate still judge it. Labelled data: under 200 chars 22 of 22 are
+    # real alerts, from 400 chars the rule rejected 9 wanted for 7 unwanted.
+    live_marker = re.search(
+        r"(?iu)\b(?:зараз|наразі|щойно|тільки\s+що|тривог\w*|відбій|чути|чутно|летить|рухається)\b", source)
+    if len(source) >= 400 and not live_marker:
+        return ""
     return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженої завершеної події"
 
 
@@ -604,7 +613,10 @@ def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> 
     low = (str(_v(article, "title", "")) + "\n" + str(_v(article, "raw_text", ""))).casefold()
     meta = _telegram_meta(article)
     if bool(meta.get("forwarded")) and _rule_mentions(rules, "репост", "переслан", "forward"):
-        return "Нативний Telegram-репост/переслане повідомлення"
+        # 2.3.23: same narrow exception as the source-origin rule above.
+        from .monitoring_service_facts import utility_service_update
+        if not utility_service_update(article):
+            return "Нативний Telegram-репост/переслане повідомлення"
     if _rule_mentions(rules, "хвилин", "мовчан", "пошан") and (
         "хвилина мовчання" in low or ("хвилин" in low and ("мовчан" in low or "пошан" in low))
     ):
