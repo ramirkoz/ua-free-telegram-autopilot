@@ -454,6 +454,7 @@ class V2Store:
                 self._ensure_rc110_source_health_columns(con)
                 self._ensure_rc112_cooldown_repair(con)
                 self._ensure_rc115_ai_usage_columns(con)
+                self._ensure_237_ai_usage_attribution(con)
                 self._ensure_rc85_polling_baseline(con)
                 self._ensure_rc89_polling_repair(con)
                 self._ensure_v2112_monitoring_poll_interval(con)
@@ -499,6 +500,15 @@ class V2Store:
         columns={str(row[1]) for row in con.execute("PRAGMA table_info(ai_usage_events)").fetchall()}
         if "actual_openrouter_usd" not in columns:
             con.execute("ALTER TABLE ai_usage_events ADD COLUMN actual_openrouter_usd REAL NOT NULL DEFAULT 0")
+
+    @staticmethod
+    def _ensure_237_ai_usage_attribution(con: sqlite3.Connection) -> None:
+        """Add-only attribution columns, preserving every historic usage row."""
+        columns = {str(row[1]) for row in con.execute('PRAGMA table_info(ai_usage_events)')}
+        for key in ('channel_id', 'article_id'):
+            if key not in columns:
+                con.execute(f'ALTER TABLE ai_usage_events ADD COLUMN {key} INTEGER NOT NULL DEFAULT 0')
+        con.execute('CREATE INDEX IF NOT EXISTS idx_ai_usage_article_237 ON ai_usage_events(article_id,created_at)')
 
     @staticmethod
     def _ensure_rc112_cooldown_repair(con: sqlite3.Connection) -> None:
@@ -1959,10 +1969,12 @@ class V2Store:
 
     def record_ai_usage(self, *, provider: str, model: str, purpose: str, input_tokens: int = 0, output_tokens: int = 0, total_tokens: int = 0, estimated_openrouter_usd: float = 0.0, actual_openrouter_usd: float = 0.0) -> None:
         inp=max(0,int(input_tokens or 0)); out=max(0,int(output_tokens or 0)); total=max(inp+out,int(total_tokens or 0))
+        from .ai_economics_237 import current_ai_article
+        channel_id,article_id = current_ai_article()
         with self.connect() as con:
             con.execute(
-                "INSERT INTO ai_usage_events(created_at,provider,model,purpose,input_tokens,output_tokens,total_tokens,estimated_openrouter_usd,actual_openrouter_usd) VALUES(?,?,?,?,?,?,?,?,?)",
-                (now_iso(),str(provider),str(model),str(purpose),inp,out,total,max(0.0,float(estimated_openrouter_usd or 0.0)),max(0.0,float(actual_openrouter_usd or 0.0))),
+                "INSERT INTO ai_usage_events(created_at,provider,model,purpose,input_tokens,output_tokens,total_tokens,estimated_openrouter_usd,actual_openrouter_usd,channel_id,article_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (now_iso(),str(provider),str(model),str(purpose),inp,out,total,max(0.0,float(estimated_openrouter_usd or 0.0)),max(0.0,float(actual_openrouter_usd or 0.0)),channel_id,article_id),
             )
 
     def openrouter_spend_usd(self, *, hours: int | None = None, month: bool = False) -> float:
