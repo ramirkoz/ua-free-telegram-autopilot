@@ -39,7 +39,7 @@ def _local_day(value: str) -> str:
         return dt.astimezone(ZoneInfo('Europe/Kyiv')).date().isoformat()
     except Exception:
         # An embedded Windows build may lack tzdata; never shift dates based
-        # on arbitrary server defaults. As of Nov 2026 Kyiv is UTC+2.
+        # on arbitrary server defaults.  As of Nov 2026 Kyiv is UTC+2.
         return dt.astimezone(timezone(timedelta(hours=2))).date().isoformat()
 
 
