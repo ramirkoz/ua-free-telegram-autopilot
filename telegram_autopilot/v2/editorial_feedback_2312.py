@@ -86,6 +86,11 @@ def source_only_promotion_veto_2312(role: str, article: Any) -> str:
         return str(value or "")
     url = field("source_url") or field("canonical_source_url")
     path = urlsplit(url).path.casefold()
+    # v2.3.25: a buyer's guide/ranked product catalogue is not a novel
+    # design idea, regardless of an AI "HUMAN_EDITORIAL_PASS" score.
+    # An ordinary single-product review with genuine innovation is NOT banned.
+    if role == "creative" and re.search(r"/(?:buying-guides|buyers-guides|best-of)/", path):
+        return "EDITORIAL_OPERATOR_BUYING_GUIDE_2325"
     if "/deals/" not in path:
         return ""
     title = field("title").casefold()

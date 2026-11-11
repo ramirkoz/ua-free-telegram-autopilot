@@ -25,6 +25,20 @@ _LOST_FOUND = re.compile(
     r"втрачен\w*|повернут\w*|на\s+ім[’']?я)\b"
     r")"
 )
+# A missing animal owner-search is an advertisement even when it says
+# "волонтери шукають власників" rather than "загубився кіт". Require BOTH
+# a domestic animal and an active search / return cue, so a real report of
+# a completed rescue or veterinary action is not banned by species alone.
+_PET_OWNER_SEARCH = re.compile(
+    r"(?iu)\b(?:волонтер\w*|люди|мешканц\w*)?\s*"
+    r"(?:шукають|шукаємо|розшукують|розшукуємо|допоможіть\s+знайти|"
+    r"допомогти\s+знайти|відгукніться|поверн\w+)\s+"
+    r"(?:\w+\s+){0,4}(?:власник\w*|господар\w*|хазя\w*)\b"
+)
+_PET_SPECIES = re.compile(
+    r"(?iu)\b(?:коз\w*|козен\w*|кот\w*|к[іо]т\w*|кішк\w*|киц\w*|"
+    r"собак\w*|пес\w*|цуцен\w*|тварин\w*|папуг\w*|хом[’']?як\w*)\b"
+)
 _PRIVATE_CLASSIFIED = re.compile(
     r"(?imu)(?:^|[.!?]\s+)(?:продам|продаю|куплю|"
     r"здам|здаю|зніму|обміняю|віддам|шукаю\s+"
@@ -90,6 +104,8 @@ def no_announcement_reason_2322(article: Any) -> str:
         return ""
     if _LOST_FOUND.search(original):
         return "MONITORING_CLASSIFIED_LOST_FOUND_2322"
+    if _PET_OWNER_SEARCH.search(original) and _PET_SPECIES.search(original):
+        return "MONITORING_CLASSIFIED_PET_OWNER_SEARCH_2325"
     if _PRIVATE_ACCUSATION.search(original) and _PHONE.search(original):
         return "MONITORING_PRIVATE_ALLEGATION_CONTACT_2322"
     if _PURE_ANNOUNCEMENT.search(original):

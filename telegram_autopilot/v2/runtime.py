@@ -179,6 +179,9 @@ class RuntimeEngine:
         event("ingest", "restart source checkpoint snapshot",
               source_count=len(self.restart_checkpoints_260), strict_fence_preserved=True,
               max_gap_minutes=120, no_old_ready_replay=True)
+        # UI must never repeat Nov-9 NETWORK_DOWN as a verified Nov-11 result.
+        # No API calls or paid tokens are spent by this presentation repair.
+        self.gateway.mark_stale_provider_health_on_start(self.started_at)
         event("ai", "startup live AI probes skipped; health will update on real work or explicit manual test")
         for row in self.store.list_channels(enabled_only=True):
             self._start_channel(int(row["id"]))
