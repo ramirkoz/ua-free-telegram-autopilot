@@ -308,8 +308,10 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.schema_verified or item.page_declared:
+    if item.schema_verified:
         return True
+    if item.page_declared:
+        return title_overlap >= 1 or article_overlap >= 2
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
     return title_overlap >= 1 or article_overlap >= 2
