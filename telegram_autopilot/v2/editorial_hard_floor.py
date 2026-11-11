@@ -50,6 +50,8 @@ def two_sentence_reason(article: Any, final_text: str | None = None) -> str:
     if len(facts(source)) < 2:
         from .monitoring_service_facts import structured_schedule
         if not structured_schedule(article):
+            from .monitoring_service_facts import structured_schedule
+        if not structured_schedule(article):
             return "EDITORIAL_MIN_TWO_SENTENCES: source"
     if final_text is not None and len(facts(final_text)) < 2:
         return "EDITORIAL_MIN_TWO_SENTENCES: final"
