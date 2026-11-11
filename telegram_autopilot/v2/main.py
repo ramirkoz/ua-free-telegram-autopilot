@@ -33,10 +33,11 @@ class MainWindow(FastMainWindow):
     """Main UI with an explicit AI probe result instead of a generic completion message."""
 
     def test_ai(self) -> None:
-        """Probe every configured AI provider from the visible toolbar.
+        """Probe *every* configured AI provider from the visible toolbar.
 
-        In 2.3.25 the callback used self.status_text, which does not exist
-        in the V2 UI. The AttributeError prevented any probes from starting.
+        The old callback referenced ``self.status_text`` (not defined by the
+        V2 UI). That AttributeError occurred before the worker was started,
+        so repeated operator clicks never invoked the router at all.
         """
         if getattr(self, "_manual_ai_test_running", False):
             self.status.set("Тест усіх AI вже виконується…")
@@ -46,7 +47,7 @@ class MainWindow(FastMainWindow):
         event("ai", "manual AI toolbar button pressed", version=V2_VERSION)
 
         def finish(message: str) -> None:
-            # Only the UI thread may update Tk widgets.
+            # Tk widgets may only be touched by the UI thread.
             self._manual_ai_test_running = False
             self.status.set(message)
             self.refresh_ai()
