@@ -2467,8 +2467,8 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
             try: heartbeat()
             except Exception: pass
         # A verified, source-owned image must exist before paying writer and
-        # final_editor for editorial channels that require media. Monitoring
-        # rules are unchanged. Unavailable images defer (never reject/replay).
+        # final_editor for editorial channels that require media.  Monitoring
+        # rules are unchanged.  Unavailable images defer (never reject/replay).
         from .editorial_media_preflight_237 import ensure_media_for_editorial_writer
         article = ensure_media_for_editorial_writer(self.store, channel, article)
         written = self.write(channel, article, selection)
