@@ -587,10 +587,18 @@ class Publisher:
                     checkpoints = {}
             except (TypeError, ValueError):
                 checkpoints = {}
+            # Editorial-only rolling window mirrors ingest + worker.
+            # Never waive the checkpoint/discovery-time/replay fence.
+            from .domain import ChannelMode
+            editorial_hours = (
+                min(24, max(1, int(channel.max_age_hours or 24)))
+                if channel.mode == ChannelMode.EDITORIAL else 0
+            )
             stale_reason = restart_source_rejection(
                 str(article["source_published_at"] or ""), started_at,
                 str(checkpoints.get(str(article["source_id"]), "")),
                 discovered_at=str(article["discovered_at"] or ""),
+                rolling_window_hours=editorial_hours,
             )
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
