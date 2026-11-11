@@ -308,8 +308,10 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.schema_verified or item.page_declared:
+    if item.schema_verified:
         return True
+    if item.page_declared:
+        return title_overlap >= 1 or article_overlap >= 2
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
     return title_overlap >= 1 or article_overlap >= 2
@@ -625,6 +627,9 @@ def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> 
         return False
     described = _text_tokens(" ".join((item.caption, item.alt)))
     if not described:
+        # Keep actual source-bound galleries with weak alt text; unrelated
+        # site-wide/recommendation media are excluded by container context and
+        # the cross-story published/candidate image-reuse guard in V2Store.
         return True
     title_overlap, article_overlap, _count = _semantic_media_evidence(item, title=title, article_text=article_text)
     return title_overlap >= 1 or article_overlap >= 1
@@ -740,10 +745,8 @@ def prepare_article_media(
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
             if marketing_context and not semantic_ok and resolved.gallery and _in_story_gallery(resolved, title=title, article_text=article_text):
-                # Commercial/editorial source media is already structurally scoped to the
-                # story by article_extractor. Explicit gallery items and ordinary body
-                # images may have weak/empty alt text, so lexical overlap is not a safe
-                # rejection criterion here. Hard-noise and binary validation still apply.
+                # Keep genuine creative galleries even when alt text is blank;
+                # disallow repeated sitewide art via cross-story source guard.
                 resolved.relevance_score = max(40.0, resolved.relevance_score)
                 semantic_ok = True
             if not semantic_ok:
