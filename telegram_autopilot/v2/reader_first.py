@@ -86,24 +86,51 @@ SCIENCE_FINAL_READER_REVIEW = """
 Якщо немає матеріалу для ясної новини, не вигадуй її, навіть заради структури.
 """.strip()
 
+# 2.3.27: topic and rhythm from Claude review; these are SOFT editorial
+# preferences, never a new hard reject, fact bypass, or post length override.
+EDITORIAL_READER_RHYTHM_237 = """
+СТРУКТУРА ДЛЯ CTRL+UA ТА ПРОДАНО! (не для регіонального моніторингу):
+- Фактичний «гачок»: почни з найцікавішого перевіреного факту, числа або
+  несподіваного контрасту. Не вигадуй сенсацію чи цитату.
+- Суть: одним зрозумілим абзацом поясни що відбулося, хто зробив і чим це
+  відрізняється від звичайного. Наступний абзац лише про перевірений контекст.
+- Завершення: підтверджений наслідок, деталь або висновок джерела. Якщо його
+  немає, закінчи на факті, без штучної моралі чи спекулятивної обіцянки.
+- ОРІЄНТИР 350–600 знаків, але збережи реальний ліміт каналу, факти й важливі
+  застереження. Ця вказівка НЕ є підставою відхиляти текст за довжину.
+- Метричні одиниці там, де це не змінює перевірених величин; не округлюй
+  гроші, відсотки чи дані дослідження заради красивого тексту.
+""".strip()
+
+
 def writer_reader_rules(*, monitoring: bool, commercial: bool, science: bool = False) -> str:
     extra = MONITORING_READER_RULES if monitoring else (
         COMMERCIAL_READER_RULES if commercial else ""
     )
-    return READER_FIRST_NEWSROOM_RULES + ("\n" + extra if extra else "") + ("\n" + SCIENCE_PLAIN_READER_RULES if science else "")
+    return (READER_FIRST_NEWSROOM_RULES
+            + ("\n" + extra if extra else "")
+            + ("\n" + SCIENCE_PLAIN_READER_RULES if science else "")
+            + ("\n" + EDITORIAL_READER_RHYTHM_237 if not monitoring else ""))
 
 
 def final_reader_rules(*, monitoring: bool, commercial: bool, science: bool = False) -> str:
     extra = MONITORING_READER_RULES if monitoring else (
         COMMERCIAL_READER_RULES if commercial else ""
     )
-    return FINAL_READER_REVIEW + ("\n" + extra if extra else "") + ("\n" + SCIENCE_FINAL_READER_REVIEW if science else "")
+    return (FINAL_READER_REVIEW
+            + ("\n" + extra if extra else "")
+            + ("\n" + SCIENCE_FINAL_READER_REVIEW if science else "")
+            + ("\n" + EDITORIAL_READER_RHYTHM_237 if not monitoring else ""))
 
 
 def requires_final_reader_copyedit(*, monitoring: bool, legacy_quality_risk: bool) -> bool:
-    """Every editorial article gets final copyedit; community notices keep the
-    existing risk-based pass to avoid doubling AI traffic for the large feed.
+    """Request a paid final rewrite only when draft QA reports a real defect.
 
-    This uses only already configured provider routes and budget limits.
+    A clean source-verified draft is still subject to all existing hard gates.
+    This avoids a duplicate paid generation on every article.
     """
-    return not monitoring or legacy_quality_risk
+    # 2.3.27: draft already passes source/Fact/Language/Readability QA before
+    # this call. A second paid full generation is for observable problems,
+    # not for an unconditional editorial checkbox. All later independent
+    # article/Telegram publication gates remain mandatory.
+    return bool(legacy_quality_risk)
