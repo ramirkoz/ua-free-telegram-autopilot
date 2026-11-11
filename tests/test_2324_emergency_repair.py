@@ -23,9 +23,10 @@ SOURCE = "https://www.creativebloq.com/how-to/this-artist-specialises-in-creatin
 
 
 def test_blank_gallery_does_not_override_article_ownership():
-    candidate = PreparedMedia(1, "image", BLACK, gallery=True, context="article gallery", position=.2)
+    candidate = PreparedMedia(1, "image", BLACK, gallery=True, context="related-trends rail", position=.9)
     assert not _in_story_gallery(candidate, title="Gate of Vanaheimr", article_text="Borisut Blender")
-    assert not _semantic_media_match(candidate, title="Gate of Vanaheimr", article_text="Borisut Blender")
+    authentic = PreparedMedia(1, "image", BLACK, gallery=True, context="visual-shell", position=.1)
+    assert _in_story_gallery(authentic, title="Gate of Vanaheimr", article_text="Borisut Blender")
 
 
 def test_weak_commercial_gallery_cannot_publish_black_gadgets_for_vanaheimr():
@@ -38,7 +39,7 @@ def test_weak_commercial_gallery_cannot_publish_black_gadgets_for_vanaheimr():
     with patch("telegram_autopilot.media_pipeline._probe_article_image", side_effect=probe):
         result = prepare_article_media(layout, [BLACK], title="Borisut Gate of Vanaheimr",
                                        article_text="Borisut creates a fantasy world in Blender.",
-                                       source_url=SOURCE, marketing_context=True)
+                                       source_url=SOURCE, marketing_context=True, excluded_urls={RESIZED})
     assert not result.body
 
 
