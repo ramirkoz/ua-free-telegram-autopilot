@@ -441,6 +441,11 @@ class AIGateway:
             record[0], record[1] = record[0] // 2, record[1] // 2
 
     def _contract_unreliable(self, purpose: str, model: str) -> bool:
+        # LIVE 2.3.24: ling tiny repeatedly returns no JSON on selectors.
+        # Put it last from the first job, without touching user configuration.
+        if (str(purpose or "").casefold() in {"editorial_selector", "monitoring_selector"}
+                and str(model or "").casefold() == "inclusionai/ling-3.0-tiny"):
+            return True
         ok, bad = self._contract_stats().get(
             (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))
         total = ok + bad
@@ -562,6 +567,34 @@ class AIGateway:
         )
         return state, scope
 
+    def mark_stale_provider_health_on_start(self, started_at: str) -> int:
+        """Mark prior-run provider failures UNVERIFIED, without making API calls.
+
+        Only display-level summary is touched; model errors, cooldowns and
+        historical counters remain intact until a real probe/work succeeds.
+        """
+        changed = 0
+        for current in self.store.provider_health():
+            models = self.store.ai_model_health(current.provider)
+            if current.state == ProviderState.CONFIG_ERROR:
+                continue
+            latest = max((str(m.updated_at or "") for m in models), default="")
+            if latest and latest >= str(started_at or ""):
+                continue
+            if current.state == ProviderState.UNKNOWN and current.detail.startswith("STALE:"):
+                continue
+            old_state = str(current.state)
+            current.state = ProviderState.UNKNOWN
+            current.detail = f"STALE: попередній стан {old_state}; немає API-перевірки після запуску"
+            current.cooldown_until = ""
+            current.updated_at = now_iso()
+            self.store.set_provider_health(current)
+            changed += 1
+        if changed:
+            event("ai", "persisted provider health marked unverified after runtime restart",
+                  providers=changed, live_api_probe_performed=False)
+        return changed
+
     def _refresh_provider_summary(self, provider: str, cfg) -> ProviderHealth:
         current = self._health_map().get(provider, ProviderHealth(provider=provider))
         if provider == "codex" and not bool(getattr(cfg, "codex_enabled", False)):
@@ -614,6 +647,18 @@ class AIGateway:
 
         if rows:
             latest = max(rows, key=lambda item: item.updated_at or "")
+            # A current summary timestamp is NOT a new API validation.
+            with self.store.connect() as con:
+                marker = con.execute("SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'").fetchone()
+            started_at = str(marker[0] or "") if marker else ""
+            if started_at and str(latest.updated_at or "") < started_at:
+                current.state = ProviderState.UNKNOWN
+                current.model = latest.model
+                current.detail = f"STALE: {latest.model} — перевірка до запуску, {latest.state}; нову API-перевірку не підтверджено"
+                current.cooldown_until = ""
+                current.updated_at = now_iso()
+                self.store.set_provider_health(current)
+                return current
             current.state = latest.state
             current.model = latest.model
             current.detail = f"0/{total} моделей healthy; остання: {latest.model}: {latest.detail[:700]}"
@@ -1160,7 +1205,10 @@ class AIGateway:
         else:
             configured = self._configured(provider, cfg)
         if not configured:
+            event("ai", "manual AI provider test skipped (not configured)", provider=provider)
             return self._refresh_provider_summary(provider, cfg)
+        event("ai", "manual AI provider probe started", provider=provider,
+              models_to_try=len(self._provider_slots(provider, cfg)))
         if provider == "openrouter":
             budget_ok, _detail = self._openrouter_budget_status(cfg)
             if not budget_ok:
@@ -1221,6 +1269,10 @@ class AIGateway:
         return self._probe_provider(name, load_secrets(), force_configured=force_configured)
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
+        # A button click is an explicit live check, not a view of saved rows.
+        check_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        event("ai", "manual AI all providers test started", check_id=check_id,
+              providers=list(self.PROVIDER_ORDER))
         by_provider: dict[str, ProviderHealth] = {}
         with ThreadPoolExecutor(max_workers=len(self.PROVIDER_ORDER), thread_name_prefix="ai-probe") as pool:
             futures = {pool.submit(self._probe_provider, provider, cfg): provider for provider in self.PROVIDER_ORDER}
@@ -1236,4 +1288,9 @@ class AIGateway:
                     current.updated_at = now_iso()
                     self.store.set_provider_health(current)
                     by_provider[provider] = current
-        return [by_provider.get(provider) or self._refresh_provider_summary(provider, cfg) for provider in self.PROVIDER_ORDER]
+        results = [by_provider.get(provider) or self._refresh_provider_summary(provider, cfg)
+                   for provider in self.PROVIDER_ORDER]
+        event("ai", "manual AI all providers test finished", check_id=check_id,
+              states={r.provider: str(r.state) for r in results},
+              provider_count=len(results))
+        return results
