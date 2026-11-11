@@ -19,6 +19,7 @@ _FAMILIAR = {
     "GPT", "HTML", "HTTP", "HTTPS", "USB", "GPU", "CPU", "DNA",
     "RNA", "OLED", "GPS", "COVID", "UFO", "ISS", "USA", "USDT",
     "AMD", "NVIDIA", "ASUS", "INTEL", "ARM", "SSD", "RAM", "DDR",
+    "AMD", "NVIDIA", "ASUS", "INTEL", "ARM", "SSD", "RAM", "DDR",
 }
 _SIMPLE_EXPLANATION = re.compile(
     r"^\s*(?:"
