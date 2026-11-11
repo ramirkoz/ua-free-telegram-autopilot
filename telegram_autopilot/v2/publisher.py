@@ -1069,16 +1069,31 @@ class Publisher:
         if channel.mode == ChannelMode.EDITORIAL:
             repeated = self.store.repeated_published_web_media_2324(article_id, prepared)
             if repeated:
-                self.store.publication_backoff(
-                    article_id, blocked_by=BlockedBy.MEDIA,
-                    error_code="WEB_MEDIA_REUSED_UNRELATED_2324",
-                    detail="Те саме зображення вже було опубліковане з іншою статтею; потрібне власне медіа джерела",
-                    retry_seconds=1800, count_attempt=False,
-                )
-                event("media", "reused media from unrelated published story blocked",
-                      level=40, channel_id=channel_id, article_id=article_id,
-                      repeated_count=len(repeated), source_url=source_url)
-                return "WEB_MEDIA_REUSED_UNRELATED_2324"
+                # A gallery can contain both a site's reused promotional photo
+                # and genuine story artwork. Remove only the proven unrelated
+                # assets; blocking the entire story suppresses valid posts.
+                repeated_urls = set(repeated)
+                genuine_media = [
+                    item for item in prepared
+                    if str(getattr(item, "source_url", "") or "") not in repeated_urls
+                ]
+                if genuine_media:
+                    event("media", "reused unrelated gallery images removed before send",
+                          level=30, channel_id=channel_id, article_id=article_id,
+                          repeated_count=len(prepared) - len(genuine_media),
+                          verified_remaining=len(genuine_media), source_url=source_url)
+                    prepared = genuine_media
+                else:
+                    self.store.publication_backoff(
+                        article_id, blocked_by=BlockedBy.MEDIA,
+                        error_code="WEB_MEDIA_REUSED_UNRELATED_2324",
+                        detail="Те саме зображення вже було опубліковане з іншою статтею; потрібне власне медіа джерела",
+                        retry_seconds=1800, count_attempt=False,
+                    )
+                    event("media", "reused media from unrelated published story blocked",
+                          level=40, channel_id=channel_id, article_id=article_id,
+                          repeated_count=len(repeated), source_url=source_url)
+                    return "WEB_MEDIA_REUSED_UNRELATED_2324"
 
         delivery_count = len(prepared)
         delivery = self.store.telegram_delivery_state(article_id)
