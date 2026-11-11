@@ -309,3 +309,24 @@ def test_dead_commercial_sources_are_disabled_once_and_working_feeds_added():
     assert store.db.execute("SELECT enabled FROM sources WHERE name='My Modern Met'").fetchone()[0] == 0
     assert store.db.execute("SELECT initialized FROM sources WHERE name='The Awesomer'").fetchone()[0] == 0
     assert apply_commercial_sources_2323(store)["channels"][0]["status"] == "already_applied"
+
+
+def test_broken_science_source_addresses_are_repaired_once_by_exact_match():
+    from test_2322_no_announcements_consumer_portfolio import FakeStore
+    from telegram_autopilot.v2.source_url_repairs_2323 import apply_source_url_repairs_2323
+
+    store = FakeStore()
+    insert = ("INSERT INTO sources(channel_id,name,url,kind,enabled,initialized,priority) "
+              "VALUES(2,?,?,?,1,1,?)")
+    store.db.execute(insert, ("Quanta Magazine", "https://www.quantamagazine.org/quanta/feed/", "rss", 7))
+    store.db.execute(insert, ("The Conversation", "https://theconversation.com/us", "page", 9))  # operator-edited
+    store.db.commit()
+    report = apply_source_url_repairs_2323(store)
+    assert [r["source_name"] for r in report["repaired"]] == ["Quanta Magazine"]
+    row = store.db.execute(
+        "SELECT url,initialized,enabled,priority FROM sources WHERE name='Quanta Magazine'").fetchone()
+    # same row: address fixed, priority and enabled kept, backlog not replayed
+    assert tuple(row) == ("https://www.quantamagazine.org/feed/", 0, 1, 7)
+    assert store.db.execute(
+        "SELECT url FROM sources WHERE name='The Conversation'").fetchone()[0] == "https://theconversation.com/us"
+    assert apply_source_url_repairs_2323(store)["status"] == "already_applied"

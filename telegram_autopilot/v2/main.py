@@ -270,6 +270,15 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.23 source repair skipped safely; Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.23: two science sources whose stored address returns nothing
+            # usable get the publisher's working feed (exact name+URL only).
+            try:
+                from .source_url_repairs_2323 import apply_source_url_repairs_2323
+                event("ingest", "2.3.23 source address repair checked",
+                      **apply_source_url_repairs_2323(store))
+            except Exception as exc:
+                event("ingest", "2.3.23 source address repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile

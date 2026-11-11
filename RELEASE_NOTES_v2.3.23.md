@@ -41,6 +41,15 @@ Date: 2026-11-11. Status: Windows Portable TEST release. **Not LIVE-accepted.**
   - **Added:** designboom — Art and The Awesomer. Both passed the project's own collector on the operator machine on 11.11 (dated items, 4 and 9 in 24 h, text and source media).
 - The runtime-start and source-day fences are **not** changed. The "226 stale" figure in telemetry is old feed items already seen in earlier runs, not lost input: 18 new ПРОДАНО! stories did arrive after the boot.
 
+### CTRL+UA sources
+- Seven of 36 enabled sources produced no article in the last 7 days of the snapshot. Two have a measured working replacement and are repaired by an exact name+URL migration (same row, history and priority kept, backlog not replayed):
+  - **Quanta Magazine:** the stored feed returns one item from 2013. The publisher's main feed returns 5 dated items with full text.
+  - **The Conversation:** the stored page yields items with no verifiable date. The technology Atom feed returns 25 dated items with full text.
+- Left as is, reported only: Rest of World (HTTP 403, no bypass), Nature News (page and RSS give no verifiable dates; the stored address also carries a cookie-error query), Google DeepMind Blog (2 of 6 items dated, newest from 2025), Anthropic News (works, nothing new in 72 h), Knowable Magazine (works, excerpts of about 160 characters).
+
+### ГРОМАДИ sources
+- No address was changed. 3 of 57 sources gave no article in 7 days (Петро-Михайлівська, Широківська, Кирилівська громади). The seven regional media channels supply 3 049 of 4 408 weekly articles and 162 of 226 publications.
+
 ## Measured effect (same corpus, before / after)
 
 Thematic selection, "selected" = reaches writing. Later fact, media, freshness, duplicate and QA gates are not assumed to pass.
