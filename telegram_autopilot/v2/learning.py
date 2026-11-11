@@ -185,8 +185,12 @@ class LearningEngine:
                     matched_id = int(_v(row, "article_id", 0) or 0)
                     matched_similarity = sim
                 if admin < 0 and _row_int(row, "dislikes") > _row_int(row, "likes") and shared >= 4:
-                    threshold = 0.18 if age_hours <= 24 else 0.24 if age_hours <= 72 else 0.32
-                    if sim >= threshold:
+                    # 2.3.23: a hard veto needs a near-identical story. The old
+                    # 0.18..0.32 thresholds suppressed unrelated stories (a water
+                    # bottle, an animator, a type designer) at similarity 0.19-0.21
+                    # to one disliked post; weaker likeness is a soft adjustment only.
+                    threshold = 0.60 if age_hours <= 24 else 0.66 if age_hours <= 72 else 0.72
+                    if sim >= threshold and shared >= 8:
                         hard = True
                         matched_id = int(_v(row, "article_id", 0) or 0)
                         matched_similarity = sim

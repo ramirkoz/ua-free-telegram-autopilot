@@ -15,9 +15,10 @@ from typing import Any
 _LOST_FOUND = re.compile(
     r"(?iu)(?:"
     r"\b(?:знайшл\w*|знайден\w*|загубил\w*|загублен\w*|"
+    r"зник\w*|пропа\w*|загуби\w*|"
     r"втратив\w*|втрачено|втрачен\w*|чий|чиї|поверніть)\b"
     r"[^.!?\n]{0,140}\b(?:документ\w*|паспорт\w*|посвідченн\w*|"
-    r"ключ\w*|гаманц\w*|сумк\w*|телефон\w*|реч\w*|собак\w*|кот\w*)\b"
+    r"ключ\w*|гаманц\w*|сумк\w*|телефон\w*|реч\w*|собак\w*|к[іо]т\w*|кішк\w*|киц\w*|пес\w*|цуцен\w*)\b"
     r"|"
     r"\b(?:документ\w*|паспорт\w*|посвідченн\w*|ключ\w*|гаманц\w*)\b"
     r"[^.!?\n]{0,100}\b(?:знайден\w*|знайшл\w*|загубил\w*|"
@@ -104,4 +105,8 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_EVENT_INVITATION_2322"
     if _GENERIC_GREETING.search(original) and len(original) < 500:
         return "MONITORING_GREETING_2322"
-    return ""
+    # 2.3.23: surveys, giveaways, application calls, future-event invitations
+    # and relayed reader complaints. Same entry point, so the rule applies at
+    # selection and again right before a Telegram send for older READY rows.
+    from .monitoring_call_to_action import call_to_action_reason
+    return call_to_action_reason(article)

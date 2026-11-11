@@ -215,6 +215,8 @@ def test_actual_235_editorial_selector_is_calibrated_and_does_not_run_old_value_
             'title':'Цікавий новий продукт', 'raw_text':'Виробники зробили новий продукт із незвичною функцією. Автори підтвердили факти.',
             'source_name':'test'})
         assert out.decision==Decision.PUBLISH
-        assert out.reason.startswith('EDITOR_2321_SOURCE_CONFIRMED')
-        assert len(engine.gateway.prompts)==2
+        # 2.3.23: one source-grounded selector decision; an echoed low score
+        # does not send a wanted story to a second vetoing review.
+        assert out.reason.startswith('HUMAN_EDITORIAL_236_PASS')
+        assert len(engine.gateway.prompts)==1
         assert 'COMMERCIAL_READER_RULE_256' not in engine.gateway.prompts[0]

@@ -2717,7 +2717,7 @@ class V2Store:
         story URLs is strong negative provenance evidence. This guard never scans
         Telegram albums and never treats merely similar colors as repeated media.
         """
-        from ..media import media_identity, valid_public_media
+        from ..media import canonical_asset_key, valid_public_media
 
         row = self.get_article(article_id)
         if row is None:
@@ -2749,27 +2749,103 @@ class V2Store:
                 if not parsed or parsed[0] != "image":
                     continue
                 _, url = parsed
-                result.setdefault(media_identity("image", url), url)
+                result.setdefault(canonical_asset_key(url), url)
             return result
 
         current = images(str(row["media_json"]), str(row["article_layout_json"]))
         if not current:
             return set()
-        repeats: set[str] = set()
+        # v2.3.24: the old guard compared media_identity (which retained CDN
+        # size/quality rendition suffixes) and used only one other article, so
+        # shared site recommendation images could pass on a different URL.
+        # Require the candidate asset to be on TWO other distinct stories, or
+        # on a different already-published story. This does not affect Telegram.
+        seen_elsewhere: dict[str, set[str]] = {key: set() for key in current}
+        published_elsewhere: set[str] = set()
         with self.connect() as con:
             others = con.execute(
-                """SELECT source_url,canonical_source_url,media_json,article_layout_json
+                """SELECT source_url,canonical_source_url,media_json,article_layout_json,published_at
                    FROM articles WHERE source_id=? AND id<>?
                    ORDER BY id DESC LIMIT ?""",
-                (int(row["source_id"]), int(article_id), max(1, min(300, int(lookback)))),
+                (int(row["source_id"]), int(article_id), max(1, min(1200, int(lookback) * 4))),
             ).fetchall()
         for other in others:
             other_canonical = str(other["canonical_source_url"] or other["source_url"] or "")
-            if other_canonical == canonical:
+            if not other_canonical or other_canonical == canonical:
                 continue
-            other_keys = images(str(other["media_json"]), str(other["article_layout_json"]))
-            repeats.update(current.keys() & other_keys.keys())
-        return {url for key, url in current.items() if key in repeats}
+            overlap = current.keys() & images(str(other["media_json"]), str(other["article_layout_json"])).keys()
+            for key in overlap:
+                seen_elsewhere[key].add(other_canonical)
+                if str(other["published_at"] or "").strip():
+                    published_elsewhere.add(key)
+        recurrent = {key for key, stories in seen_elsewhere.items()
+                     if len(stories) >= 2 or key in published_elsewhere}
+        return {url for key, url in current.items() if key in recurrent}
+
+    def _ensure_published_web_media_2324(self, con: sqlite3.Connection) -> None:
+        # Table stays inside operator Data, never imported from web and never
+        # resurrects unknown Telegram outcomes or sends anything by itself.
+        con.execute("""CREATE TABLE IF NOT EXISTS published_web_media_2324 (
+            channel_id INTEGER NOT NULL, article_id INTEGER NOT NULL,
+            source_url TEXT NOT NULL, asset_key TEXT NOT NULL,
+            sha256 TEXT NOT NULL, recorded_at TEXT NOT NULL,
+            PRIMARY KEY (channel_id, article_id, asset_key)
+        )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_web_media_2324_key ON published_web_media_2324(channel_id,asset_key)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_web_media_2324_hash ON published_web_media_2324(channel_id,sha256)")
+
+    def repeated_published_web_media_2324(self, article_id: int, prepared: list[Any]) -> list[str]:
+        """Detect exact asset/binary reuse on a different published article.
+
+        No fuzzy visual similarity is used for a hard veto. Same-story retry or
+        same canonical source URL is allowed. This is read-only apart from safe
+        idempotent creation of the local index table.
+        """
+        from ..media import canonical_asset_key
+        row = self.get_article(article_id)
+        if row is None or not prepared:
+            return []
+        canonical = str(row["canonical_source_url"] or row["source_url"] or "")
+        if not canonical.startswith(("https://", "http://")) or "t.me/" in canonical:
+            return []
+        repeated = []
+        with self.connect() as con:
+            self._ensure_published_web_media_2324(con)
+            for item in prepared:
+                if str(getattr(item, "kind", "")) != "image":
+                    continue
+                asset = canonical_asset_key(str(getattr(item, "source_url", "")))
+                digest = str(getattr(item, "digest", "") or "")
+                other = con.execute("""SELECT source_url FROM published_web_media_2324
+                    WHERE channel_id=? AND article_id<>? AND
+                    (asset_key=? OR (sha256<>'' AND sha256=?)) LIMIT 8""",
+                    (int(row["channel_id"]), int(article_id), asset, digest),
+                ).fetchall()
+                if any(str(e["source_url"]) != canonical for e in other):
+                    repeated.append(str(getattr(item, "source_url", "")))
+        return repeated
+
+    def remember_published_web_media_2324(self, article_id: int, prepared: list[Any]) -> None:
+        """Record only *successfully delivered* commercial/editorial web images."""
+        from ..media import canonical_asset_key
+        row = self.get_article(article_id)
+        if row is None or not prepared:
+            return
+        canonical = str(row["canonical_source_url"] or row["source_url"] or "")
+        if not canonical.startswith(("https://", "http://")) or "t.me/" in canonical:
+            return
+        with self.connect() as con:
+            self._ensure_published_web_media_2324(con)
+            for item in prepared:
+                if str(getattr(item, "kind", "")) != "image":
+                    continue
+                con.execute("""INSERT OR IGNORE INTO published_web_media_2324
+                    (channel_id,article_id,source_url,asset_key,sha256,recorded_at)
+                    VALUES (?,?,?,?,?,?)""", (
+                    int(row["channel_id"]),int(article_id),canonical,
+                    canonical_asset_key(str(getattr(item, "source_url", ""))),
+                    str(getattr(item, "digest", "") or ""), now_iso(),
+                ))
 
     def reject_editorial_article(self, article_id: int, reason: str) -> None:
         """Permanently reject a final-gate policy violation.

@@ -261,6 +261,24 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.22 source transition skipped safely; Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.23: retire three measured-dead inputs (403 / empty / undated)
+            # and add two feeds that passed the project's own collector probe.
+            try:
+                from .commercial_sources_2323 import apply_commercial_sources_2323
+                event("ingest", "2.3.23 commercial source repair checked",
+                      **apply_commercial_sources_2323(store))
+            except Exception as exc:
+                event("ingest", "2.3.23 source repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.23: two science sources whose stored address returns nothing
+            # usable get the publisher's working feed (exact name+URL only).
+            try:
+                from .source_url_repairs_2323 import apply_source_url_repairs_2323
+                event("ingest", "2.3.23 source address repair checked",
+                      **apply_source_url_repairs_2323(store))
+            except Exception as exc:
+                event("ingest", "2.3.23 source address repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile

@@ -85,9 +85,14 @@ def test_only_unrealized_agency_appointments_get_narrow_veto():
 def test_ambiguous_publish_requires_source_review_not_score_hard_filter():
     useful = {"title": "World's largest sand desert reveals ancient climate findings"}
     mundane = {"title": "Disadvantages of buying tech from other countries"}
-    assert verify_low_confidence_publish("science", 12, useful)
-    assert verify_low_confidence_publish("science", 12, mundane)
+    # 2.3.23: a numeric score no longer triggers the vetoing review (the old
+    # template made models echo fit_score 0..19 for wanted stories too).
+    assert not verify_low_confidence_publish("science", 12, useful)
+    assert not verify_low_confidence_publish("science", 12, mundane)
     assert not verify_low_confidence_publish("science", 70, useful)
+    # Concrete source-evidenced risk patterns are still reviewed.
+    assert verify_low_confidence_publish(
+        "creative", 90, {"title": "Brand X appoints Agency Y as lead creative agency"})
     assert not verify_low_confidence_publish("monitoring", 12, useful)
     assert "41" in calibrated_feedback_2320("science")
     assert "20" in calibrated_feedback_2320("creative")

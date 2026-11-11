@@ -18,6 +18,7 @@ _FAMILIAR = {
     "NASA", "ESA", "CERN", "IEEE", "MIT", "IBM", "WHO", "UNESCO",
     "GPT", "HTML", "HTTP", "HTTPS", "USB", "GPU", "CPU", "DNA",
     "RNA", "OLED", "GPS", "COVID", "UFO", "ISS", "USA", "USDT",
+    "AMD", "NVIDIA", "ASUS", "INTEL", "ARM", "SSD", "RAM", "DDR",
 }
 _SIMPLE_EXPLANATION = re.compile(
     r"^\s*(?:"
