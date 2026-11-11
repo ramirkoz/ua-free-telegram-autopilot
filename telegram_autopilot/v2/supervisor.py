@@ -781,6 +781,25 @@ class SupervisorService:
             "quality_active":quality_active,
         }
 
+    def _safe_editorial_sources_237(self) -> dict[str, Any]:
+        try:
+            from .editorial_sources_237 import source_portfolio_snapshot_237
+            return source_portfolio_snapshot_237(self.store)
+        except Exception as exc:
+            event("ingest", "2.3.27 source roster telemetry unavailable",
+                  level=30, detail=str(exc)[:200])
+            return {"scope":"unavailable", "error":"SOURCE_PORTFOLIO_READ_FAILED"}
+
+    def _safe_ai_economics_237(self) -> dict[str, Any]:
+        try:
+            from .ai_economics_237 import economics_snapshot
+            return economics_snapshot(self.store)
+        except Exception as exc:
+            # Accounting must never block Telegram, source collectors or UI.
+            event("ai", "2.3.27 economics telemetry unavailable",
+                  level=30, detail=str(exc)[:220])
+            return {"scope":"unavailable", "error":"READ_ONLY_ECONOMICS_UNAVAILABLE"}
+
     def build_snapshot(self) -> dict[str, Any]:
         runtime = self.runtime.health_snapshot()
         enabled_rows = self.store.list_channels(enabled_only=True)
@@ -883,6 +902,10 @@ class SupervisorService:
             "models": list(runtime.get("models") or []),
             "ai": {"healthy": healthy, "total": ai_total, "configured": ai_configured, "state": ai_state, "blocked_jobs": ai_blocked},
             "ai_usage": self.store.ai_usage_summary(24),
+            # 2.3.27: actual OpenRouter charges and COMMITTED deliveries in
+            # matching rolling windows; 3 completed Kyiv calendar days separate.
+            "ai_economics_237": self._safe_ai_economics_237(),
+            "editorial_sources_237": self._safe_editorial_sources_237(),
             "provider_discovery": provider_discovery_snapshot(),
             "feedback_auto_refresh": feedback_snapshot,
             "openrouter": {

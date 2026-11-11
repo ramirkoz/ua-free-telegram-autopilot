@@ -33,10 +33,11 @@ class MainWindow(FastMainWindow):
     """Main UI with an explicit AI probe result instead of a generic completion message."""
 
     def test_ai(self) -> None:
-        """Probe every configured AI provider from the visible toolbar.
+        """Probe *every* configured AI provider from the visible toolbar.
 
-        In 2.3.25 the callback used self.status_text, which does not exist
-        in the V2 UI. The AttributeError prevented any probes from starting.
+        The old callback referenced ``self.status_text`` (not defined by the
+        V2 UI). That AttributeError occurred before the worker was started,
+        so repeated operator clicks never invoked the router at all.
         """
         if getattr(self, "_manual_ai_test_running", False):
             self.status.set("Тест усіх AI вже виконується…")
@@ -46,7 +47,7 @@ class MainWindow(FastMainWindow):
         event("ai", "manual AI toolbar button pressed", version=V2_VERSION)
 
         def finish(message: str) -> None:
-            # Only the UI thread may update Tk widgets.
+            # Tk widgets may only be touched by the UI thread.
             self._manual_ai_test_running = False
             self.status.set(message)
             self.refresh_ai()
@@ -296,6 +297,16 @@ def main() -> int:
                       **apply_source_url_repairs_2323(store))
             except Exception as exc:
                 event("ingest", "2.3.23 source address repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.27 operator decision: install all 31 editorial RSS assignments
+            # in one idempotent migration. TG hints are isolated from publishable
+            # sources; no historic articles, receipts, Data or budgets touched.
+            try:
+                from .editorial_sources_237 import apply_editorial_sources_237
+                event("ingest", "2.3.27 complete editorial source portfolio checked",
+                      **apply_editorial_sources_237(store))
+            except Exception as exc:
+                event("ingest", "2.3.27 source portfolio not applied; Data retained",
                       level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .ai_gateway import AIGateway, GatewayExhausted
+from .editorial_media_preflight_237 import MediaPreflightPending
 from .dedupe import DedupeEngine
 from .domain import BlockedBy, Decision, Stage, ChannelMode
 from .editorial import EditorialEngine
@@ -454,13 +455,30 @@ class RuntimeEngine:
                 self._job_activity(state, "completed")
                 return True
 
-            outcome = self.editorial.process_article(article_id, heartbeat=lambda: self._touch(state, "process"))
+            # MediaPreflightPending is raised by the source-owned image gate.
+            # No implicit policy downgrades and no Telegram replay.
+            # Route-level cost attribution is scoped to this article ONLY.
+            from .ai_economics_237 import ai_article_scope
+            with ai_article_scope(channel_id, article_id):
+                outcome = self.editorial.process_article(
+                    article_id, heartbeat=lambda: self._touch(state, "process"))
             state.processed += 1
             self.store.finish_job(job_id)
             if str(outcome.decision) == str(Decision.REJECT):
                 self._job_activity(state, "rejected")
             self._job_activity(state, "completed")
             event("worker", "job complete", channel_id=channel_id, article_id=article_id, job_id=job_id, decision=str(outcome.decision))
+            return True
+        except MediaPreflightPending as exc:
+            # This is not an AI/text failure.  Source media can reappear on a
+            # later publisher page refresh; no costly writer has been called.
+            self.store.defer_job(job_id,blocked_by=BlockedBy.MEDIA,
+                                 error_code='MEDIA_PREWRITE',detail=str(exc),
+                                 retry_seconds=1200,count_attempt=False)
+            self._job_activity(state,'deferred')
+            event('worker','required editorial media deferred before paid AI',
+                  channel_id=channel_id,article_id=article_id,job_id=job_id,
+                  retry_seconds=1200)
             return True
         except GatewayExhausted as exc:
             blocker = BlockedBy.AI if exc.provider_outage else BlockedBy.QUALITY

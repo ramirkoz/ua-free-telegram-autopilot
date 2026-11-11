@@ -1745,6 +1745,20 @@ SOURCE:
             "when it identifies a real risk, not a mere patch/changelog.\n"
             if is_science_general_channel(channel) and not calibrated_role else ""
         )
+        # 2.3.27 reader-first direction is a SOFT preference, calibrated by
+        # owner labels.  Does not override an approved original design concept.
+        theme_direction = (
+            "CTRL+UA: наукові відкриття простими словами, роботи, незвичайні "
+            "гаджети, ШІ у повсякденному житті, практична кібербезпека, "
+            "людські історії про винаходи; не вимагай революційного прориву. "
+            "Суто професійні патчі/купівельні гайди без новини відхиляй."
+            if calibrated_role == "science" else
+            "ПРОДАНО!: історії відомих брендів, ігор, попкультури, їжі, "
+            "незвичних предметів, колаборацій, рекордів, курйозів та дизайну. "
+            "Оригінальна креативна концепція без великого бренду залишається "
+            "повноцінною новиною. Відхиляй рутинний PR і каталоги покупок."
+            if calibrated_role == "creative" else ""
+        )
         selector_header = (
             "Ти редактор. Обирай відповідну тематичну ЦІКАВУ новину, "
             "а не виключно революційні сенсації, вірусні історії чи масовий маркетинг. "
@@ -1779,6 +1793,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {science_audience_instruction}
 {commercial_audience_instruction}
 {commercial_mix_instruction}
+{theme_direction}
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
 {calibrated_feedback_2320(calibrated_role)}
@@ -2151,6 +2166,7 @@ SOURCE:
             monitoring=channel.mode == ChannelMode.MONITORING,
             legacy_quality_risk=(
                 quality.needs_second_candidate
+                or quality.score < 95
                 or bool(language_quality_issues(draft))
                 or bool(human_style_issues(draft))
                 or needs_grammar_polish(draft)
@@ -2450,6 +2466,11 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
+        # A verified, source-owned image must exist before paying writer and
+        # final_editor for editorial channels that require media.  Monitoring
+        # rules are unchanged.  Unavailable images defer (never reject/replay).
+        from .editorial_media_preflight_237 import ensure_media_for_editorial_writer
+        article = ensure_media_for_editorial_writer(self.store, channel, article)
         written = self.write(channel, article, selection)
         if heartbeat is not None:
             try: heartbeat()
