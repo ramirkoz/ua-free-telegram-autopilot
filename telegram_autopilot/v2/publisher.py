@@ -1063,6 +1063,23 @@ class Publisher:
             )
             return "PUBLISHED"
 
+        # v2.3.24: binary SHA256 and canonical asset identity against actual
+        # earlier Telegram uploads, not merely the page's raw candidate list.
+        # Fail closed on repeated image tied to a different source article.
+        if channel.mode == ChannelMode.EDITORIAL:
+            repeated = self.store.repeated_published_web_media_2324(article_id, prepared)
+            if repeated:
+                self.store.publication_backoff(
+                    article_id, blocked_by=BlockedBy.MEDIA,
+                    error_code="WEB_MEDIA_REUSED_UNRELATED_2324",
+                    detail="Те саме зображення вже було опубліковане з іншою статтею; потрібне власне медіа джерела",
+                    retry_seconds=1800, count_attempt=False,
+                )
+                event("media", "reused media from unrelated published story blocked",
+                      level=40, channel_id=channel_id, article_id=article_id,
+                      repeated_count=len(repeated), source_url=source_url)
+                return "WEB_MEDIA_REUSED_UNRELATED_2324"
+
         delivery_count = len(prepared)
         delivery = self.store.telegram_delivery_state(article_id)
         media_ids = [str(x) for x in delivery.get("media_message_ids", []) if str(x).strip()] if delivery else []
@@ -1080,6 +1097,11 @@ class Publisher:
 
         if caption_attached and len(media_ids) >= delivery_count and caption_message_id:
             self._mark_published(article_id, channel, message_id=caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+            if channel.mode == ChannelMode.EDITORIAL:
+                try:
+                    self.store.remember_published_web_media_2324(article_id, prepared)
+                except Exception:
+                    pass  # delivery is already committed; no replay
             event(
                 "publish", "recovered completed captioned media publication", channel_id=channel_id, article_id=article_id,
                 message_id=caption_message_id, published_media_count=delivery_count, upload_mode="multipart_local",
@@ -1205,6 +1227,13 @@ class Publisher:
             return "CAPTION_STATE_MISSING"
 
         self._mark_published(article_id, channel, message_id=final_caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+        if channel.mode == ChannelMode.EDITORIAL:
+            try:
+                self.store.remember_published_web_media_2324(article_id, prepared)
+            except Exception as exc:
+                # A receipt is already COMMITTED. Never retry the Telegram send.
+                event("media", "published media asset ledger unavailable", level=40,
+                      channel_id=channel_id, article_id=article_id, detail=str(exc)[:200])
         event(
             "publish", "published local-upload media with caption", channel_id=channel_id, article_id=article_id,
             message_id=final_caption_message_id, message_ids=media_ids[:delivery_count],
