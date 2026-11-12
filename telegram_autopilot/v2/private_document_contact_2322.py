@@ -59,6 +59,19 @@ _ACTIVE_RECRUITMENT_2330 = re.compile(
     r"(?:інспектор\w*|фахівц\w*|спеціаліст\w*|інженер\w*|"
     r"працівник\w*|менеджер\w*)\b)"
 )
+# Broad job titles are open-ended. A high-precision active hiring instruction
+# AND employment-offer terms are stronger evidence than a profession whitelist.
+# Never reject completed employment-service news merely for mentioning hiring.
+_OPEN_RECRUITMENT_2330 = re.compile(
+    r"(?iu)(?:\b(?:шукаємо|потрібен|потрібна|потрібні|наймаємо)\s+"
+    r"(?:[\w’'-]+\s+){1,6}|"
+    r"\b(?:запрошуємо|запрошує|запрошують)\s+"
+    r"(?:[\w’'-]+\s+){0,5}(?:до\s+команди|на\s+роботу|працювати)\b|"
+    r"\bвідкрит\w*\s+вакансі\w*\b|"
+    r"\b(?:подайте|надішліть|надсилайте)\s+(?:своє\s+)?резюм[еє]\b)"
+)
+
+
 _EMPLOYMENT_OFFER_2330 = re.compile(
     r"(?iu)(?:заробітн\w*\s+плат\w*|офіційн\w*\s+працевлаштуванн\w*|"
     r"резюм[еє]|співбесід\w*|робоч\w*\s+графік\w*|"
@@ -148,8 +161,10 @@ def no_announcement_reason_2322(article: Any) -> str:
             and not (_COMPLETED_EMPLOYMENT_FAIR_2330.search(original)
                      and not _ACTIVE_RECRUITMENT_2330.search(original))):
         return "MONITORING_JOB_ADVERTISEMENT_2322"
-    if (_ACTIVE_RECRUITMENT_2330.search(original)
-            and _EMPLOYMENT_OFFER_2330.search(original)):
+    if ((_ACTIVE_RECRUITMENT_2330.search(original)
+         or _OPEN_RECRUITMENT_2330.search(original))
+            and _EMPLOYMENT_OFFER_2330.search(original)
+            and not _COMPLETED_EMPLOYMENT_FAIR_2330.search(original)):
         return "MONITORING_JOB_OFFER_2330"
     if _SALE_AD.search(original):
         return "MONITORING_SALES_ADVERTISEMENT_2322"
