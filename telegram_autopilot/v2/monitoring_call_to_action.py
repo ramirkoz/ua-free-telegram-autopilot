@@ -72,6 +72,30 @@ _APPLY_CALL = re.compile(
     r"приймаються\s+заявк\w+|прийом\s+заявок|заявки\s+приймають\w*|шукаємо\s+(?:волонтер|працівник|учасник))"
 )
 
+# 2.3.30: factual closure of an intake is a service-status change,
+# not a new call to register (owner-positive LIVE article 95084).
+_CLOSED_REGISTRATION_2330 = re.compile(
+    r"(?iu)\\b(?:реєстраці\\w*|форм\\w*\\s+реєстраці\\w*|прийом\\s+заявок)"
+    r".{0,145}\\b(?:закрит\\w*|припинен\\w*|завершен\\w*)"
+)
+_ACTIVE_REGISTRATION_2330 = re.compile(
+    r"(?iu)(?:реєстраці\\w*\\s+(?:відкрит\\w*|триває)|"
+    r"триває\\s+реєстраці\\w*|подайте\\s+заявк\\w*|"
+    r"заповніть\\s+(?:онлайн[- ]?)?форм\\w*)"
+)
+# 2.3.30: "на містян чекає хмарна погода" is a weather
+# description, NOT an invitation to a future event (owner-positive 94697).
+_WEATHER_FORECAST_2330 = re.compile(
+    r"(?iu)\\b(?:прогноз\\w*|очіку\\w*|синоптик\\w*)"
+    r".{0,280}\\b(?:погод\\w*|дощ\\w*|опад\\w*|температур\\w*|"
+    r"заморозк\\w*|туман\\w*|потеплін\\w*|гроза\\w*)"
+)
+_REAL_EVENT_CTA_2330 = re.compile(
+    r"(?iu)\\b(?:запрошу\\w*|приходьте|завітайте|купуйте\\s+квитк\\w*|"
+    r"реєстраці\\w*\\s+відкрит\\w*)"
+)
+
+
 _READER_COMPLAINT = re.compile(
     r"(?iu)(?:пишіть\s+нам|надсилайте\s+нам|надішліть\s+нам|\bагов\b|"
     r"(?:підписни\w+|читач\w*|мешкан\w+)\s+(?:скарж\w+|нарік\w+|обурен\w*)|"
@@ -107,7 +131,15 @@ def call_to_action_reason(article: Any) -> str:
     if _GIVEAWAY.search(text):
         return "MONITORING_GIVEAWAY"
     if _APPLY_CALL.search(text):
-        return "MONITORING_APPLICATION_CALL"
+        # Stating that a previously open registration was CLOSED is news,
+        # unless the same source includes a new actionable registration call.
+        if not (_CLOSED_REGISTRATION_2330.search(text)
+                and not _ACTIVE_REGISTRATION_2330.search(text)):
+            return "MONITORING_APPLICATION_CALL"
     if _INVITE.search(text) and _FUTURE_EVENT.search(text):
-        return "MONITORING_FUTURE_EVENT_INVITATION"
+        # The word "чекає" in weather forecasts must not be read as
+        # "we invite you" merely because the report concerns coming days.
+        if not (_WEATHER_FORECAST_2330.search(title[:1200])
+                and not _REAL_EVENT_CTA_2330.search(text)):
+            return "MONITORING_FUTURE_EVENT_INVITATION"
     return ""
