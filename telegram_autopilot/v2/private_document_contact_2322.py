@@ -90,6 +90,26 @@ _COMPLETED_EMPLOYMENT_FAIR_2330 = re.compile(
 )
 
 
+# 2.3.30 full 1472 owner-label replay, article 94262: emergency evacuation
+# and lawful passport replacement are not private lost-document notices.
+# The old lost-found regexp matched the words "втрачений паспорт" even when
+# a humanitarian organization offered to replace it through the State Migration
+# Service. Exempt only a demonstrable replacement SERVICE, never found-item
+# requests, private phone returns or requests to locate a missing passport.
+_DOCUMENT_REISSUE_SERVICE_2330 = re.compile(
+    r"(?iu)\\b(?:віднов\\w*|замін\\w*|переоформ\\w*).{0,110}"
+    r"(?:втрачен\\w*|пошкоджен\\w*).{0,80}(?:паспорт\\w*|документ\\w*)"
+)
+_DOCUMENT_REISSUE_OPERATOR_2330 = re.compile(
+    r"(?iu)(?:\\bдмс\\b|\\bцнап\\b|юридичн\\w*\\s+(?:супровід|консультац\\w*)|"
+    r"безоплатн\\w*\\s+евакуюва\\w*)"
+)
+_ACTUAL_FOUND_RETURN_2330 = re.compile(
+    r"(?iu)\\b(?:знайшл\\w*|знайден\\w*|поверніть|віддам|"
+    r"шукаємо\\s+власник\\w*|на\\s+ім[’']?я)\\b"
+)
+
+
 _PRIVATE_RECRUITMENT = re.compile(
     r"(?iu)(?:\bвакансі\w*\b|"
     r"\b(?:шукаємо|потрібн\w*|запрошуємо)\s+"
@@ -147,7 +167,11 @@ def no_announcement_reason_2322(article: Any) -> str:
     original = (_field(article, "title") + "\n" + _field(article, "raw_text"))[:10000]
     if not original.strip():
         return ""
-    if _LOST_FOUND.search(original):
+    if _LOST_FOUND.search(original) and not (
+        _DOCUMENT_REISSUE_SERVICE_2330.search(original)
+        and _DOCUMENT_REISSUE_OPERATOR_2330.search(original)
+        and not _ACTUAL_FOUND_RETURN_2330.search(original)
+    ):
         return "MONITORING_CLASSIFIED_LOST_FOUND_2322"
     if _PET_OWNER_SEARCH.search(original) and _PET_SPECIES.search(original):
         return "MONITORING_CLASSIFIED_PET_OWNER_SEARCH_2325"
