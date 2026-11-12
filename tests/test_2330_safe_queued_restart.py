@@ -47,8 +47,8 @@ def test_2330_replay_cannot_skip_durable_receipt_check_source_static():
     from pathlib import Path
     import inspect
     from telegram_autopilot.v2 import runtime, publisher
-    worker_source = inspect.getsource(runtime.V2Runtime._process_one)
-    pub_source = inspect.getsource(publisher.V2Publisher.publish_one)
+    worker_source = inspect.getsource(runtime.RuntimeEngine._process_one)
+    pub_source = inspect.getsource(publisher.Publisher.publish_one)
     for source in (worker_source, pub_source):
         assert "safe_same_day_queued_2330" in source
         assert "delivery_journal(article_id) is None" in source
