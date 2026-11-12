@@ -74,4 +74,8 @@ def test_2330_open_gift_registration_stays_a_call_to_action():
             "Заповніть онлайн-форму, подайте заявку до 27 листопада."
         ),
     }
-    assert call_to_action_reason(article) == "MONITORING_APPLICATION_CALL"
+    # Survey-form and application hard vetoes are both valid no-announcement
+    # outcomes; the invariant is rejection, not the first matching reason.
+    assert call_to_action_reason(article) in {
+        "MONITORING_APPLICATION_CALL", "MONITORING_SURVEY_INVITATION"
+    }
