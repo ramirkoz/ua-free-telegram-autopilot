@@ -51,5 +51,5 @@ def test_2330_replay_cannot_skip_durable_receipt_check_source_static():
     pub_source = inspect.getsource(publisher.Publisher.publish_one)
     for source in (worker_source, pub_source):
         assert "safe_same_day_queued_2330" in source
-        assert "delivery_journal(article_id) is None" in source
+        assert "not self.store.delivery_journal(article_id)" in source
         assert "SOURCE_PREDATES_RUNTIME_START" in source
