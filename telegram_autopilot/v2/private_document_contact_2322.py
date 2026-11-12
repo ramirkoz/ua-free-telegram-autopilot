@@ -67,6 +67,16 @@ _EMPLOYMENT_OFFER_2330 = re.compile(
 )
 
 
+# A report that an employment fair already happened is civic news, unlike
+# advertising any individual opening.  Restrict this exception to the actual
+# completed event and NEVER allow it to override active hiring with salary/CTA.
+_COMPLETED_EMPLOYMENT_FAIR_2330 = re.compile(
+    r"(?iu)(?:\b(?:провели|відбувся|відбулася|організували|завершився)"
+    r"\s+(?:\w+\s+){0,3}ярмарок\s+вакансій\b|"
+    r"\bярмарок\s+вакансій\b.{0,120}\b(?:відбувся|відбулася|завершився)\b)"
+)
+
+
 _PRIVATE_RECRUITMENT = re.compile(
     r"(?iu)(?:\bвакансі\w*\b|"
     r"\b(?:шукаємо|потрібн\w*|запрошуємо)\s+"
@@ -134,7 +144,9 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_STANDALONE_ANNOUNCEMENT_2322"
     if _PRIVATE_CLASSIFIED.search(original):
         return "MONITORING_PRIVATE_CLASSIFIED_2322"
-    if _PRIVATE_RECRUITMENT.search(original):
+    if (_PRIVATE_RECRUITMENT.search(original)
+            and not (_COMPLETED_EMPLOYMENT_FAIR_2330.search(original)
+                     and not _ACTIVE_RECRUITMENT_2330.search(original))):
         return "MONITORING_JOB_ADVERTISEMENT_2322"
     if (_ACTIVE_RECRUITMENT_2330.search(original)
             and _EMPLOYMENT_OFFER_2330.search(original)):
