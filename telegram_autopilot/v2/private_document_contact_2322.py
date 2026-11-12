@@ -45,6 +45,28 @@ _PRIVATE_CLASSIFIED = re.compile(
     r"(?:житл\w*|квартир\w*|будинок|авто|робот\w*)|"
     r"надаю\s+послуг\w*|пропоную\s+послуг\w*)\b"
 )
+# 2.3.30: live #4933 "Шукаємо інспектора відділу кадрів".
+# 2.3.22 caught vacancies and a few professions, but not uncommon job
+# titles or the wording "запрошує до команди фахівця". Require a recruitment
+# action plus explicit employment terms; do not veto job-market statistics,
+# newly opened employment services, or completed job fairs.
+_ACTIVE_RECRUITMENT_2330 = re.compile(
+    r"(?iu)(?:\bшукаємо\s+(?:[\w’'-]+\s+){0,3}(?:у\s+\w+\s+)?"
+    r"(?:інспектор\w*|фахівц\w*|спеціаліст\w*|"
+    r"інженер\w*|керівник\w*|лікар\w*|працівник\w*)\b|"
+    r"\bзапрошу\w*\s+до\s+(?:нашої\s+)?команди\b|"
+    r"\b(?:потрібен|потрібна|потрібні)\s+"
+    r"(?:інспектор\w*|фахівц\w*|спеціаліст\w*|інженер\w*|"
+    r"працівник\w*|менеджер\w*)\b)"
+)
+_EMPLOYMENT_OFFER_2330 = re.compile(
+    r"(?iu)(?:заробітн\w*\s+плат\w*|офіційн\w*\s+працевлаштуванн\w*|"
+    r"резюм[еє]|співбесід\w*|робоч\w*\s+графік\w*|"
+    r"умови\s+роботи|бронюванн\w*\s+працівник\w*|"
+    r"що\s+ми\s+пропонуємо)"
+)
+
+
 _PRIVATE_RECRUITMENT = re.compile(
     r"(?iu)(?:\bвакансі\w*\b|"
     r"\b(?:шукаємо|потрібн\w*|запрошуємо)\s+"
@@ -114,6 +136,9 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_PRIVATE_CLASSIFIED_2322"
     if _PRIVATE_RECRUITMENT.search(original):
         return "MONITORING_JOB_ADVERTISEMENT_2322"
+    if (_ACTIVE_RECRUITMENT_2330.search(original)
+            and _EMPLOYMENT_OFFER_2330.search(original)):
+        return "MONITORING_JOB_OFFER_2330"
     if _SALE_AD.search(original):
         return "MONITORING_SALES_ADVERTISEMENT_2322"
     # Bare prospective participation notice, not a report about a finished event.
