@@ -630,7 +630,7 @@ class Publisher:
                 started = _aware(started_at)
                 ready = _aware(str(article["ready_at"] or ""))
                 if (started is not None and ready is not None and ready >= started
-                        and self.store.delivery_journal(article_id) is None
+                        and not self.store.delivery_journal(article_id)
                         and safe_same_day_queued_2330(
                             str(article["source_published_at"] or ""),
                             str(article["discovered_at"] or ""), started_at,
