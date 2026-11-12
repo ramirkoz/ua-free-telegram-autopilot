@@ -81,3 +81,20 @@ def test_2330_context_does_not_blacklist_legitimate_story_words():
         caption="A review of popular design tools",
         context="article-body main-gallery figure",
     ))
+
+
+def test_2330_widget_with_story_keyword_cannot_enter_as_non_gallery(monkeypatch):
+    monkeypatch.setattr(media_pipeline, "_probe_image", _fake_image)
+    article = json.dumps({"blocks": [{
+        "type": "media", "index": 1, "kind": "image",
+        "url": "https://cdn.example.org/side-rail-tools.jpg",
+        "position": 0.02, "gallery": False, "schema_verified": True,
+        "alt": "Naruto artwork", "context": "site sidebar related",
+    }]})
+    output = media_pipeline.prepare_article_media(
+        article, [], title="New Naruto puppet illustration",
+        article_text="An artist made a new illustration for the Naruto puppet story.",
+        marketing_context=True,
+    )
+    assert output.body == []
+    assert output.drop_reasons.get("site_wide_widget_media_2330") == 1
