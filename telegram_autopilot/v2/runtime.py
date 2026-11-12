@@ -407,6 +407,29 @@ class RuntimeEngine:
                 discovered_at=str(article["discovered_at"] or ""),
                 rolling_window_hours=editorial_hours,
             )
+            # 2.3.30: the previous runtime may have safely collected an
+            # unreviewed SAME-DAY article shortly before this restart. Preserve
+            # only a pending unsent row with a verified recent source poll and
+            # ZERO durable delivery-journal history. Old-day and long backlog
+            # stays rejected and never reaches AI or Telegram.
+            if (stale_reason == "SOURCE_PREDATES_RUNTIME_START"
+                    and channel_for_freshness is not None
+                    and channel_for_freshness.mode == ChannelMode.EDITORIAL
+                    and str(article["decision"]) == str(Decision.PENDING)
+                    and str(article["stage"]) in {str(Stage.COLLECTED), str(Stage.EXTRACTED)}
+                    and not str(article["published_at"] or "")
+                    and not str(article["telegram_message_id"] or "")):
+                from .carryover_ready_228 import safe_same_day_queued_2330
+                checkpoint = self.restart_checkpoints_260.get(str(article["source_id"]), "")
+                if safe_same_day_queued_2330(
+                    str(article["source_published_at"] or ""),
+                    str(article["discovered_at"] or ""), self.started_at,
+                    checkpoint, max_age_hours=editorial_hours,
+                ) and self.store.delivery_journal(article_id) is None:
+                    stale_reason = ""
+                    event("worker", "2.3.30 fresh unsent QUEUED retained after short restart",
+                          channel_id=channel_id, article_id=article_id,
+                          recent_source_checkpoint=True, delivery_journal_absent=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 state.processed += 1
