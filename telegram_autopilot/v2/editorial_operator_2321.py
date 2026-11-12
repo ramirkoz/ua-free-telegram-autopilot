@@ -50,8 +50,10 @@ def verify_low_confidence_publish(role: str, fit_score: int, article: Any) -> bo
     """
     if role not in {"science", "creative"}:
         return False
-    if int(fit_score or 0) < 40:
-        return True
+    # 2.3.23: the numeric score is no longer a trigger. On 1 472 operator labels
+    # the score-triggered review rejected 65 wanted stories for 23 unwanted ones
+    # (no better than the base rate), and 36 of 74 "reasons" were the prompt's
+    # own placeholder. Only concrete source-evidenced risk patterns are reviewed.
     title = _text(article, "title")
     return bool(
         role == "creative"
@@ -74,7 +76,8 @@ VERIFY_PUBLISH_PROMPT_2321 = (
     "Не вимагай революційності для справді цікавої речі. "
     "Не вигадуй фактів, а при PUBLISH процитуй дослівно від 20 до 180 "
     "символів оригінального SOURCE BODY, які підтверджують цінність. "
-    "Без перевірюваної цитати рішення REJECT. "
-    'Поверни лише JSON: {"decision":"reject","source_quote":"",'
-    '"reason":"конкретне пояснення"}.'
+    "Без перевірюваної цитати publish неможливий. "
+    "Поверни лише JSON із трьома полями (значення визнач сам, не копіюй цей опис): "
+    '"decision" — рівно "publish" або "reject"; "source_quote" — дослівна цитата '
+    'або порожній рядок; "reason" — одне речення саме про цю статтю.'
 )

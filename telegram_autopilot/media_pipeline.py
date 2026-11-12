@@ -24,6 +24,10 @@ _HARD_REJECT = (
     "ad_slot", "ad-slot", "banner", "tracking", "pixel.gif", "1x1.gif", "favicon", "sprite",
     "avatar", "headshot", "profile-photo", "social-share", "share-icon", "analytics",
     "click to follow", "follow us", "follow on google", "google news", "follow tom's hardware",
+    # Commerce rails and site-wide product widgets are never source art.
+    "gear-up", "gear up", "best-deals", "best deals", "deal-widget", "deal-card",
+    "shopping-widget", "product-widget", "price-comparison", "hawk-widget",
+    "buy now", "shop now",
 )
 _MARKETING_CONTEXT_RELAX = {"advertisement", "advertising", "promo", "promotion", "commercial"}
 _LEAD_POSITION = 0.35
@@ -308,7 +312,11 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
         if token_count == 0:
             return True
         return title_overlap >= 1 or article_overlap >= 2
-    if item.schema_verified or item.page_declared:
+    if item.schema_verified:
+        return True
+    if item.page_declared:
+        # The actual lead asset declared for this article has been verified
+        # against page metadata and hard noise / cross-story gates upstream.
         return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
@@ -625,6 +633,9 @@ def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> 
         return False
     described = _text_tokens(" ".join((item.caption, item.alt)))
     if not described:
+        # Genuine source galleries may have no caption, and cutting all of
+        # them destroys legitimate artwork. Reject commerce/gallery noise by
+        # container and page-section provenance before this narrow relaxation.
         return True
     title_overlap, article_overlap, _count = _semantic_media_evidence(item, title=title, article_text=article_text)
     return title_overlap >= 1 or article_overlap >= 1
@@ -646,6 +657,10 @@ def prepare_article_media(
     ``advertisement``/``promo``. It never relaxes sponsor/affiliate/banner/tracker
     or logo/avatar safety rules.
     """
+    # Source text on some publishers includes a shared commerce footer.
+    # Do not allow retail terms in that footer to justify unrelated thumbnails.
+    if "creativebloq.com" in source_url.casefold():
+        article_text = re.split(r"(?im)^\s*gear up!?\s*$", str(article_text or ""), maxsplit=1)[0]
     featured, body = _layout_items(layout_json, fallback_urls)
     drop_reasons: dict[str, int] = {}
 
@@ -740,10 +755,8 @@ def prepare_article_media(
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
             if marketing_context and not semantic_ok and resolved.gallery and _in_story_gallery(resolved, title=title, article_text=article_text):
-                # Commercial/editorial source media is already structurally scoped to the
-                # story by article_extractor. Explicit gallery items and ordinary body
-                # images may have weak/empty alt text, so lexical overlap is not a safe
-                # rejection criterion here. Hard-noise and binary validation still apply.
+                # Keep genuine creative galleries even when alt text is blank;
+                # disallow repeated sitewide art via cross-story source guard.
                 resolved.relevance_score = max(40.0, resolved.relevance_score)
                 semantic_ok = True
             if not semantic_ok:

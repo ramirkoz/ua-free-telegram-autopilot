@@ -36,8 +36,10 @@ def test_monitoring_keeps_practical_proven_news_without_commercial_moral():
     assert "SOURCE" in final_reader_rules(monitoring=True, commercial=False)
 
 
-def test_final_editor_is_required_for_every_editorial_candidate():
-    assert requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=False)
+def test_final_editor_runs_on_actual_quality_risk_not_every_clean_draft():
+    # 2.3.27 switched from unconditional paid second generation to source-
+    # validated writer plus bounded final rewrite on actual QA problems.
+    assert not requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=False)
     assert requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=True)
     assert not requires_final_reader_copyedit(monitoring=True, legacy_quality_risk=False)
     assert requires_final_reader_copyedit(monitoring=True, legacy_quality_risk=True)

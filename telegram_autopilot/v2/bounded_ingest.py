@@ -17,6 +17,7 @@ from .commercial_yield_237 import prioritize_commercial_sources, commercial_sour
 from .commercial_diversity_257 import commercial_published_share_7d
 from .commercial_fetch_effort_247 import commercial_page_fetch_limits
 from .freshness_fence_241 import source_freshness_rejection, restart_source_rejection
+from .domain import ChannelMode
 from .linked_teaser_hydration_253 import teaser_page_target, hydrate_linked_teaser
 
 
@@ -88,6 +89,12 @@ class BoundedStrictIngestService(StrictIngestService):
     def collect_channel(self, channel_id: int, heartbeat: Callable[[], None] | None = None) -> dict[str, int]:
         added = seen = errors = skipped = timed_out = known_external = known_url = sources_with_new = stale_filtered = restart_recovered = 0
         cfg = self.store.get_channel(channel_id)
+        # Same bounded 24h rolling freshness already enforced by worker. Only
+        # genuinely NEW source identities since last poll may cross an upgrade.
+        editorial_rolling_hours = (
+            min(24, max(1, int(cfg.max_age_hours or 24)))
+            if cfg is not None and cfg.mode == ChannelMode.EDITORIAL else 0
+        )
         with self.store.connect() as con:
             runtime_row = con.execute(
                 "SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'"
@@ -369,6 +376,7 @@ class BoundedStrictIngestService(StrictIngestService):
                 stale_reason = restart_source_rejection(
                     str(item.published_at or ""), runtime_started_at,
                     str(source_checkpoints.get(str(source.id), "")),
+                    rolling_window_hours=editorial_rolling_hours,
                 ) if runtime_started_at else ""
                 if stale_reason:
                     stale_filtered += 1

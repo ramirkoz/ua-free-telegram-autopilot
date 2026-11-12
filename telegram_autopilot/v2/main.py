@@ -33,7 +33,26 @@ class MainWindow(FastMainWindow):
     """Main UI with an explicit AI probe result instead of a generic completion message."""
 
     def test_ai(self) -> None:
-        self.status_text.set("Перевіряю налаштовані AI-провайдери…")
+        """Probe *every* configured AI provider from the visible toolbar.
+
+        The old callback referenced ``self.status_text`` (not defined by the
+        V2 UI). That AttributeError occurred before the worker was started,
+        so repeated operator clicks never invoked the router at all.
+        """
+        if getattr(self, "_manual_ai_test_running", False):
+            self.status.set("Тест усіх AI вже виконується…")
+            return
+        self._manual_ai_test_running = True
+        self.status.set("Перевіряю налаштовані AI-провайдери…")
+        event("ai", "manual AI toolbar button pressed", version=V2_VERSION)
+
+        def finish(message: str) -> None:
+            # Tk widgets may only be touched by the UI thread.
+            self._manual_ai_test_running = False
+            self.status.set(message)
+            self.refresh_ai()
+            self.refresh_codex_status()
+            self.refresh_home()
 
         def work() -> None:
             try:
@@ -55,15 +74,15 @@ class MainWindow(FastMainWindow):
                 tested = max(0, len(results) - skipped)
                 failed = max(0, tested - healthy)
                 if tested == 0:
-                    text = f"AI тест: 0 перевірено · пропущено {skipped}. Немає активних налаштованих маршрутів."
+                    message = f"AI тест: 0 перевірено · пропущено {skipped}. Немає активних налаштованих маршрутів."
                 else:
-                    text = f"AI тест: перевірено {tested} · працює {healthy} · помилки {failed} · пропущено {skipped}"
+                    message = f"AI тест: перевірено {tested} · працює {healthy} · помилки {failed} · пропущено {skipped}"
                 event("ai", "manual provider probe complete", tested=tested, healthy=healthy, failed=failed, skipped=skipped)
-                self.after(0, lambda: self.status_text.set(text))
+                self.after(0, lambda message=message: finish(message))
             except Exception as exc:
                 event("ai", "manual provider probe failed", level=40, detail=str(exc)[:1200])
-                msg = str(exc)
-                self.after(0, lambda msg=msg: self.status_text.set(f"Тест AI: помилка: {msg}"))
+                message = f"Тест AI: помилка: {exc}"
+                self.after(0, lambda message=message: finish(message))
 
         threading.Thread(target=work, name="AI-Manual-Probe", daemon=True).start()
 
@@ -260,6 +279,34 @@ def main() -> int:
                       **consumer_portfolio)
             except Exception as exc:
                 event("ingest", "2.3.22 source transition skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.23: retire three measured-dead inputs (403 / empty / undated)
+            # and add two feeds that passed the project's own collector probe.
+            try:
+                from .commercial_sources_2323 import apply_commercial_sources_2323
+                event("ingest", "2.3.23 commercial source repair checked",
+                      **apply_commercial_sources_2323(store))
+            except Exception as exc:
+                event("ingest", "2.3.23 source repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.23: two science sources whose stored address returns nothing
+            # usable get the publisher's working feed (exact name+URL only).
+            try:
+                from .source_url_repairs_2323 import apply_source_url_repairs_2323
+                event("ingest", "2.3.23 source address repair checked",
+                      **apply_source_url_repairs_2323(store))
+            except Exception as exc:
+                event("ingest", "2.3.23 source address repair skipped safely; Data retained",
+                      level=40, detail=str(exc)[:1200])
+            # 2.3.27 operator decision: install all 31 editorial RSS assignments
+            # in one idempotent migration. TG hints are isolated from publishable
+            # sources; no historic articles, receipts, Data or budgets touched.
+            try:
+                from .editorial_sources_237 import apply_editorial_sources_237
+                event("ingest", "2.3.27 complete editorial source portfolio checked",
+                      **apply_editorial_sources_237(store))
+            except Exception as exc:
+                event("ingest", "2.3.27 source portfolio not applied; Data retained",
                       level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.

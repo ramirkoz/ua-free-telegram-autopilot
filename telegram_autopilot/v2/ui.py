@@ -102,7 +102,9 @@ class ChannelDialog(tk.Toplevel):
         self.channel_id = channel_id
         self.on_saved = on_saved
         self.title("Налаштування каналу · V2")
-        self.geometry("900x760")
+        # 2.3.28: fit the actual Windows work area, including taskbar/DPI.
+        self.geometry(f"{min(980, max(650, self.winfo_screenwidth() - 96))}x{min(720, max(420, self.winfo_screenheight() - 120))}")
+        self.minsize(620, 390)
         self.transient(master)
         self.grab_set()
         cfg = store.get_channel(channel_id)
@@ -111,25 +113,76 @@ class ChannelDialog(tk.Toplevel):
             return
         self.cfg = cfg
         self.vars: dict[str, object] = {}
+        self._tab_canvases: list[tk.Canvas] = []
+        # Keep actions physically visible. Only the settings body scrolls.
+        footer = ttk.Frame(self, padding=(10, 8))
+        footer.pack(side="bottom", fill="x")
+        self._save_status = tk.StringVar(value="Зміни не внесено")
+        ttk.Label(footer, textvariable=self._save_status).pack(side="left")
+        ttk.Button(footer, text="Зберегти канал", command=self._save).pack(side="right")
+        ttk.Button(footer, text="Скасувати", command=self._cancel).pack(side="right", padx=8)
         book = ttk.Notebook(self)
-        book.pack(fill="both", expand=True, padx=10, pady=10)
-        basic, collection, dedupe, policy, editorial, facebook = ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book), ttk.Frame(book)
-        book.add(basic, text="Основне")
-        book.add(collection, text="Збір")
-        book.add(dedupe, text="Дедуплікація")
-        book.add(policy, text="Політика")
-        book.add(editorial, text="Редакційне")
-        book.add(facebook, text="Facebook")
+        book.pack(side="top", fill="both", expand=True, padx=10, pady=(10, 0))
+        basic = self._scrollable_tab(book, "Основне")
+        collection = self._scrollable_tab(book, "Збір")
+        dedupe = self._scrollable_tab(book, "Дедуплікація")
+        policy = self._scrollable_tab(book, "Політика")
+        editorial = self._scrollable_tab(book, "Редакційне")
+        facebook = self._scrollable_tab(book, "Facebook")
         self._build_basic(basic, cfg)
         self._build_collection(collection, cfg)
         self._build_dedupe(dedupe, cfg)
         self._build_policy(policy, cfg)
         self._build_editorial(editorial, cfg)
         self._build_facebook(facebook, cfg)
-        footer = ttk.Frame(self)
-        footer.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(footer, text="Зберегти канал", command=self._save).pack(side="right")
-        ttk.Button(footer, text="Скасувати", command=self.destroy).pack(side="right", padx=8)
+        self._original_form = self._form_snapshot()
+        for control in list(self.vars.values()) + list(self.facebook_page_vars.values()):
+            if isinstance(control, tk.Variable):
+                control.trace_add("write", lambda *_: self._update_dirty())
+            elif isinstance(control, tk.Text):
+                control.bind("<KeyRelease>", lambda _event: self._update_dirty(), add="+")
+                control.bind("<<Paste>>", lambda _event: self.after_idle(self._update_dirty), add="+")
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Escape>", lambda _event: self._cancel())
+        self.bind("<Control-s>", lambda _event: self._save())
+
+    def _scrollable_tab(self, notebook, name: str):
+        outer = ttk.Frame(notebook)
+        notebook.add(outer, text=name)
+        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        fields = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=fields, anchor="nw")
+        fields.bind("<Configure>", lambda _event, c=canvas: c.configure(scrollregion=c.bbox("all")))
+        canvas.bind("<Configure>", lambda event, c=canvas, w=window: c.itemconfigure(w, width=event.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._tab_canvases.append(canvas)
+        return fields
+
+    def _form_snapshot(self) -> tuple:
+        values = []
+        for label, obj in sorted(self.vars.items()):
+            values.append((label, obj.get("1.0", "end").strip() if isinstance(obj, tk.Text) else obj.get()))
+        for page_id, var in sorted(getattr(self, "facebook_page_vars", {}).items()):
+            values.append(("facebook:" + page_id, bool(var.get())))
+        return tuple(values)
+
+    def _update_dirty(self) -> None:
+        self._save_status.set("Є незбережені зміни" if self._form_snapshot() != self._original_form else "Зміни не внесено")
+
+    def _cancel(self) -> None:
+        if self._form_snapshot() != self._original_form:
+            answer = messagebox.askyesnocancel(
+                "Незбережені зміни", "Зберегти зміни налаштувань перед закриттям?", parent=self
+            )
+            if answer is None:
+                return
+            if answer:
+                self._save()
+                return
+        self.destroy()
 
     def _entry(self, parent, row, label, value, width=42):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=6, pady=5)
@@ -405,10 +458,31 @@ class ChannelDialog(tk.Toplevel):
             json.loads(cfg.editorial_weights_json)
             json.loads(cfg.editorial_thresholds_json)
             self.store.save_channel(cfg)
-            self.on_saved()
+            persisted = self.store.get_channel(old.id)
+            if persisted is None or persisted.min_publish_interval_minutes != cfg.min_publish_interval_minutes:
+                raise RuntimeError("Запис налаштувань не підтверджено повторним читанням бази.")
+            try:
+                # MainWindow callback refreshes channels in the LIVE runtime.
+                self.on_saved()
+            except Exception as exc:
+                messagebox.showwarning(
+                    "Збережено, але потрібна перевірка",
+                    "Налаштування записані, але оновлення робочого процесу завершилося з помилкою: " + str(exc),
+                    parent=self,
+                )
+                self.destroy()
+                return True
+            messagebox.showinfo(
+                "Збережено",
+                f"Налаштування каналу «{persisted.name}» збережено.\n"
+                f"Мінімальний інтервал: {persisted.min_publish_interval_minutes} хв.",
+                parent=self,
+            )
             self.destroy()
+            return True
         except Exception as exc:
             messagebox.showerror("Не збережено", str(exc), parent=self)
+            return False
 
 
 class SourceDialog(tk.Toplevel):

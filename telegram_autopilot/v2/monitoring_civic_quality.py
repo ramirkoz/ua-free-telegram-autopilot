@@ -237,7 +237,14 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
         _LOCAL_ANCHOR.search(original) and _LOCAL_OUTCOME.search(original)
     ):
         return "MONITORING_OFF_TOPIC: загальнонаціональний/міжнародний сюжет без конкретного результату для громади"
-    if _FORCE.search(original) and _ADVANCE.search(original) and _PLACES.search(original):
+    # 2.3.23: a frontline summary explicitly attributed to the General Staff or
+    # the regional Defence Forces is an official report; unattributed claims about
+    # positions stay excluded. Fact and number checks are unchanged.
+    officially_attributed = bool(re.search(
+        r"(?iu)(?:[—–-]\s*генштаб|\bгенштаб\w*\b|генеральн\w+\s+штаб\w*|сил\w*\s+оборони\s+півдня|"
+        r"\bова\b|обласн\w+\s+військов\w+\s+адміністрац\w+)", original))
+    if (_FORCE.search(original) and _ADVANCE.search(original) and _PLACES.search(original)
+            and not officially_attributed):
         return "MONITORING_TACTICAL_UPDATE: поточні зміни бойових позицій/наступу не є цивільною завершеною подією"
     if _GENERIC_VACANCY.search(original):
         return "MONITORING_OFF_TOPIC: загальна добірка вакансій без конкретної місцевої події"

@@ -587,11 +587,35 @@ class Publisher:
                     checkpoints = {}
             except (TypeError, ValueError):
                 checkpoints = {}
+            # Editorial-only rolling window mirrors ingest + worker.
+            # Never waive the checkpoint/discovery-time/replay fence.
+            from .domain import ChannelMode
+            editorial_hours = (
+                min(24, max(1, int(channel.max_age_hours or 24)))
+                if channel.mode == ChannelMode.EDITORIAL else 0
+            )
             stale_reason = restart_source_rejection(
                 str(article["source_published_at"] or ""), started_at,
                 str(checkpoints.get(str(article["source_id"]), "")),
                 discovered_at=str(article["discovered_at"] or ""),
+                rolling_window_hours=editorial_hours,
             )
+            if stale_reason == "SOURCE_PREDATES_RUNTIME_START" and channel.mode == ChannelMode.EDITORIAL:
+                # Existing READY item waited its normal interval through a short
+                # restart. Durable journal preflight above already ruled out a
+                # committed/unknown Telegram delivery. No historical replay.
+                from .carryover_ready_228 import safe_same_day_ready_228
+                if safe_same_day_ready_228(
+                    str(article["source_published_at"] or ""),
+                    str(article["discovered_at"] or ""),
+                    str(article["ready_at"] or ""),
+                    started_at,
+                    max_age_hours=int(channel.max_age_hours or 24),
+                ):
+                    stale_reason = ""
+                    event("publish", "same-day prepared READY retained across restart",
+                          channel_id=channel_id, article_id=article_id,
+                          durable_delivery_preflight=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 event("publish", "stale source refused before Telegram", level=30,
@@ -687,6 +711,20 @@ class Publisher:
             article = self.store.get_article(article_id) or article
             event("publish", "normalized plain-text formatting and orphan video cues",
                   channel_id=channel_id, article_id=article_id)
+        # 2.3.28: prevent truncated READY copy (e.g. #1854 ended
+        # after "за інших умов:") from reaching Telegram as a valid caption.
+        from .terminal_text_guard_228 import incomplete_terminal_text_228
+        terminal_error = incomplete_terminal_text_228(current_text)
+        if terminal_error:
+            outcome = self.store.requeue_quality_rewrite(
+                article_id, error_code=terminal_error,
+                detail="Публікація обривається всередині речення; виправити за першоджерелом.",
+                max_attempts=3,
+            )
+            event("publish", "incomplete final text blocked", level=40,
+                  channel_id=channel_id, article_id=article_id,
+                  reason=terminal_error, outcome=outcome)
+            return outcome
         # Non-retryable hard stop. A model refusal, a one-word caption or
         # an active threat must never become a public post after an AI retry.
         from .editorial import hard_editorial_reject, prepublish_quality_issues
@@ -1063,6 +1101,38 @@ class Publisher:
             )
             return "PUBLISHED"
 
+        # v2.3.24: binary SHA256 and canonical asset identity against actual
+        # earlier Telegram uploads, not merely the page's raw candidate list.
+        # Fail closed on repeated image tied to a different source article.
+        if channel.mode == ChannelMode.EDITORIAL:
+            repeated = self.store.repeated_published_web_media_2324(article_id, prepared)
+            if repeated:
+                # A gallery can contain both a site's reused promotional photo
+                # and genuine story artwork. Remove only the proven unrelated
+                # assets; blocking the entire story suppresses valid posts.
+                repeated_urls = set(repeated)
+                genuine_media = [
+                    item for item in prepared
+                    if str(getattr(item, "source_url", "") or "") not in repeated_urls
+                ]
+                if genuine_media:
+                    event("media", "reused unrelated gallery images removed before send",
+                          level=30, channel_id=channel_id, article_id=article_id,
+                          repeated_count=len(prepared) - len(genuine_media),
+                          verified_remaining=len(genuine_media), source_url=source_url)
+                    prepared = genuine_media
+                else:
+                    self.store.publication_backoff(
+                        article_id, blocked_by=BlockedBy.MEDIA,
+                        error_code="WEB_MEDIA_REUSED_UNRELATED_2324",
+                        detail="Те саме зображення вже було опубліковане з іншою статтею; потрібне власне медіа джерела",
+                        retry_seconds=1800, count_attempt=False,
+                    )
+                    event("media", "reused media from unrelated published story blocked",
+                          level=40, channel_id=channel_id, article_id=article_id,
+                          repeated_count=len(repeated), source_url=source_url)
+                    return "WEB_MEDIA_REUSED_UNRELATED_2324"
+
         delivery_count = len(prepared)
         delivery = self.store.telegram_delivery_state(article_id)
         media_ids = [str(x) for x in delivery.get("media_message_ids", []) if str(x).strip()] if delivery else []
@@ -1080,6 +1150,11 @@ class Publisher:
 
         if caption_attached and len(media_ids) >= delivery_count and caption_message_id:
             self._mark_published(article_id, channel, message_id=caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+            if channel.mode == ChannelMode.EDITORIAL:
+                try:
+                    self.store.remember_published_web_media_2324(article_id, prepared)
+                except Exception:
+                    pass  # delivery is already committed; no replay
             event(
                 "publish", "recovered completed captioned media publication", channel_id=channel_id, article_id=article_id,
                 message_id=caption_message_id, published_media_count=delivery_count, upload_mode="multipart_local",
@@ -1205,6 +1280,13 @@ class Publisher:
             return "CAPTION_STATE_MISSING"
 
         self._mark_published(article_id, channel, message_id=final_caption_message_id, media_count=delivery_count, message_ids=media_ids[:delivery_count])
+        if channel.mode == ChannelMode.EDITORIAL:
+            try:
+                self.store.remember_published_web_media_2324(article_id, prepared)
+            except Exception as exc:
+                # A receipt is already COMMITTED. Never retry the Telegram send.
+                event("media", "published media asset ledger unavailable", level=40,
+                      channel_id=channel_id, article_id=article_id, detail=str(exc)[:200])
         event(
             "publish", "published local-upload media with caption", channel_id=channel_id, article_id=article_id,
             message_id=final_caption_message_id, message_ids=media_ids[:delivery_count],

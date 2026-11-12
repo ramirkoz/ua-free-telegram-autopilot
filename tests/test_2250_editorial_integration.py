@@ -27,4 +27,6 @@ def test_monitoring_readers_not_forced_through_extra_final_ai_calls():
     from telegram_autopilot.v2.reader_first import requires_final_reader_copyedit
     assert not requires_final_reader_copyedit(monitoring=True, legacy_quality_risk=False)
     assert requires_final_reader_copyedit(monitoring=True, legacy_quality_risk=True)
-    assert requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=False)
+    # Clean source-verified editorial copy does not trigger a second paid LLM.
+    assert not requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=False)
+    assert requires_final_reader_copyedit(monitoring=False, legacy_quality_risk=True)

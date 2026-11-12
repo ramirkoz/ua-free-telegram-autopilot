@@ -61,7 +61,19 @@ from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
-_PLACEHOLDER_REASONS = frozenset({"коротко", "none", "reason", "short", "одне речення", "..."})
+_PLACEHOLDER_REASONS = frozenset({
+    "коротко", "none", "reason", "short", "одне речення", "...",
+    # 2.3.23: values that older prompt templates showed as the example answer.
+    "конкретне пояснення", "конкретне пояснення відсутнє", "конкретна причина",
+    "коротка конкретна причина", "фактологічна причина", "редакційний кут",
+    "кут новини", "кут", "specific explanation", "concrete explanation",
+})
+
+
+def placeholder_reason(reason: Any) -> bool:
+    """True when a model returned the schema's wording instead of a decision."""
+    text = " ".join(str(reason or "").casefold().split()).strip(" .!…\"'«»")
+    return (not text) or text in _PLACEHOLDER_REASONS or text.startswith("<")
 
 # 2.2.3: structured selector rejection codes (see the CHANNEL-FIT SELECTOR prompt).
 SELECTOR_REJECT_CODES = (
@@ -210,6 +222,15 @@ def _postfactum_security_policy(channel: ChannelConfig, article: Any) -> str:
     )
     if completed or result:
         return ""
+    # 2.3.23: an operational signal is short. A long narrative that merely
+    # mentions drones or an attack (an escape from occupation, a rescue, a
+    # report about mannequins on roads) is not one; the typed selector and the
+    # live-now gate still judge it. Labelled data: under 200 chars 22 of 22 are
+    # real alerts, from 400 chars the rule rejected 9 wanted for 7 unwanted.
+    live_marker = re.search(
+        r"(?iu)\b(?:зараз|наразі|щойно|тільки\s+що|тривог\w*|відбій|чути|чутно|летить|рухається)\b", source)
+    if len(source) >= 400 and not live_marker:
+        return ""
     return "POSTFACTUM_ONLY: оперативний сигнал без підтвердженої завершеної події"
 
 
@@ -335,7 +356,11 @@ def _monitoring_official_context_reject(article: Any, channel: ChannelConfig | N
     if source_policy not in {"institutional", "connected_original"}:
         source_policy = "institutional"
     if source_policy == "connected_original" and bool(_telegram_meta(article).get("forwarded")):
-        return "MONITORING_NOT_ORIGINAL_FORWARD"
+        # 2.3.23: a relayed utility schedule/outage is a fact residents act on.
+        # Every other forward (national campaigns, other channels) stays vetoed.
+        from .monitoring_service_facts import utility_service_update
+        if not utility_service_update(article):
+            return "MONITORING_NOT_ORIGINAL_FORWARD"
     require_institutional_name = source_policy == "institutional"
     if require_institutional_name and source_url.startswith(("https://t.me/", "http://t.me/", "https://telegram.me/")) and source_name and not re.fullmatch(r"S\d+", source_name) and not re.search(
         r"(?iu)(?:\b(?:ОВА|МВА|ДСНС|МВС|поліція|поліції|міськрада|[а-яіїєґ]*обленерго)\b|"
@@ -588,7 +613,10 @@ def deterministic_monitoring_exclusion(channel: ChannelConfig, article: Any) -> 
     low = (str(_v(article, "title", "")) + "\n" + str(_v(article, "raw_text", ""))).casefold()
     meta = _telegram_meta(article)
     if bool(meta.get("forwarded")) and _rule_mentions(rules, "репост", "переслан", "forward"):
-        return "Нативний Telegram-репост/переслане повідомлення"
+        # 2.3.23: same narrow exception as the source-origin rule above.
+        from .monitoring_service_facts import utility_service_update
+        if not utility_service_update(article):
+            return "Нативний Telegram-репост/переслане повідомлення"
     if _rule_mentions(rules, "хвилин", "мовчан", "пошан") and (
         "хвилина мовчання" in low or ("хвилин" in low and ("мовчан" in low or "пошан" in low))
     ):
@@ -998,7 +1026,10 @@ def validate_writer_output(
         str(_v(article, "title", "")),
         str(_v(article, "raw_text", "")),
     ))
-    invented = sorted(_number_tokens(value) - _number_tokens(source))
+    # 2.3.23: compare canonical values, so "10.00"/"10-00" in a source supports
+    # "10:00" in the draft and glued Telegram text does not hide a source number.
+    from .numeric_grounding import unsupported_numbers
+    invented = unsupported_numbers(_UK_MONTH_AFTER_GLUE.sub(" ", source), _UK_MONTH_AFTER_GLUE.sub(" ", value))
     if invented:
         raise ValueError("AI додав число, якого немає у джерелі: " + ", ".join(invented[:10]))
     # A number elsewhere in the article (e.g. trolleybus №23) cannot justify
@@ -1368,6 +1399,12 @@ class EditorialEngine:
                 return EditorialOutcome(Decision.REJECT, reason=scope_issue, fit_score=0)
         from .editorial_hard_floor import two_sentence_reason
         source_short = two_sentence_reason(article)
+        if source_short and channel.mode == ChannelMode.MONITORING:
+            # 2.3.23: an outage schedule is a time table, not prose. Its facts
+            # are the queue/time rows; the final-text floor still applies.
+            from .monitoring_service_facts import structured_schedule
+            if structured_schedule(article):
+                source_short = ""
         if source_short:
             return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
         # Run the source-integrity veto at the shared public entry point.
@@ -1561,6 +1598,8 @@ SOURCE:
                     "publish", "reject"
                 }:
                     raise ValueError("SECOND_OPINION_2320_INVALID_DECISION")
+                if placeholder_reason(data.get("reason")):
+                    raise ValueError("SECOND_OPINION_2320_PLACEHOLDER_REASON")
                 if data["decision"].casefold() == "publish" and not (
                     verified_second_opinion_2320(data, article)
                 ):
@@ -1605,8 +1644,9 @@ SOURCE:
         recent = [t for t in reviews.get(key, []) if now - t < 900]
         reviews[key] = recent
         if len(recent) >= 8:
-            return EditorialOutcome(
-                Decision.REJECT, reason="EDITOR_2321_REVIEW_CAP_REJECT", fit_score=score
+            # 2.3.23: the cost cap postpones the review; it does not judge the story.
+            raise GatewayExhausted(
+                "EDITOR_REVIEW_CAP_DEFERRED", retry_seconds=900, provider_outage=False,
             )
         recent.append(now)
         prompt = (
@@ -1621,6 +1661,8 @@ SOURCE:
                 decision = str(value.get("decision") or "").strip().casefold()
                 if decision not in {"publish", "reject"}:
                     raise ValueError("EDITOR_2321_INVALID_DECISION")
+                if placeholder_reason(value.get("reason")):
+                    raise ValueError("EDITOR_2321_PLACEHOLDER_REASON")
                 if decision == "publish" and not verified_second_opinion_2320(value, article):
                     raise ValueError("EDITOR_2321_UNVERIFIED_QUOTE")
                 return value
@@ -1642,14 +1684,18 @@ SOURCE:
                        + _clean(verdict.get("reason"), 300),
                 fit_score=score, provider=result.provider, model=result.model,
             )
+        except GatewayExhausted:
+            raise
         except Exception as exc:
-            event("editorial", "2.3.21 uncertain publish rejected",
+            # 2.3.23: no usable review answer is an AI failure, not a rejection
+            # of the story. Defer the job; bounded retries stay in the worker.
+            event("editorial", "publish review unavailable; job deferred",
                   level=30, article_id=int(_v(article, "id", 0) or 0),
                   channel_id=channel.id, error=str(exc)[:200])
-            return EditorialOutcome(
-                Decision.REJECT, reason="EDITOR_2321_REVIEW_UNVERIFIED_REJECT",
-                fit_score=score,
-            )
+            raise GatewayExhausted(
+                "EDITOR_REVIEW_UNAVAILABLE: " + str(exc)[:160],
+                retry_seconds=600, provider_outage=False,
+            ) from exc
 
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
         from .source_integrity import multi_story_page_cards_reason
@@ -1699,6 +1745,20 @@ SOURCE:
             "when it identifies a real risk, not a mere patch/changelog.\n"
             if is_science_general_channel(channel) and not calibrated_role else ""
         )
+        # 2.3.27 reader-first direction is a SOFT preference, calibrated by
+        # owner labels.  Does not override an approved original design concept.
+        theme_direction = (
+            "CTRL+UA: наукові відкриття простими словами, роботи, незвичайні "
+            "гаджети, ШІ у повсякденному житті, практична кібербезпека, "
+            "людські історії про винаходи; не вимагай революційного прориву. "
+            "Суто професійні патчі/купівельні гайди без новини відхиляй."
+            if calibrated_role == "science" else
+            "ПРОДАНО!: історії відомих брендів, ігор, попкультури, їжі, "
+            "незвичних предметів, колаборацій, рекордів, курйозів та дизайну. "
+            "Оригінальна креативна концепція без великого бренду залишається "
+            "повноцінною новиною. Відхиляй рутинний PR і каталоги покупок."
+            if calibrated_role == "creative" else ""
+        )
         selector_header = (
             "Ти редактор. Обирай відповідну тематичну ЦІКАВУ новину, "
             "а не виключно революційні сенсації, вірусні історії чи масовий маркетинг. "
@@ -1713,10 +1773,10 @@ SOURCE:
             "Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення."
         )
         output_contract = (
-            'Якщо decision="reject", поясни конкретну причину. Поверни тільки JSON: '
-            '{"decision":"publish","fit_score":0,"reason":"фактологічна причина",'
-            '"angle":"редакційний кут"}. Поле decision має бути рівно '
-            '"publish" або "reject". Оцінка fit_score не є другим veto.'
+            'Поверни тільки JSON із трьома полями (значення визнач сам, не копіюй цей опис): '
+            '"decision" — рівно "publish" або "reject"; '
+            '"reason" — одне речення про ЦЮ статтю: що саме в ній є або чого бракує; '
+            '"angle" — про що буде допис, якщо publish, інакше порожній рядок.'
             if calibrated_role else
             'Для CPU-local fallback одразу оціни також editorial value, щоб не робити '
             'окремий дорогий AI-виклик. Якщо decision="reject", reject_code — один із: '
@@ -1733,6 +1793,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {science_audience_instruction}
 {commercial_audience_instruction}
 {commercial_mix_instruction}
+{theme_direction}
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
 {calibrated_feedback_2320(calibrated_role)}
@@ -1741,14 +1802,22 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
 
         def parse_fit(raw: str):
             obj = _parse_json(raw)
-            decision = str(obj.get("decision") or "").casefold()
+            decision = str(obj.get("decision") or "").strip().casefold()
             if decision not in {"publish", "reject"}:
                 raise ValueError("invalid decision")
+            obj["decision"] = decision
+            # 2.3.23: a copied schema value is not an editorial decision; the
+            # gateway treats it as an invalid answer and tries the next model.
+            if calibrated_role and placeholder_reason(obj.get("reason")):
+                raise ValueError("EDITOR_SELECTOR_PLACEHOLDER_REASON")
             return obj
 
         fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=170 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
         fit = parse_fit(fit_result.text)
-        raw_score = max(0, min(100, int(fit.get("fit_score", 0) or 0)))
+        # 2.3.23: calibrated channels no longer ask for a numeric score. The old
+        # template showed "fit_score":0, models echoed it, and the echoed value
+        # (10..19) sent almost every PUBLISH to a second vetoing review.
+        raw_score = max(0, min(100, int(fit.get("fit_score", 70 if calibrated_role else 0) or 0)))
         # RC54: a categorical PUBLISH with fit=9 is internally contradictory. For
         # channels with the explicit commercial editorial profile, trust the categorical channel-fit decision and let the dedicated
         # commercial value gate make the second decision instead of killing it here.
@@ -2097,6 +2166,7 @@ SOURCE:
             monitoring=channel.mode == ChannelMode.MONITORING,
             legacy_quality_risk=(
                 quality.needs_second_candidate
+                or quality.score < 95
                 or bool(language_quality_issues(draft))
                 or bool(human_style_issues(draft))
                 or needs_grammar_polish(draft)
@@ -2396,6 +2466,11 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{sourc
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
+        # A verified, source-owned image must exist before paying writer and
+        # final_editor for editorial channels that require media.  Monitoring
+        # rules are unchanged.  Unavailable images defer (never reject/replay).
+        from .editorial_media_preflight_237 import ensure_media_for_editorial_writer
+        article = ensure_media_for_editorial_writer(self.store, channel, article)
         written = self.write(channel, article, selection)
         if heartbeat is not None:
             try: heartbeat()

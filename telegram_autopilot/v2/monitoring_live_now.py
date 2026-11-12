@@ -139,7 +139,14 @@ def live_now_exclusion(channel: ChannelConfig, article: Any) -> str:
 
     # 2.2.9: a bare weapon+place bulletin such as "Ланцет на ..." is
     # an active alert, even when it omits verbs like "летить" or "рухається".
-    if not ordinary_civic_guidance and not strong_settled_result and re.search(
+    # 2.3.23: a reported outcome (a person wounded, a house on fire, a target
+    # hit) makes it an aftermath report, not a direction-of-threat signal, even
+    # without a count. "Ланцет на Оріхів" has no outcome and stays blocked.
+    reported_outcome = bool(re.search(
+        r"\b(?:поранен\w*|загинул\w*|загибл\w*|постраждал\w*|травмован\w*|госпіталізован\w*|"
+        r"пошкоджен\w*|зруйнован\w*|знищен\w*|уражен\w*|уразил\w*|спалахну\w*|загорів\w*|загорі[вл]\w*|"
+        r"ліквідува\w*|врятува\w*|евакуюва\w*)\b", compact, re.I))
+    if not ordinary_civic_guidance and not strong_settled_result and not reported_outcome and re.search(
         rf"\b{_WEAPON}\b[^.!?\n]{{0,28}}\b(?:на|по|у|в|над|біля|поблизу|до|"
         rf"в\s+бік|у\s+напрямку|напрямку)\b\s+\S+", compact, re.I
     ):

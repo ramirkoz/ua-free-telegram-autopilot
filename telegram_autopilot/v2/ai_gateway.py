@@ -37,6 +37,18 @@ class AIResult:
     actual_openrouter_usd: float = 0.0
 
 
+_CONTRACT_FAILURE_MARKERS = (
+    "не повернув json", "no json", "invalid json", "порожн", "empty", "reasoning but no final",
+    "no final content", "invalid decision", "placeholder", "must be boolean", "invalid event_type",
+)
+
+
+def _contract_class_failure(error: object) -> bool:
+    """True when the model broke the OUTPUT CONTRACT (not when the text was judged)."""
+    text = str(error or "").casefold()
+    return any(marker in text for marker in _CONTRACT_FAILURE_MARKERS)
+
+
 class GatewayExhausted(RuntimeError):
     def __init__(
         self,
@@ -405,6 +417,48 @@ class AIGateway:
             for index, model_id in enumerate(eligible, start=1)
         ]
 
+    # 2.3.23: measured output-contract success per (purpose, model). A model that
+    # keeps failing a task's contract (no JSON, empty answer, reasoning only) is
+    # tried last for that task instead of burning the first attempt of every
+    # article. In-memory only: operator configuration and saved health untouched.
+    _CONTRACT_MIN_SAMPLES = 4
+    _CONTRACT_BAD_RATE = 0.34
+
+    def _contract_stats(self) -> dict[tuple[str, str], list[int]]:
+        stats = getattr(self, "_contract_outcomes", None)
+        if stats is None:
+            stats = {}
+            self._contract_outcomes = stats
+        return stats
+
+    def _note_contract_outcome(self, purpose: str, model: str, *, ok: bool, error: object = None) -> None:
+        if not ok and not _contract_class_failure(error):
+            return   # a factual/readability objection is about the article, not the model
+        key = (str(purpose or "content").casefold(), str(model or "").casefold())
+        record = self._contract_stats().setdefault(key, [0, 0])
+        record[0 if ok else 1] += 1
+        if sum(record) > 40:          # keep a moving picture, not a lifetime verdict
+            record[0], record[1] = record[0] // 2, record[1] // 2
+
+    def _contract_unreliable(self, purpose: str, model: str) -> bool:
+        # LIVE 2.3.24: ling tiny repeatedly returns no JSON on selectors.
+        # Put it last from the first job, without touching user configuration.
+        if (str(purpose or "").casefold() in {"editorial_selector", "monitoring_selector"}
+                and str(model or "").casefold() == "inclusionai/ling-3.0-tiny"):
+            return True
+        ok, bad = self._contract_stats().get(
+            (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))
+        total = ok + bad
+        return total >= self._CONTRACT_MIN_SAMPLES and ok / total < self._CONTRACT_BAD_RATE
+
+    def _order_by_contract_success(self, slots: list, purpose: str) -> list:
+        demoted = [s for s in slots if self._contract_unreliable(purpose, s.model)]
+        if not demoted or len(demoted) == len(slots):
+            return slots
+        event("ai", "unreliable models tried last for this task", purpose=str(purpose or "content"),
+              models=[s.model for s in demoted][:6], operator_configuration_unchanged=True)
+        return [s for s in slots if s not in demoted] + demoted
+
     def _provider_slots(self, provider: str, cfg) -> list[legacy_ai.Slot]:
         if provider == "openrouter":
             return self._openrouter_task_slots(
@@ -513,6 +567,34 @@ class AIGateway:
         )
         return state, scope
 
+    def mark_stale_provider_health_on_start(self, started_at: str) -> int:
+        """Mark prior-run provider failures UNVERIFIED, without making API calls.
+
+        Only display-level summary is touched; model errors, cooldowns and
+        historical counters remain intact until a real probe/work succeeds.
+        """
+        changed = 0
+        for current in self.store.provider_health():
+            models = self.store.ai_model_health(current.provider)
+            if current.state == ProviderState.CONFIG_ERROR:
+                continue
+            latest = max((str(m.updated_at or "") for m in models), default="")
+            if latest and latest >= str(started_at or ""):
+                continue
+            if current.state == ProviderState.UNKNOWN and current.detail.startswith("STALE:"):
+                continue
+            old_state = str(current.state)
+            current.state = ProviderState.UNKNOWN
+            current.detail = f"STALE: попередній стан {old_state}; немає API-перевірки після запуску"
+            current.cooldown_until = ""
+            current.updated_at = now_iso()
+            self.store.set_provider_health(current)
+            changed += 1
+        if changed:
+            event("ai", "persisted provider health marked unverified after runtime restart",
+                  providers=changed, live_api_probe_performed=False)
+        return changed
+
     def _refresh_provider_summary(self, provider: str, cfg) -> ProviderHealth:
         current = self._health_map().get(provider, ProviderHealth(provider=provider))
         if provider == "codex" and not bool(getattr(cfg, "codex_enabled", False)):
@@ -544,7 +626,15 @@ class AIGateway:
 
         models = {slot.model for slot in self._provider_slots(provider, cfg)}
         rows = [item for item in self.store.ai_model_health(provider) if item.model in models]
-        healthy = [item for item in rows if item.state == ProviderState.HEALTHY and not _cooldown_active(item.cooldown_until)]
+        # Even a HEALTHY model row is not live evidence when it predates the
+        # runtime. Otherwise a failed new probe can surface an old success.
+        with self.store.connect() as con:
+            boot_row = con.execute("SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'").fetchone()
+        boot_at = str(boot_row[0] or "") if boot_row else ""
+        healthy = [item for item in rows
+                   if item.state == ProviderState.HEALTHY
+                   and not _cooldown_active(item.cooldown_until)
+                   and (not boot_at or str(item.updated_at or "") >= boot_at)]
         total = len(models)
         if healthy:
             winner = max(healthy, key=lambda item: item.updated_at or "")
@@ -565,6 +655,18 @@ class AIGateway:
 
         if rows:
             latest = max(rows, key=lambda item: item.updated_at or "")
+            # A current summary timestamp is NOT a new API validation.
+            with self.store.connect() as con:
+                marker = con.execute("SELECT value FROM meta WHERE key='runtime_source_freshness_started_at'").fetchone()
+            started_at = str(marker[0] or "") if marker else ""
+            if started_at and str(latest.updated_at or "") < started_at:
+                current.state = ProviderState.UNKNOWN
+                current.model = latest.model
+                current.detail = f"STALE: {latest.model} — перевірка до запуску, {latest.state}; нову API-перевірку не підтверджено"
+                current.cooldown_until = ""
+                current.updated_at = now_iso()
+                self.store.set_provider_health(current)
+                return current
             current.state = latest.state
             current.model = latest.model
             current.detail = f"0/{total} моделей healthy; остання: {latest.model}: {latest.detail[:700]}"
@@ -824,6 +926,7 @@ class AIGateway:
             route_slots = openrouter_slots + free_slots
         else:
             route_slots = free_slots
+        route_slots = self._order_by_contract_success(route_slots, purpose)
         openrouter_transport_failures = 0
         openrouter_failover_allowed = bool(
             mode == "openrouter"
@@ -840,7 +943,13 @@ class AIGateway:
             if mode == "openrouter" and provider != "openrouter" and not openrouter_failover_allowed:
                 # QA rejection of a valid OpenRouter answer is not an outage.
                 continue
-            if allowed is not None and provider not in allowed:
+            # 2.3.23: under the operator's "OpenRouter serves every AI purpose"
+            # contract a caller's provider whitelist (written for the free-provider
+            # era, e.g. the trusted final editor) must not exclude OpenRouter. It
+            # did, so with free providers skipped no route was left and a
+            # successfully written article died with "no AI provider configured".
+            openrouter_contract = mode == "openrouter" and provider == "openrouter"
+            if allowed is not None and provider not in allowed and not openrouter_contract:
                 continue
             if not self._configured(provider, cfg):
                 continue
@@ -974,6 +1083,7 @@ class AIGateway:
                                           purpose=str(purpose or "content"))
                         if not repaired_ok:
                             validation_failures += 1
+                            self._note_contract_outcome(purpose, runtime_model, ok=False, error=first_error)
                             signature=_rc111_qa_signature(first_error)
                             if signature:
                                 validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
@@ -1021,6 +1131,7 @@ class AIGateway:
 
                 self._route_circuit.clear(provider, slot.model)
                 self._mark_success(provider, slot.model, runtime_model)
+                self._note_contract_outcome(purpose, runtime_model, ok=True)
                 summary = self._refresh_provider_summary(provider, cfg)
                 event(
                     "ai", "AI success", provider=provider, model=runtime_model,
@@ -1034,6 +1145,7 @@ class AIGateway:
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
+                self._note_contract_outcome(purpose, slot.model, ok=False, error=exc)
                 state, scope = self._mark_model_failure(provider, slot.model, exc)
                 if self._route_circuit.note_failure(provider, slot.model, exc):
                     event("ai", "model output-contract temporary cooldown",
@@ -1101,7 +1213,10 @@ class AIGateway:
         else:
             configured = self._configured(provider, cfg)
         if not configured:
+            event("ai", "manual AI provider test skipped (not configured)", provider=provider)
             return self._refresh_provider_summary(provider, cfg)
+        event("ai", "manual AI provider probe started", provider=provider,
+              models_to_try=len(self._provider_slots(provider, cfg)))
         if provider == "openrouter":
             budget_ok, _detail = self._openrouter_budget_status(cfg)
             if not budget_ok:
@@ -1162,6 +1277,10 @@ class AIGateway:
         return self._probe_provider(name, load_secrets(), force_configured=force_configured)
     def probe_all(self) -> list[ProviderHealth]:
         cfg = load_secrets()
+        # A button click is an explicit live check, not a view of saved rows.
+        check_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        event("ai", "manual AI all providers test started", check_id=check_id,
+              providers=list(self.PROVIDER_ORDER))
         by_provider: dict[str, ProviderHealth] = {}
         with ThreadPoolExecutor(max_workers=len(self.PROVIDER_ORDER), thread_name_prefix="ai-probe") as pool:
             futures = {pool.submit(self._probe_provider, provider, cfg): provider for provider in self.PROVIDER_ORDER}
@@ -1177,4 +1296,9 @@ class AIGateway:
                     current.updated_at = now_iso()
                     self.store.set_provider_health(current)
                     by_provider[provider] = current
-        return [by_provider.get(provider) or self._refresh_provider_summary(provider, cfg) for provider in self.PROVIDER_ORDER]
+        results = [by_provider.get(provider) or self._refresh_provider_summary(provider, cfg)
+                   for provider in self.PROVIDER_ORDER]
+        event("ai", "manual AI all providers test finished", check_id=check_id,
+              states={r.provider: str(r.state) for r in results},
+              provider_count=len(results))
+        return results
