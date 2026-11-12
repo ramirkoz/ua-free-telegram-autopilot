@@ -1407,6 +1407,16 @@ class EditorialEngine:
                 source_short = ""
         if source_short:
             return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
+        # 2.3.29: source-only shopping-guide rejection before paid AI,
+        # including wrapped selection paths. Publisher repeats it for READY.
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .editorial_source_topic_2319 import editorial_source_topic_reason_2319
+            topic_error = editorial_source_topic_reason_2319(channel, article)
+            if topic_error:
+                event("editorial", "source-owned science topic rejected before AI",
+                      channel_id=channel.id,
+                      article_id=int(_v(article, "id", 0) or 0), reason=topic_error)
+                return EditorialOutcome(Decision.REJECT, reason=topic_error, fit_score=0)
         # Run the source-integrity veto at the shared public entry point.
         # Runtime contracts replace _select_editorial dynamically, so checks
         # confined to that inner method would otherwise be bypassed in LIVE.
@@ -1698,6 +1708,11 @@ SOURCE:
             ) from exc
 
     def _select_editorial(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # Direct calls must not bypass the same source-only topic fence.
+        from .editorial_source_topic_2319 import editorial_source_topic_reason_2319
+        topic_error = editorial_source_topic_reason_2319(channel, article)
+        if topic_error:
+            return EditorialOutcome(Decision.REJECT, reason=topic_error, fit_score=0)
         from .source_integrity import multi_story_page_cards_reason
         source_problem = multi_story_page_cards_reason(article)
         if source_problem:
