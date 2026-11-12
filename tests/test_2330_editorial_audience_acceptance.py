@@ -180,3 +180,33 @@ def test_2330_unlisted_professions_are_still_classifieds(title, raw):
 ])
 def test_2330_genuine_completed_jobs_news_is_not_recruitment(title, raw):
     assert no_announcement_reason_2322({"title": title, "raw_text": raw}) == ""
+
+
+
+def test_2330_ready_buffer_rechecks_real_source_policy_without_ai_or_telegram():
+    # The same policy is enforced before spending on additional commercial AI
+    # while READY has reached its configured bound. Prior deliveries remain
+    # protected rather than being blindly retried or auto-rejected.
+    from telegram_autopilot.v2.runtime import _reject_source_ineligible_ready_2330
+
+    class StubStore:
+        def __init__(self, sent_before=False):
+            self.rejected = []
+            self.sent_before = sent_before
+        def get_channel(self, channel_id):
+            assert channel_id == 2
+            return CREATIVE
+        def ready_articles(self, channel_id, limit):
+            return [dict(SENATOR, final_text="Короткий локальний сюжет.")]
+        def delivery_journal(self, article_id):
+            return {"state":"UNKNOWN"} if self.sent_before else None
+        def reject_editorial_article(self, article_id, reason):
+            self.rejected.append((article_id, reason))
+
+    fresh = StubStore()
+    assert _reject_source_ineligible_ready_2330(fresh, 2) == 1
+    assert fresh.rejected == [(97837, "CREATIVE_OFFTOPIC_LOCAL_ELECTION_2330")]
+
+    protected = StubStore(sent_before=True)
+    assert _reject_source_ineligible_ready_2330(protected, 2) == 0
+    assert not protected.rejected
