@@ -157,14 +157,15 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_STANDALONE_ANNOUNCEMENT_2322"
     if _PRIVATE_CLASSIFIED.search(original):
         return "MONITORING_PRIVATE_CLASSIFIED_2322"
-    if (_PRIVATE_RECRUITMENT.search(original)
-            and not (_COMPLETED_EMPLOYMENT_FAIR_2330.search(original)
-                     and not _ACTIVE_RECRUITMENT_2330.search(original))):
+    # A completed job fair does not exempt a separate active vacancy inside
+    # the same article. Both legacy and expanded recruitment patterns count.
+    # Otherwise an old READY article can pass the final no-ads preflight.
+    active_hiring = bool(_ACTIVE_RECRUITMENT_2330.search(original)
+                         or _OPEN_RECRUITMENT_2330.search(original))
+    completed_fair = bool(_COMPLETED_EMPLOYMENT_FAIR_2330.search(original))
+    if _PRIVATE_RECRUITMENT.search(original) and not (completed_fair and not active_hiring):
         return "MONITORING_JOB_ADVERTISEMENT_2322"
-    if ((_ACTIVE_RECRUITMENT_2330.search(original)
-         or _OPEN_RECRUITMENT_2330.search(original))
-            and _EMPLOYMENT_OFFER_2330.search(original)
-            and not _COMPLETED_EMPLOYMENT_FAIR_2330.search(original)):
+    if active_hiring and _EMPLOYMENT_OFFER_2330.search(original):
         return "MONITORING_JOB_OFFER_2330"
     if _SALE_AD.search(original):
         return "MONITORING_SALES_ADVERTISEMENT_2322"
