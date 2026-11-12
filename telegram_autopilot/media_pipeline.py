@@ -24,6 +24,10 @@ _HARD_REJECT = (
     "ad_slot", "ad-slot", "banner", "tracking", "pixel.gif", "1x1.gif", "favicon", "sprite",
     "avatar", "headshot", "profile-photo", "social-share", "share-icon", "analytics",
     "click to follow", "follow us", "follow on google", "google news", "follow tom's hardware",
+    # Commerce rails and site-wide product widgets are never source art.
+    "gear-up", "gear up", "best-deals", "best deals", "deal-widget", "deal-card",
+    "shopping-widget", "product-widget", "price-comparison", "hawk-widget",
+    "buy now", "shop now",
 )
 _MARKETING_CONTEXT_RELAX = {"advertisement", "advertising", "promo", "promotion", "commercial"}
 _LEAD_POSITION = 0.35
@@ -627,10 +631,10 @@ def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> 
         return False
     described = _text_tokens(" ".join((item.caption, item.alt)))
     if not described:
-        # Keep actual source-bound galleries with weak alt text; unrelated
-        # site-wide/recommendation media are excluded by container context and
-        # the cross-story published/candidate image-reuse guard in V2Store.
-        return True
+        # Blank captions in a CSS gallery are NOT evidence of article ownership.
+        # Site-wide shopping rails also use gallery/carousel markup. Only a
+        # verified article-schema asset or exact page-declared hero qualifies.
+        return bool(item.schema_verified or item.page_declared)
     title_overlap, article_overlap, _count = _semantic_media_evidence(item, title=title, article_text=article_text)
     return title_overlap >= 1 or article_overlap >= 1
 
@@ -651,6 +655,10 @@ def prepare_article_media(
     ``advertisement``/``promo``. It never relaxes sponsor/affiliate/banner/tracker
     or logo/avatar safety rules.
     """
+    # Source text on some publishers includes a shared commerce footer.
+    # Do not allow retail terms in that footer to justify unrelated thumbnails.
+    if "creativebloq.com" in source_url.casefold():
+        article_text = re.split(r"(?im)^\\s*gear up!?\\s*$", str(article_text or ""), maxsplit=1)[0]
     featured, body = _layout_items(layout_json, fallback_urls)
     drop_reasons: dict[str, int] = {}
 
