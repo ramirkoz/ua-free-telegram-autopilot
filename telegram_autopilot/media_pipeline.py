@@ -658,7 +658,7 @@ def prepare_article_media(
     # Source text on some publishers includes a shared commerce footer.
     # Do not allow retail terms in that footer to justify unrelated thumbnails.
     if "creativebloq.com" in source_url.casefold():
-        article_text = re.split(r"(?im)^\\s*gear up!?\\s*$", str(article_text or ""), maxsplit=1)[0]
+        article_text = re.split(r"(?im)^\s*gear up!?\s*$", str(article_text or ""), maxsplit=1)[0]
     featured, body = _layout_items(layout_json, fallback_urls)
     drop_reasons: dict[str, int] = {}
 
