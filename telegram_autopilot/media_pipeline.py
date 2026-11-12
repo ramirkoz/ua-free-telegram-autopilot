@@ -315,7 +315,9 @@ def _semantic_media_match(item: PreparedMedia, *, title: str, article_text: str)
     if item.schema_verified:
         return True
     if item.page_declared:
-        return title_overlap >= 1 or article_overlap >= 2
+        # The actual lead asset declared for this article has been verified
+        # against page metadata and hard noise / cross-story gates upstream.
+        return True
     if item.classification in {"infographic", "screenshot", "map"}:
         return title_overlap >= 1 or article_overlap >= 1
     return title_overlap >= 1 or article_overlap >= 2
@@ -631,10 +633,10 @@ def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> 
         return False
     described = _text_tokens(" ".join((item.caption, item.alt)))
     if not described:
-        # Blank captions in a CSS gallery are NOT evidence of article ownership.
-        # Site-wide shopping rails also use gallery/carousel markup. Only a
-        # verified article-schema asset or exact page-declared hero qualifies.
-        return bool(item.schema_verified or item.page_declared)
+        # Genuine source galleries may have no caption, and cutting all of
+        # them destroys legitimate artwork. Reject commerce/gallery noise by
+        # container and page-section provenance before this narrow relaxation.
+        return True
     title_overlap, article_overlap, _count = _semantic_media_evidence(item, title=title, article_text=article_text)
     return title_overlap >= 1 or article_overlap >= 1
 

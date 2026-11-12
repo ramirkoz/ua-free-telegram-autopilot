@@ -31,8 +31,8 @@ class TestV2328(unittest.TestCase):
         self.assertIn("naruto-art.jpg", " ".join(value.media_urls))
         self.assertNotIn("tool-kit.jpg", " ".join(value.media_urls))
 
-    def test_unverified_blank_css_gallery_never_overrides_story_media(self):
-        unrelated = PreparedMedia(2, "image", "https://example.com/tool-kit.jpg", gallery=True, context="gallery")
+    def test_related_rail_never_overrides_story_media(self):
+        unrelated = PreparedMedia(2, "image", "https://example.com/tool-kit.jpg", gallery=True, context="related-products rail")
         self.assertFalse(_in_story_gallery(unrelated, title="Naruto puppet", article_text="Kankuro anime"))
         verified = PreparedMedia(2, "image", "https://example.com/actual.jpg", gallery=True, schema_verified=True)
         self.assertTrue(_in_story_gallery(verified, title="Naruto puppet", article_text="Kankuro anime"))
