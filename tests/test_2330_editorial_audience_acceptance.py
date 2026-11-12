@@ -210,3 +210,56 @@ def test_2330_ready_buffer_rechecks_real_source_policy_without_ai_or_telegram():
     protected = StubStore(sent_before=True)
     assert _reject_source_ineligible_ready_2330(protected, 2) == 0
     assert not protected.rejected
+
+
+def test_2330_calibrated_publish_needs_real_source_quote_without_second_ai_call():
+    from types import SimpleNamespace
+
+    article = {
+        "id": 70011, "source_name": "Science News",
+        "title": "Scientists report a new result on dark matter",
+        "raw_text": (
+            "Researchers measured a new gravitational effect in 500 observations. "
+            "The result supports a new explanation of dark matter, and the paper reports an uncertainty interval."
+        ),
+    }
+
+    class Learning:
+        def topic_assessment(self, *args):
+            return SimpleNamespace(hard_suppress=False, fit_adjustment=0)
+        def topic_memory_block(self, *args):
+            return ""
+
+    class Gateway:
+        calls = 0
+        def __init__(self, text):
+            self.text = text
+        def run(self, prompt, validator=None, **kwargs):
+            self.calls += 1
+            assert kwargs["purpose"] == "editorial_selector"
+            assert "source_quote" in prompt
+            assert kwargs["max_output_tokens"] <= 240
+            validator(self.text)
+            return SimpleNamespace(text=self.text, provider="mock", model="fixture")
+
+    valid = (
+        '{"decision":"publish","reason":"Вчені підтвердили нове вимірювання",'
+        '"angle":"Нова модель темної матерії",'
+        '"source_quote":"Researchers measured a new gravitational effect in 500 observations."}'
+    )
+    engine = object.__new__(ed.EditorialEngine)
+    engine.learning = Learning()
+    engine.gateway = Gateway(valid)
+    outcome = engine._select_editorial(SCIENCE, article)
+    assert outcome.decision == Decision.PUBLISH
+    assert engine.gateway.calls == 1
+
+    for bad in (
+        '{"decision":"publish","reason":"Цікаве дослідження", "angle":"Наука"}',
+        '{"decision":"publish","reason":"Цікаве дослідження", "angle":"Наука",'
+        '"source_quote":"No study has ever measured anything like this fictitious discovery."}',
+    ):
+        engine.gateway = Gateway(bad)
+        with pytest.raises(ValueError, match="EDITOR_2330_PUBLISH_WITHOUT_SOURCE_EVIDENCE"):
+            engine._select_editorial(SCIENCE, article)
+        assert engine.gateway.calls == 1
