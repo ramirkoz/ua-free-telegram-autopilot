@@ -600,6 +600,22 @@ class Publisher:
                 discovered_at=str(article["discovered_at"] or ""),
                 rolling_window_hours=editorial_hours,
             )
+            if stale_reason == "SOURCE_PREDATES_RUNTIME_START" and channel.mode == ChannelMode.EDITORIAL:
+                # Existing READY item waited its normal interval through a short
+                # restart. Durable journal preflight above already ruled out a
+                # committed/unknown Telegram delivery. No historical replay.
+                from .carryover_ready_228 import safe_same_day_ready_228
+                if safe_same_day_ready_228(
+                    str(article["source_published_at"] or ""),
+                    str(article["discovered_at"] or ""),
+                    str(article["ready_at"] or ""),
+                    started_at,
+                    max_age_hours=int(channel.max_age_hours or 24),
+                ):
+                    stale_reason = ""
+                    event("publish", "same-day prepared READY retained across restart",
+                          channel_id=channel_id, article_id=article_id,
+                          durable_delivery_preflight=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 event("publish", "stale source refused before Telegram", level=30,
@@ -695,6 +711,20 @@ class Publisher:
             article = self.store.get_article(article_id) or article
             event("publish", "normalized plain-text formatting and orphan video cues",
                   channel_id=channel_id, article_id=article_id)
+        # 2.3.28: prevent truncated READY copy (e.g. #1854 ended
+        # after "за інших умов:") from reaching Telegram as a valid caption.
+        from .terminal_text_guard_228 import incomplete_terminal_text_228
+        terminal_error = incomplete_terminal_text_228(current_text)
+        if terminal_error:
+            outcome = self.store.requeue_quality_rewrite(
+                article_id, error_code=terminal_error,
+                detail="Публікація обривається всередині речення; виправити за першоджерелом.",
+                max_attempts=3,
+            )
+            event("publish", "incomplete final text blocked", level=40,
+                  channel_id=channel_id, article_id=article_id,
+                  reason=terminal_error, outcome=outcome)
+            return outcome
         # Non-retryable hard stop. A model refusal, a one-word caption or
         # an active threat must never become a public post after an AI retry.
         from .editorial import hard_editorial_reject, prepublish_quality_issues
