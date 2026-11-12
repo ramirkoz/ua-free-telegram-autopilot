@@ -45,7 +45,8 @@ NOCTUA = {
     "title": "Noctua brings space-grade carbon nanotube thermal pad to AMD AM5 and AM4 processors — promises years of maintenance-free performance for $24.95",
     "raw_text": (
         "The thermal pad for AMD AM5 processors is a replacement for thermal paste "
-        "for desktop CPUs. It promises maintenance-free operation at $24.95."
+        "for desktop CPUs. It promises maintenance-free operation at $24.95. "
+        "The manufacturer describes the product as a retail replacement part."
     ),
 }
 SENATOR = {
