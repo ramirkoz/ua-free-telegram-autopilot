@@ -1803,10 +1803,14 @@ SOURCE:
             "Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення."
         )
         output_contract = (
-            'Поверни тільки JSON із трьома полями (значення визнач сам, не копіюй цей опис): '
+            'Поверни тільки JSON із чотирма полями (не копіюй підказки замість рішення): '
             '"decision" — рівно "publish" або "reject"; '
-            '"reason" — одне речення про ЦЮ статтю: що саме в ній є або чого бракує; '
-            '"angle" — про що буде допис, якщо publish, інакше порожній рядок.'
+            '"reason" — одне конкретне речення про цінність/відсутність цінності саме цієї новини; '
+            '"angle" — факт і кут допису, якщо publish, інакше порожній рядок; '
+            '"source_quote" — для publish ДОСЛІВНА цитата 20–180 символів із SOURCE BODY, '
+            'яка підтверджує головний факт. Не переказуй і не вигадуй цитату. '
+            'Для reject поверни порожню цитату. Якщо конкретного факту, який '
+            'цікавий широкому читачеві, немає, вирішуй reject.'
             if calibrated_role else
             'Для CPU-local fallback одразу оціни також editorial value, щоб не робити '
             'окремий дорогий AI-виклик. Якщо decision="reject", reject_code — один із: '
@@ -1840,9 +1844,17 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             # gateway treats it as an invalid answer and tries the next model.
             if calibrated_role and placeholder_reason(obj.get("reason")):
                 raise ValueError("EDITOR_SELECTOR_PLACEHOLDER_REASON")
+            # 2.3.30: a positive selector may no longer approve a story
+            # based on generic AI enthusiasm or an unverifiable news hook.
+            # Same model call, no extra paid opinion; actual-source excerpt
+            # must be byte-for-byte recoverable after whitespace folding.
+            if calibrated_role and decision == "publish":
+                from .editorial_second_opinion_2320 import verified_second_opinion_2320
+                if not verified_second_opinion_2320(obj, article):
+                    raise ValueError("EDITOR_2330_PUBLISH_WITHOUT_SOURCE_EVIDENCE")
             return obj
 
-        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=170 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
+        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=240 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
         fit = parse_fit(fit_result.text)
         # 2.3.23: calibrated channels no longer ask for a numeric score. The old
         # template showed "fit_score":0, models echoed it, and the echoed value
