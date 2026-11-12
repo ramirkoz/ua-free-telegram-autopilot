@@ -97,16 +97,16 @@ _COMPLETED_EMPLOYMENT_FAIR_2330 = re.compile(
 # Service. Exempt only a demonstrable replacement SERVICE, never found-item
 # requests, private phone returns or requests to locate a missing passport.
 _DOCUMENT_REISSUE_SERVICE_2330 = re.compile(
-    r"(?iu)\\b(?:віднов\\w*|замін\\w*|переоформ\\w*).{0,110}"
-    r"(?:втрачен\\w*|пошкоджен\\w*).{0,80}(?:паспорт\\w*|документ\\w*)"
+    r"(?iu)\b(?:віднов\w*|замін\w*|переоформ\w*).{0,110}"
+    r"(?:втрачен\w*|пошкоджен\w*).{0,80}(?:паспорт\w*|документ\w*)"
 )
 _DOCUMENT_REISSUE_OPERATOR_2330 = re.compile(
-    r"(?iu)(?:\\bдмс\\b|\\bцнап\\b|юридичн\\w*\\s+(?:супровід|консультац\\w*)|"
-    r"безоплатн\\w*\\s+евакуюва\\w*)"
+    r"(?iu)(?:\bдмс\b|\bцнап\b|юридичн\w*\s+(?:супровід|консультац\w*)|"
+    r"безоплатн\w*\s+евакуюва\w*)"
 )
 _ACTUAL_FOUND_RETURN_2330 = re.compile(
-    r"(?iu)\\b(?:знайшл\\w*|знайден\\w*|поверніть|віддам|"
-    r"шукаємо\\s+власник\\w*|на\\s+ім[’']?я)\\b"
+    r"(?iu)\b(?:знайшл\w*|знайден\w*|поверніть|віддам|"
+    r"шукаємо\s+власник\w*|на\s+ім[’']?я)\b"
 )
 
 
