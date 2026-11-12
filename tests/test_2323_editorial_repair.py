@@ -82,7 +82,7 @@ _SCI = {"id": 7, "title": "Pink noise during sleep could help the brain clear wa
 
 def test_copied_placeholder_is_invalid_and_the_next_model_decides():
     answers = ['{"decision":"reject","reason":"конкретне пояснення","angle":""}',
-               '{"decision":"publish","reason":"Дослідники виміряли ефект на 30 людях.","angle":"сон і мозок"}']
+               '{"decision":"publish","reason":"Дослідники виміряли ефект на 30 людях.","angle":"сон і мозок","source_quote":"Researchers measured brain fluid flow in 30 sleeping adults."}']
 
     class Gateway:
         calls = 0

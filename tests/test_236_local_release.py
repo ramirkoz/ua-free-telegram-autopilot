@@ -191,7 +191,7 @@ def test_actual_235_editorial_selector_is_calibrated_and_does_not_run_old_value_
             payload = (
                 '{"decision":"publish","source_quote":"Виробники зробили новий продукт із незвичною функцією.","reason":"конкретна нова функція"}'
                 if "НЕЗАЛЕЖНИЙ РЕДАКТОР" in prompt
-                else '{"decision":"publish","fit_score":22,"reason":"цікава ідея","angle":"суть"}'
+                else '{"decision":"publish","fit_score":22,"reason":"цікава ідея","angle":"суть","source_quote":"Виробники зробили новий продукт із незвичною функцією."}'
             )
             if validator: validator(payload)
             return SimpleNamespace(text=payload,provider='mock',model='fixture')
