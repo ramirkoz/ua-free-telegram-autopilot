@@ -64,7 +64,7 @@ _ACTIVE_RECRUITMENT_2330 = re.compile(
 # Never reject completed employment-service news merely for mentioning hiring.
 _OPEN_RECRUITMENT_2330 = re.compile(
     r"(?iu)(?:\b(?:шукаємо|потрібен|потрібна|потрібні|наймаємо)\s+"
-    r"(?:[\w’'-]+\s+){1,6}|"
+    r"[\w’'-]+(?:\s+[\w’'-]+){0,5}\b|"
     r"\b(?:запрошуємо|запрошує|запрошують)\s+"
     r"(?:[\w’'-]+\s+){0,5}(?:до\s+команди|на\s+роботу|працювати)\b|"
     r"\bвідкрит\w*\s+вакансі\w*\b|"
