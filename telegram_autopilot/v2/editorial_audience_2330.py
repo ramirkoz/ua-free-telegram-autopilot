@@ -80,6 +80,46 @@ _CREATIVE_ACTUAL_WORK = re.compile(
 )
 
 
+# Full 1472 original owner label + RAW SOURCE replay (12.11.2026):
+# 24/153 science negatives were unmistakable discount/coupon/Black-Friday
+# shopping posts; ZERO of 352 owner-positive science posts matched both title
+# and source-body commercial proof. No blanket retail keyword exclusion.
+_SCIENCE_RETAIL_PROMO_TITLE_2330 = re.compile(
+    r"(?iu)(?:\bblack\s+friday\b|\bon\s+sale\b|"
+    r"\b(?:on|at|for)\s+(?:a\s+)?discount\b|\b\d{1,2}%\s+off\b|"
+    r"\b\$\s*\d[\d,]*(?:\.\d+)?\s+off\b|"
+    r"\b(?:best|top)\s+\w+\s+deals?\b|\bbuy\s+now\b|"
+    r"\b(?:early|latest)\s+deals?\b|"
+    r"\b(?:is|are|gets?|got|now)\s+\$\s*\d+\s+off\b|"
+    r"\b(?:savings?|coupon|promo\s+code|discount\s+codes?)\b|"
+    r"\b(?:deals|promo\s+codes?)\s+(?:for|on|at|in|under)\b)"
+)
+_RETAIL_SOURCE_PROOF_2330 = re.compile(
+    r"(?iu)(?:\b(?:discount|save|buy|sale|shop|deal|order|price|"
+    r"black\s+friday|coupon|cart|checkout)\b|\$\s*\d{1,})"
+)
+
+# The same four-workbook source replay found 16 routine agency personnel/
+# account-move announcements among 149 owner-rejected creative stories,
+# with ZERO of 146 selected creative stories caught. This is NOT a blacklist
+# of advertising agencies; genuine original campaigns/designs still pass.
+_CREATIVE_PERSONNEL_PR_TITLE_2330 = re.compile(
+    r"(?iu)\b(?:appoints?|appointed|names?|hires?|hired|promotes?|"
+    r"recruits?|departs?|steps\s+down|"
+    r"joins?\s+(?:the\s+)?(?:team|agency|as)\b|leadership\s+hires?)\b"
+)
+_CREATIVE_PERSONNEL_PR_BODY_2330 = re.compile(
+    r"(?iu)\b(?:agency|creative|campaign|marketing|advertis|"
+    r"business|leadership|executive|managing|director|team)\b"
+)
+_CREATIVE_RETAIL_PROMO_TITLE_2330 = re.compile(
+    r"(?iu)(?:\bsave\s+\d+%|\b\d{1,2}%\s+off|"
+    r"up\s+to\s+\$\d+\s+off|"
+    r"\bblack\s+friday\s+deals?\b|coupon\s+code|"
+    r"\bget\s+\d+%\s+off|\bbest\s+gifts\s+under\b)"
+)
+
+
 def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
     """Return a precise reject reason only when *source* proves a weak story.
 
@@ -95,6 +135,9 @@ def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
         return ""
     lead = body[:5500]
     if role == "science":
+        if (_SCIENCE_RETAIL_PROMO_TITLE_2330.search(title)
+                and _RETAIL_SOURCE_PROOF_2330.search(body[:12000])):
+            return "SCIENCE_RETAIL_PROMOTION_2330"
         if (_MARKET_CONSUMER_TITLE.search(title)
                 and _MARKET_ACCESS_TITLE.search(title)
                 and _MARKET_PRICE.search(title)
@@ -106,9 +149,16 @@ def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
                 and _PC_RETAIL.search(title)
                 and _PC_SOCKET.search(lead)):
             return "SCIENCE_NICHE_PC_ACCESSORY_RELEASE_2330"
-    elif (_MUNICIPAL_ELECTION.search(body)
+    elif role == "creative":
+        if (_CREATIVE_PERSONNEL_PR_TITLE_2330.search(title)
+                and _CREATIVE_PERSONNEL_PR_BODY_2330.search(lead)):
+            return "CREATIVE_AGENCY_PERSONNEL_PR_2330"
+        if (_CREATIVE_RETAIL_PROMO_TITLE_2330.search(title)
+                and _RETAIL_SOURCE_PROOF_2330.search(body[:12000])):
+            return "CREATIVE_RETAIL_PROMOTION_2330"
+        if (_MUNICIPAL_ELECTION.search(body)
           and _ELECTED.search(title)
           and _OFFICE_HOLDER.search(title + "\n" + lead)
-          and not _CREATIVE_ACTUAL_WORK.search(title + "\n" + lead)):
-        return "CREATIVE_OFFTOPIC_LOCAL_ELECTION_2330"
+                and not _CREATIVE_ACTUAL_WORK.search(title + "\n" + lead)):
+            return "CREATIVE_OFFTOPIC_LOCAL_ELECTION_2330"
     return ""
