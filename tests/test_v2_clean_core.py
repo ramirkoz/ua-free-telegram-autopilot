@@ -326,7 +326,9 @@ def test_runtime_channel_isolation_on_ai_outage(tmp_path: Path):
         store.insert_collected(channel_id=cid, source_id=cid, external_id=f"a{cid}",
                                title=f"Article {cid}", source_url=f"https://s{cid}/a",
                                raw_text="body", source_published_at=now_iso())
-    deadline = time.time() + 4
+    # Windows CI under parallel test load can take >4 s to schedule all three
+    # newly started workers. Keep the same required outcomes, allow startup.
+    deadline = time.time() + 15
     try:
         c1 = None
         c2 = c3 = None
