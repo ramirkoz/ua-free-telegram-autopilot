@@ -87,6 +87,11 @@ def test_2330_three_operator_rejected_posts_fail_before_ai_and_at_send(channel, 
 def test_2330_regional_vacancy_blocked_before_ai_and_at_send():
     assert no_announcement_reason_2322(VACANCY) == "MONITORING_JOB_OFFER_2330"
     assert ed.hard_editorial_reject(MONITOR, VACANCY, "Зарплата, подати резюме.") == "MONITORING_JOB_OFFER_2330"
+    # This must run before the paid monitoring AI selector, not just at send.
+    engine = object.__new__(ed.EditorialEngine)
+    result = engine.select(MONITOR, VACANCY)
+    assert result.decision == Decision.REJECT
+    assert "MONITORING_JOB_OFFER_2330" in result.reason
 
 
 @pytest.mark.parametrize("role,article", [
