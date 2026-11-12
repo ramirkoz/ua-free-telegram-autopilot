@@ -103,6 +103,7 @@ def test_cross_article_published_hash_ledger_blocks_reuse():
             db.execute("CREATE TABLE articles(id INTEGER,source_id INTEGER,channel_id INTEGER,source_url TEXT,canonical_source_url TEXT,media_json TEXT,article_layout_json TEXT,published_at TEXT)")
             db.execute("INSERT INTO articles VALUES(1,200,2,'https://site.test/story1','https://site.test/story1','[]','{}','2026')")
             db.execute("INSERT INTO articles VALUES(2,200,2,'https://site.test/story2','https://site.test/story2','[]','{}','')")
+        db.close()  # sqlite3.Connection context manager commits but does not close on Windows
         store = _StoreStub(path)
         first = SimpleNamespace(kind="image", source_url=BLACK, digest="same-binary-sha")
         same_pixels_new_url = SimpleNamespace(kind="image", source_url="https://other.test/photo.jpg", digest="same-binary-sha")

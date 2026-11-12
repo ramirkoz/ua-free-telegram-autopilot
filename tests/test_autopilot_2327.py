@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import gc
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,12 @@ from telegram_autopilot.v2.reader_first import (
 
 
 class Test2327(unittest.TestCase):
+    def tearDown(self):
+        # Windows cannot unlink SQLite when a cyclic test reference holds
+        # a transaction cursor. Collect before the TemporaryDirectory cleanup.
+        self.store = None
+        gc.collect()
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
