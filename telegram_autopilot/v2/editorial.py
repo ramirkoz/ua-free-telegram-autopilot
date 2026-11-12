@@ -2087,9 +2087,24 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        # 2.3.30: writer cannot turn a weak subject into a factual discovery.
+        # No additional AI request; this supplements existing source/fact QA.
+        reader_payoff_instruction = (
+            "РЕДАКТОРСЬКИЙ ТЕКСТ: перше речення називає конкретну доведену "
+            "подію, відкриття, винахід, предмет або оригінальний твір, а не "
+            "починається з «редактори обрали», «компанія розповіла» чи "
+            "самоопису статті. Якщо джерело доводить лише ціну, характеристики "
+            "товару чи локальну кар'єрну історію, НЕ вигадуй технологічної "
+            "значущості чи культурного впливу. Кожен абзац додає окремий факт "
+            "із SOURCE; прибери порожні оцінки, загальні міркування та рекламу. "
+            "Пиши зрозумілою українською для людини поза професією автора "
+            "оригіналу; технічні терміни коротко пояснюй.\n"
+            if channel.mode == ChannelMode.EDITORIAL else ""
+        )
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{reader_payoff_instruction}
 {blueprint.prompt_block()}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
