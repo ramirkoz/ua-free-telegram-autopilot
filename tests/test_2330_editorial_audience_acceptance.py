@@ -263,3 +263,20 @@ def test_2330_calibrated_publish_needs_real_source_quote_without_second_ai_call(
         with pytest.raises(ValueError, match="EDITOR_2330_PUBLISH_WITHOUT_SOURCE_EVIDENCE"):
             engine._select_editorial(SCIENCE, article)
         assert engine.gateway.calls == 1
+
+
+def test_2330_completed_fair_cannot_hide_active_vacancy_cta():
+    # A finished event in the same original article must not whitelist a
+    # new, actionable recruitment ad, including uncommon job titles.
+    article = {
+        "title": "У Запоріжжі завершився ярмарок вакансій",
+        "raw_text": (
+            "У місті відбувся ярмарок вакансій за участі 250 людей. "
+            "Окремо підприємство повідомило: відкрита вакансія "
+            "реставратора музейних експонатів. Надішліть резюме "
+            "для співбесіди; заробітна плата від 24000 грн."
+        ),
+    }
+    reason = no_announcement_reason_2322(article)
+    assert reason in {"MONITORING_JOB_ADVERTISEMENT_2322", "MONITORING_JOB_OFFER_2330"}
+    assert ed.hard_editorial_reject(MONITOR, article, "Повідомлення з вакансією") == reason
