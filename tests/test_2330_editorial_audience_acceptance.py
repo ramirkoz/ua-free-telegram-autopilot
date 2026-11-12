@@ -199,7 +199,7 @@ def test_2330_ready_buffer_rechecks_real_source_policy_without_ai_or_telegram():
         def ready_articles(self, channel_id, limit):
             return [dict(SENATOR, final_text="Короткий локальний сюжет.")]
         def delivery_journal(self, article_id):
-            return {"state":"UNKNOWN"} if self.sent_before else None
+            return {"state":"UNKNOWN"} if self.sent_before else {}
         def reject_editorial_article(self, article_id, reason):
             self.rejected.append((article_id, reason))
 
