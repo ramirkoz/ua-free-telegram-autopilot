@@ -34,6 +34,8 @@ _NOISE_PHRASES = (
     "related_content", "recommended-content", "recommended_content", "recommendation-widget", "recommendation-card", "recommendation_card", "outbrain",
     "taboola", "revcontent", "ad-slot", "ad_slot", "ad-unit", "ad_unit", "ad-container", "ad_container",
     "google-ad", "google_ad", "doubleclick", "native-ad", "native_ad", "commercial-widget",
+    "gear-up", "best-deals", "deal-widget", "shopping-widget", "product-widget",
+    "price-comparison", "deal-carousel", "hawk-widget", "ecommerce-widget",
 )
 _NOISE_EXACT_TOKENS = {
     "ad", "ads", "advert", "banner", "banners", "sponsor", "sponsored",
@@ -198,6 +200,9 @@ class _ArticleHTMLParser(HTMLParser):
         self.page_image_candidates: list[dict[str, object]] = []
         self.explicit_gallery_candidates: list[dict[str, object]] = []
         self.explicit_gallery_signal = False
+        # Creative Bloq embeds global affiliate/product images after "Gear up".
+        # Those are page furniture, not images of the specific story.
+        self._commercial_tail = False
 
     @property
     def in_article(self) -> bool:
@@ -352,14 +357,14 @@ class _ArticleHTMLParser(HTMLParser):
                 if url:
                     self.featured_video = encode_media(kind, url)
 
-        if tag == "img" and not self.skipping:
+        if tag == "img" and not self.skipping and not self._commercial_tail:
             page_candidate = self._image_candidate(values, gallery_hint=True)
             if page_candidate:
                 self.page_image_candidates.append(page_candidate)
                 if len(self.page_image_candidates) > 32:
                     self.page_image_candidates = self.page_image_candidates[-32:]
 
-        if (self.in_article or self.in_gallery) and not self.skipping:
+        if (self.in_article or self.in_gallery) and not self.skipping and not self._commercial_tail:
             if tag == "figure" and self.figure is None:
                 self._finish_text_capture()
                 self.figure = {"depth": self.depth, "candidates": [], "caption_chunks": [], "gallery": bool(self.in_gallery)}
@@ -489,6 +494,14 @@ class _ArticleHTMLParser(HTMLParser):
         text = data
         stripped = " ".join(text.split())
         if not stripped:
+            return
+        # 2.3.28: the common "Gear up" price-comparison section comes
+        # after the illustration. It must never produce article media.
+        if ("creativebloq.com" in self.base_url.casefold()
+                and (self.in_article or self.in_gallery)
+                and stripped.casefold().strip(" !:—.").strip() == "gear up"):
+            self._commercial_tail = True
+        if self._commercial_tail:
             return
         if self.in_title:
             self.title_chunks.append(stripped)
