@@ -154,3 +154,29 @@ def test_2330_a_foreign_country_and_a_price_alone_are_never_vetoes():
         "title":"New $2000 robotic device could save lives in Vietnam",
         "raw_text":"A research lab developed and tested an original disaster-rescue robot."
     }) == ""
+
+
+@pytest.mark.parametrize("title,raw", [
+    ("Шукаємо дизайнера", "Компанія відкрила набір. Надсилайте резюме на пошту; заробітна плата від 20000 грн."),
+    ("Потрібен оператор", "Підприємство пропонує офіційне працевлаштування та робочий графік 5/2."),
+    ("Запрошуємо до команди соціального працівника", "Умови роботи: заробітна плата, оплачувана відпустка."),
+    ("Відкрита вакансія менеджера з проєктів", "Надішліть резюме для співбесіди."),
+])
+def test_2330_unlisted_professions_are_still_classifieds(title, raw):
+    post = {"title": title, "raw_text": raw}
+    assert no_announcement_reason_2322(post) in {
+        "MONITORING_JOB_OFFER_2330", "MONITORING_JOB_ADVERTISEMENT_2322"
+    }
+    assert ed.hard_editorial_reject(MONITOR, post, "Готовий пост") in {
+        "MONITORING_JOB_OFFER_2330", "MONITORING_JOB_ADVERTISEMENT_2322"
+    }
+
+
+@pytest.mark.parametrize("title,raw", [
+    ("У Запоріжжі завершився ярмарок вакансій",
+     "Відбувся ярмарок вакансій. Прийшли 250 мешканців, служба зайнятості підбила підсумки."),
+    ("Область оприлюднила звіт про працевлаштування",
+     "Досліджено рівень зайнятості, заробітна плата в регіоні зросла на 4 відсотки."),
+])
+def test_2330_genuine_completed_jobs_news_is_not_recruitment(title, raw):
+    assert no_announcement_reason_2322({"title": title, "raw_text": raw}) == ""
