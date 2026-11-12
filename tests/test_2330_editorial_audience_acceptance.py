@@ -138,7 +138,7 @@ def test_2330_nontrivial_science_and_creativity_remain_eligible(role, article):
      "Відкрили консультації для безробітних. Міськрада підтвердила рішення та графік послуги."),
     ("У Запоріжжі поранено трьох людей через атаку дрона",
      "Російський дрон влучив у рейсовий автобус. Поранено трьох жінок, допомога надається."),
-]):
+])
 def test_2330_real_civic_news_not_vacancies(title, raw):
     assert no_announcement_reason_2322({"title":title,"raw_text":raw}) == ""
 
