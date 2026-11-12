@@ -114,7 +114,7 @@ def _reject_source_ineligible_ready_2330(store: V2Store, channel_id: int, *, lim
     rejected = 0
     for article in store.ready_articles(channel_id, limit=max(1, int(limit))):
         article_id = int(article["id"])
-        if store.delivery_journal(article_id) is not None:
+        if store.delivery_journal(article_id):
             continue
         reason = hard_editorial_reject(channel, article, str(article["final_text"] or ""))
         if not reason:
@@ -460,7 +460,7 @@ class RuntimeEngine:
                     str(article["source_published_at"] or ""),
                     str(article["discovered_at"] or ""), self.started_at,
                     checkpoint, max_age_hours=editorial_hours,
-                ) and self.store.delivery_journal(article_id) is None:
+                ) and not self.store.delivery_journal(article_id):
                     stale_reason = ""
                     event("worker", "2.3.30 fresh unsent QUEUED retained after short restart",
                           channel_id=channel_id, article_id=article_id,
