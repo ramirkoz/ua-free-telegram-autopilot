@@ -97,7 +97,7 @@ _KAB_OUTAGE = re.compile(r"(?iu)\b(?:каб\w*|авіаудар\w*|авіабо�
 _POWER_LINES = re.compile(r"(?iu)(?:дві|два|2)\s+високовольтн\w*\s+ліні\w*")
 _POWER_CONSUMERS = re.compile(r"(?iu)(?:16[\s\u00a0]*000|16\s*тисяч\w*)\s+споживач\w*")
 _CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b")
-_RESTORED = re.compile(r"(?iu)віднов\w*\s+(?:електро|світл)|знову\s+(?:були|є|будуть)\s+зі\s+світлом")
+_RESTORED = re.compile(r"(?iu)(?:віднов\w*.{0,45}(?:електро|світл)|(?:електро\w*|світл\w*)\s+(?:вже\s+)?віднов\w*|знову\s+(?:були|є|будуть)\s+зі\s+світлом)")
 
 
 def same_confirmed_power_event_228(current: str, prior: str) -> bool:
