@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import re
 
-_BAD_END = re.compile(r"(?u)(?:[:,;–—]|[(\[{]|(?:\\b(?:і|та|але|або|що|який|яка|які|тому|зокрема|за|для|and|or|because)))[\s\u00a0]*$")
 _DANGLING_LIST = re.compile(r"(?m)(?:^|\n)\s*(?:\d+[.)]|[-•])\s*$")
 
 
