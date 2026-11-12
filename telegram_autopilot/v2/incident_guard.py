@@ -93,11 +93,11 @@ def _same_short_fatal_residential_event(current: str, prior: str) -> bool:
 
 # 2.3.28: exact recurrence of the 12 Nov Zaporizhzhia KAB / two power
 # lines / >16k residents outage. Source-owned facts, not AI rewrites.
-_KAB_OUTAGE = re.compile(r"(?iu)\\b(?:каб\\w*|авіаудар\\w*|авіабомб\\w*)\\b")
-_POWER_LINES = re.compile(r"(?iu)(?:дві|два|2)\\s+високовольтн\\w*\\s+ліні\\w*")
-_POWER_CONSUMERS = re.compile(r"(?iu)(?:16[\\s\\u00a0]*000|16\\s*тисяч\\w*)\\s+споживач\\w*")
-_CLOCK = re.compile(r"\\b\\d{1,2}:\\d{2}\\b")
-_RESTORED = re.compile(r"(?iu)віднов\\w*\\s+(?:електро|світл)|знову\\s+(?:були|є|будуть)\\s+зі\\s+світлом")
+_KAB_OUTAGE = re.compile(r"(?iu)\b(?:каб\w*|авіаудар\w*|авіабомб\w*)\b")
+_POWER_LINES = re.compile(r"(?iu)(?:дві|два|2)\s+високовольтн\w*\s+ліні\w*")
+_POWER_CONSUMERS = re.compile(r"(?iu)(?:16[\s\u00a0]*000|16\s*тисяч\w*)\s+споживач\w*")
+_CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b")
+_RESTORED = re.compile(r"(?iu)віднов\w*\s+(?:електро|світл)|знову\s+(?:були|є|будуть)\s+зі\s+світлом")
 
 
 def same_confirmed_power_event_228(current: str, prior: str) -> bool:
