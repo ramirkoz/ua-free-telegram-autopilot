@@ -80,7 +80,16 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     """
     if getattr(channel, "mode", None) != ChannelMode.EDITORIAL:
         return ""
-    if calibrated_editorial_role(channel) != "science":
+    role = calibrated_editorial_role(channel)
+    if role not in {"science", "creative"}:
+        return ""
+    # 2.3.30: independent, evidence-based audience boundary. This entrypoint
+    # is shared by the pre-AI selector AND the final READY/publication gate.
+    from .editorial_audience_2330 import editorial_audience_source_reason_2330
+    audience_reason = editorial_audience_source_reason_2330(role, article)
+    if audience_reason:
+        return audience_reason
+    if role != "science":
         return ""
     try:
         title = str(article["title"] or "")
