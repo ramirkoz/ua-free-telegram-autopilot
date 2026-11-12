@@ -498,7 +498,7 @@ class _ArticleHTMLParser(HTMLParser):
         # 2.3.28: the common "Gear up" price-comparison section comes
         # after the illustration. It must never produce article media.
         if ("creativebloq.com" in self.base_url.casefold()
-                and (self.in_article or self.in_gallery)
+                and (self.article_seen or self.in_article or self.in_gallery)
                 and stripped.casefold().strip(" !:—.").strip() == "gear up"):
             self._commercial_tail = True
         if self._commercial_tail:
