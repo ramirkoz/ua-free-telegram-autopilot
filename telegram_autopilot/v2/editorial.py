@@ -1707,6 +1707,17 @@ SOURCE:
             return EditorialOutcome(Decision.REJECT, reason=source_problem, fit_score=0)
         p = channel.policy
         calibrated_role = calibrated_editorial_role(channel)
+        # 2.3.29: independent SOURCE-only buyer-guide veto before any paid AI.
+        # hard_editorial_reject repeats this at the final Telegram boundary,
+        # including pre-2.3.29 READY rows approved by the old AI selector.
+        if calibrated_role == "science":
+            from .editorial_source_topic_2319 import editorial_source_topic_reason_2319
+            source_topic_problem = editorial_source_topic_reason_2319(channel, article)
+            if source_topic_problem:
+                event("editorial", "science retail source veto",
+                      channel_id=channel.id, article_id=int(_v(article, "id", 0) or 0),
+                      reason=source_topic_problem)
+                return EditorialOutcome(Decision.REJECT, reason=source_topic_problem, fit_score=0)
         # Editorial preference only, not a Fact/Media/Telegram hard-stop.
         operator_promo = source_only_promotion_veto_2312(calibrated_role, article)
         if operator_promo:
