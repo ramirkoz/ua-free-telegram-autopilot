@@ -623,7 +623,7 @@ _RECOMMENDATION_CONTEXT = (
 # genuine dimensions and even "schema_verified" while depicting another story.
 # Check only explicit container membership, never a publisher/country/brand.
 _SITE_WIDGET_CONTEXT_2330 = re.compile(
-    r"(?iu)(?:^|[\\s_\\-/])(?:"
+    r"(?iu)(?:^|[\s_/-])(?:"
     r"related(?:[-_ ](?:posts?|stories|articles|content))?|"
     r"recommend(?:ed|ations?)?|read[-_ ]next|"
     r"you[-_ ]may[-_ ](?:also[-_ ])?like|"
@@ -631,7 +631,7 @@ _SITE_WIDGET_CONTEXT_2330 = re.compile(
     r"more[-_ ]stories|trending|popular[-_ ]posts?|latest[-_ ]posts?|"
     r"product[-_ ]widgets?|shop[-_ ]now|gear[-_ ]up|"
     r"outbrain|taboola"
-    r")(?=$|[\\s_\\-/])"
+    r")(?=$|[\s_/-])"
 )
 
 
