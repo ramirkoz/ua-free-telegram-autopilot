@@ -1766,12 +1766,21 @@ SOURCE:
             "CTRL+UA: наукові відкриття простими словами, роботи, незвичайні "
             "гаджети, ШІ у повсякденному житті, практична кібербезпека, "
             "людські історії про винаходи; не вимагай революційного прориву. "
-            "Суто професійні патчі/купівельні гайди без новини відхиляй."
+            "Суто професійні патчі/купівельні гайди без новини відхиляй. "
+            "Нова ціна скутера на іншому ринку, модель термопрокладки чи дрібний "
+            "компонент для вузького ПК-сокета самі по собі НЕ становлять технологічної "
+            "новини для широкого україномовного читача. Водночас не відхиляй "
+            "справжню інженерну новизну, наукове відкриття чи корисну технологію "
+            "через іноземну країну, бренд або наявність ціни."
             if calibrated_role == "science" else
             "ПРОДАНО!: історії відомих брендів, ігор, попкультури, їжі, "
             "незвичних предметів, колаборацій, рекордів, курйозів та дизайну. "
             "Оригінальна креативна концепція без великого бренду залишається "
-            "повноцінною новиною. Відхиляй рутинний PR і каталоги покупок."
+            "повноцінною новиною. Відхиляй рутинний PR і каталоги покупок. "
+            "Сам факт вірусності сюжету на YouTube або виборів місцевого політика "
+            "не створює креативної ідеї. Покажи конкретний незвичайний твір, "
+            "дизайн, винахід, кампанію чи ширше культурне явище. Не вимагай "
+            "креативу від кожної насправді цікавої людської історії."
             if calibrated_role == "creative" else ""
         )
         selector_header = (
@@ -1783,15 +1792,25 @@ SOURCE:
             "кампанія мають власну цінність без доказів вірусності чи продажів. "
             "Відхиляй рутинний PR, порожні реклами, беззмістовні релізи, "
             "непідтверджені твердження та нерелевантні теми. Виключно SOURCE. "
+            "Перед рішенням запитай: ЯКИЙ саме доведений SOURCE факт робить "
+            "цей сюжет новим, незвичайним або важливим для допитливого "
+            "україномовного читача? Не плутай тематичне слово (електро, "
+            "нанотрубки, YouTube, дизайн) із цінністю новини. "
+            "Якщо конкретну відповідь неможливо дати без загальних фраз — REJECT. "
+            "Це не українсько-географічний фільтр і не вимога сенсаційності. "
             "Не вигадуй деталі."
             if calibrated_role else
             "Ти CHANNEL-FIT SELECTOR Telegram-автопілота. Застосуй політику каналу, перевір реальну значущість для аудиторії. Відхиляй гік-експерименти, фанатські порти, гаражні саморобки без суттєвого прориву чи користі. Для commercial editorial шукай бренд, маркетингову механіку або споживчу поведінку. Брак фактів або контексту означає reject, а не припущення."
         )
         output_contract = (
-            'Поверни тільки JSON із трьома полями (значення визнач сам, не копіюй цей опис): '
+            'Поверни тільки JSON із чотирма полями (не копіюй підказки замість рішення): '
             '"decision" — рівно "publish" або "reject"; '
-            '"reason" — одне речення про ЦЮ статтю: що саме в ній є або чого бракує; '
-            '"angle" — про що буде допис, якщо publish, інакше порожній рядок.'
+            '"reason" — одне конкретне речення про цінність/відсутність цінності саме цієї новини; '
+            '"angle" — факт і кут допису, якщо publish, інакше порожній рядок; '
+            '"source_quote" — для publish ДОСЛІВНА цитата 20–180 символів із SOURCE BODY, '
+            'яка підтверджує головний факт. Не переказуй і не вигадуй цитату. '
+            'Для reject поверни порожню цитату. Якщо конкретного факту, який '
+            'цікавий широкому читачеві, немає, вирішуй reject.'
             if calibrated_role else
             'Для CPU-local fallback одразу оціни також editorial value, щоб не робити '
             'окремий дорогий AI-виклик. Якщо decision="reject", reject_code — один із: '
@@ -1825,9 +1844,17 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             # gateway treats it as an invalid answer and tries the next model.
             if calibrated_role and placeholder_reason(obj.get("reason")):
                 raise ValueError("EDITOR_SELECTOR_PLACEHOLDER_REASON")
+            # 2.3.30: a positive selector may no longer approve a story
+            # based on generic AI enthusiasm or an unverifiable news hook.
+            # Same model call, no extra paid opinion; actual-source excerpt
+            # must be byte-for-byte recoverable after whitespace folding.
+            if calibrated_role and decision == "publish":
+                from .editorial_second_opinion_2320 import verified_second_opinion_2320
+                if not verified_second_opinion_2320(obj, article):
+                    raise ValueError("EDITOR_2330_PUBLISH_WITHOUT_SOURCE_EVIDENCE")
             return obj
 
-        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=170 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
+        fit_result = self.gateway.run(prompt, validator=lambda raw: parse_fit(raw), max_output_tokens=240 if calibrated_role else 210, timeout_seconds=25, purpose="editorial_selector")
         fit = parse_fit(fit_result.text)
         # 2.3.23: calibrated channels no longer ask for a numeric score. The old
         # template showed "fit_score":0, models echoed it, and the echoed value
@@ -2072,9 +2099,24 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        # 2.3.30: writer cannot turn a weak subject into a factual discovery.
+        # No additional AI request; this supplements existing source/fact QA.
+        reader_payoff_instruction = (
+            "РЕДАКТОРСЬКИЙ ТЕКСТ: перше речення називає конкретну доведену "
+            "подію, відкриття, винахід, предмет або оригінальний твір, а не "
+            "починається з «редактори обрали», «компанія розповіла» чи "
+            "самоопису статті. Якщо джерело доводить лише ціну, характеристики "
+            "товару чи локальну кар'єрну історію, НЕ вигадуй технологічної "
+            "значущості чи культурного впливу. Кожен абзац додає окремий факт "
+            "із SOURCE; прибери порожні оцінки, загальні міркування та рекламу. "
+            "Пиши зрозумілою українською для людини поза професією автора "
+            "оригіналу; технічні терміни коротко пояснюй.\n"
+            if channel.mode == ChannelMode.EDITORIAL else ""
+        )
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{reader_payoff_instruction}
 {blueprint.prompt_block()}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
