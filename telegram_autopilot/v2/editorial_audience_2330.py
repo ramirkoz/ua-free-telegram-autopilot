@@ -120,6 +120,43 @@ _CREATIVE_RETAIL_PROMO_TITLE_2330 = re.compile(
 )
 
 
+
+# 13.11.2026, latest operator decision. CTRL+UA reports scientific or
+# technological developments, not consumer app instructions. Target a
+# procedural HOW-TO/LIST headline + consumer app/device in the original source,
+# not every mention of Siri, Google Maps or a numbered research finding.
+_SCIENCE_CONSUMER_TUTORIAL_TITLE_2331 = re.compile(
+    r"(?iu)(?:\bhow\s+to\s+(?:use|set\s+up|enable|measure|find|check|tell|take|transcribe|make|"
+    r"get|turn\s+on|turn\s+off|keep|fix|manage|access)\b|"
+    r"\bhere['’]?s\s+how\s+to\s+(?:use|do|enable|measure|fix|keep|check)\b|"
+    r"\b\d{1,2}\s+(?:clever|smart|easy|useful|handy|hidden|best)?\s*"
+    r"(?:ways?|uses?|tips?|tricks?)\s+(?:for|to|with|in)\b|"
+    r"\b(?:tips|tricks)\s+for\s+using\b)"
+)
+_SCIENCE_CONSUMER_TOOL_2331 = re.compile(
+    r"(?iu)(?:\b(?:google\s+maps|siri|gboard|google\s+workspace|"
+    r"iphone|ipad|android\s+(?:phone|device)|smartphone|"
+    r"camera\s+app|phone\s+camera|router|esim|"
+    r"laptop|windows\s+(?:pc|computer|settings)|"
+    r"chrome\s+browser|mobile\s+app)\b|"
+    r"\b(?:гугл\s+мап|сірі|айфон|айпад|смартфон|еsim|"
+    r"налаштуванн\w+\s+телефон\w*)\b)"
+)
+
+
+# A numbered meme slideshow is not an original creative work or an
+# editorially valuable account of the meme phenomenon. Preserve individual
+# original campaigns and genuinely curated design/architecture roundups.
+_CREATIVE_GENERIC_MEME_LIST_TITLE_2331 = re.compile(
+    r"(?iu)(?:\b\d{2,3}\s+(?:random|funny|hilarious|relatable|ridiculous|"
+    r"best|top|viral|laugh[- ]out[- ]loud|internet|new)"
+    r"[^\n]{0,85}\bmemes?\b|"
+    r"\b\d{2,3}\s+memes?\b|"
+    r"\b(?:memes?|мемів|меми)\b[^\n]{0,75}\b(?:\d{2,3}|добірк\w*)\b)"
+)
+_CREATIVE_GENERIC_MEME_GALLERY_2331 = re.compile(r"(?m)^\s*#\d{1,3}\s*$")
+
+
 def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
     """Return a precise reject reason only when *source* proves a weak story.
 
@@ -135,6 +172,9 @@ def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
         return ""
     lead = body[:5500]
     if role == "science":
+        if (_SCIENCE_CONSUMER_TUTORIAL_TITLE_2331.search(title)
+                and _SCIENCE_CONSUMER_TOOL_2331.search(title)):
+            return "SCIENCE_CONSUMER_HOWTO_NOT_NEWS_2331"
         if (_SCIENCE_RETAIL_PROMO_TITLE_2330.search(title)
                 and _RETAIL_SOURCE_PROOF_2330.search(body[:12000])):
             return "SCIENCE_RETAIL_PROMOTION_2330"
@@ -150,6 +190,9 @@ def editorial_audience_source_reason_2330(role: str, article: Any) -> str:
                 and _PC_SOCKET.search(lead)):
             return "SCIENCE_NICHE_PC_ACCESSORY_RELEASE_2330"
     elif role == "creative":
+        if (_CREATIVE_GENERIC_MEME_LIST_TITLE_2331.search(title)
+                and len(_CREATIVE_GENERIC_MEME_GALLERY_2331.findall(body[:16000])) >= 3):
+            return "CREATIVE_GENERIC_MEME_ROUNDUP_2331"
         if (_CREATIVE_PERSONNEL_PR_TITLE_2330.search(title)
                 and _CREATIVE_PERSONNEL_PR_BODY_2330.search(lead)):
             return "CREATIVE_AGENCY_PERSONNEL_PR_2330"
