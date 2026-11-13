@@ -79,3 +79,25 @@ def test_owner_rejections_work_before_ai_and_at_ready_publish(channel, post, rea
 ])
 def test_all_other_recent_topics_stay_eligible(channel, post):
     assert editorial_source_topic_reason_2319(channel, post) == ""
+
+
+@pytest.mark.parametrize("channel,post", [
+    (SCIENCE, {
+        "title": "5 new AI vision capabilities demonstrated with Siri on iPhone",
+        "raw_text": "Researchers demonstrated five new capabilities in a verifiable experiment, with peer-reviewed measurements and original device architecture.",
+    }),
+    (SCIENCE, {
+        "title": "How to find new particles: laboratory discovers a confirmed technique",
+        "raw_text": "New instrument design and measured collision signal constitute a substantive research finding.",
+    }),
+    (CREATIVE, {
+        "title": "61 memes transformed into one original museum installation by a named artist",
+        "raw_text": "New exhibition from a named artist features one original installation; not a numbered gallery of unrelated pictures.",
+    }),
+    (CREATIVE, {
+        "title": "61 Random Memes That Are Equal Parts Relatable, Ridiculous, And Hilarious",
+        "raw_text": "An original exhibition about visual culture and authorship, not a numbered slideshow, with a clear curator and a new artist-led event.",
+    }),
+])
+def test_new_owner_rule_preserves_real_science_and_original_creativity(channel, post):
+    assert editorial_source_topic_reason_2319(channel, post) == ""
