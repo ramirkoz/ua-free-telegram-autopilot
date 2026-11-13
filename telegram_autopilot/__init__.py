@@ -1,3 +1,3 @@
-"""demo"""
+"""UA FREE Telegram Autopilot."""
 
-__version__ = "2.3.30"
+__version__ = "2.3.31"
