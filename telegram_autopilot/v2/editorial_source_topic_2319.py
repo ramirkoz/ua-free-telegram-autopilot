@@ -89,6 +89,10 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     audience_reason = editorial_audience_source_reason_2330(role, article)
     if audience_reason:
         return audience_reason
+    from .editorial_owner_2332 import editorial_source_reason_2332
+    new_reason = editorial_source_reason_2332(role, article)
+    if new_reason:
+        return new_reason
     if role != "science":
         return ""
     try:
