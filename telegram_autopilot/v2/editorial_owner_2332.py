@@ -137,8 +137,10 @@ def monitoring_source_reason_2332(article: Any) -> str:
         return "MONITORING_FUNDRAISING_APPEAL_2332"
     if _FAREWELL_NOTICE.search(lead):
         return "MONITORING_FUTURE_FUNERAL_NOTICE_2332"
-    # 2.3.33: future burial and dated farewell announcement from exact LIVE
-    # source. A confirmed death and completed memorial are NOT this rule.
+    # 2.3.33: the original LIVE escape says "17 листопада ... відбудеться
+    # поховання". The old guard only recognized "відбудеться прощання".
+    # Reporting a confirmed death is distinct from advertising a *future*
+    # funeral; do not block completed obituaries by generic words like death.
     from .editorial_owner_2333 import future_funeral_notice_reason_2333
     funeral = future_funeral_notice_reason_2333(article)
     if funeral:
@@ -168,7 +170,8 @@ def editorial_source_reason_2332(role: str, article: Any) -> str:
     body = _v(article, "raw_text")[:14000]
     if not title or not body:
         return ""
-    # 2.3.33: hard source boundary before a quote-backed second opinion.
+    # 2.3.33: a source quote is not evidence of channel fit. The independent
+    # second opinion cannot rescue a plain policy-opinion survey as "creative".
     if role == "creative":
         from .editorial_owner_2333 import creative_survey_reason_2333
         outside = creative_survey_reason_2333(article)
