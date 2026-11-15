@@ -465,6 +465,10 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         science_topic_problem = editorial_source_topic_reason_2319(channel, article)
         if science_topic_problem:
             return science_topic_problem
+    from .editorial_owner_2332 import final_artifact_reason_2332
+    final_problem = final_artifact_reason_2332(article, text)
+    if final_problem:
+        return final_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
     if _denied_original_monitoring_source(channel, article):
@@ -485,6 +489,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    # Keep legacy emergency diagnostics stable; the new source veto applies
+    # before paid AI and again to stored READY candidates at send time.
+    from .editorial_owner_2332 import monitoring_source_reason_2332
+    latest_monitoring = monitoring_source_reason_2332(article)
+    if latest_monitoring:
+        return latest_monitoring
     # 2.3.15: immutable source teaser veto before any formatting or Telegram send.
     from .source_safety_2315 import monitoring_invite_bait_reason
     invite_bait = monitoring_invite_bait_reason(article)
