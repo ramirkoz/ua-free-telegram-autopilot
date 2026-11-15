@@ -137,6 +137,12 @@ def monitoring_source_reason_2332(article: Any) -> str:
         return "MONITORING_FUNDRAISING_APPEAL_2332"
     if _FAREWELL_NOTICE.search(lead):
         return "MONITORING_FUTURE_FUNERAL_NOTICE_2332"
+    # 2.3.33: future burial and dated farewell announcement from exact LIVE
+    # source. A confirmed death and completed memorial are NOT this rule.
+    from .editorial_owner_2333 import future_funeral_notice_reason_2333
+    funeral = future_funeral_notice_reason_2333(article)
+    if funeral:
+        return funeral
     if _HOTLINE_NOTICE.search(lead) and _HOTLINE_FUTURE.search(source[:900]):
         return "MONITORING_HOTLINE_INVITATION_2332"
     if _RITUAL_GREETING.search(lead):
@@ -162,6 +168,12 @@ def editorial_source_reason_2332(role: str, article: Any) -> str:
     body = _v(article, "raw_text")[:14000]
     if not title or not body:
         return ""
+    # 2.3.33: hard source boundary before a quote-backed second opinion.
+    if role == "creative":
+        from .editorial_owner_2333 import creative_survey_reason_2333
+        outside = creative_survey_reason_2333(article)
+        if outside:
+            return outside
     if role == "science":
         if _SCIENCE_WALKTHROUGH_HEAD.search(title) and _SIMULATOR_WALKTHROUGH_BODY.search(body[:4500]):
             return "SCIENCE_SIMULATOR_TUTORIAL_NOT_NEWS_2332"
