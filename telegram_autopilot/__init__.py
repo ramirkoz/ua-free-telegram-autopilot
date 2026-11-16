@@ -1,3 +1,3 @@
 """UA FREE Telegram Autopilot."""
 
-__version__ = "2.3.34"
+__version__ = "2.3.35"
