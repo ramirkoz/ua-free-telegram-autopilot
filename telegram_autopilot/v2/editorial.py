@@ -56,6 +56,7 @@ from .final_claim_delta_251 import FINAL_CLAIM_REVIEW_RULE, draft_final_regressi
 from .editorial_tone_254 import editorial_tone_rules
 from .commercial_reader_256 import COMMERCIAL_READER_RULE_256, commercial_reader_veto_256
 from .editorial_human_calibration_236 import calibrated_editorial_role
+from .editorial_owner_235 import SCIENCE_GUIDANCE_235, CREATIVE_GUIDANCE_235, REGIONAL_GUIDANCE_235
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
@@ -1450,6 +1451,7 @@ class EditorialEngine:
             return EditorialOutcome(Decision.PUBLISH, reason="MONITORING_PASS: explicit inclusion/exclusion empty; interest gates disabled", fit_score=100, angle="Передай факт точно і стисло.")
         types = "\n".join(f"- {key}: {label}" for key, label in MONITORING_EVENT_TYPES.items())
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
+{REGIONAL_GUIDANCE_235}
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:
 {inclusion or 'Не задано: inclusion виконаний.'}
@@ -1831,7 +1833,10 @@ SOURCE:
             '"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,'
             '"why_now":0,"curiosity_only":false}'
         )
+        owner_235 = (SCIENCE_GUIDANCE_235 if calibrated_role == "science" else
+                     CREATIVE_GUIDANCE_235 if calibrated_role == "creative" else "")
         prompt = f"""{selector_header}
+{owner_235}
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {science_audience_instruction}
