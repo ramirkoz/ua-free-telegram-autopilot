@@ -494,6 +494,7 @@ class RuntimeEngine:
                            status_detail=?,last_error_code='EDITORIAL_HARD_REJECT',
                            last_error_detail=?,next_retry_at=''
                        WHERE id=? AND channel_id=? AND decision='PENDING'
+                         AND source_published_at=? AND discovered_at=? AND source_id=?
                          AND stage IN ('COLLECTED','EXTRACTED')
                          AND blocked_by='NONE'
                          AND COALESCE(published_at,'')=''
@@ -513,7 +514,9 @@ class RuntimeEngine:
                                  'approve','edit','publish_attempt','publish_now'
                              )
                          )""",
-                    (detail, detail, detail, int(row["id"]), int(channel_id)),
+                    (detail, detail, detail, int(row["id"]), int(channel_id),
+                     str(row["source_published_at"] or ""),
+                     str(row["discovered_at"] or ""), int(row["source_id"])),
                 ).rowcount
                 if changed:
                     con.execute(
