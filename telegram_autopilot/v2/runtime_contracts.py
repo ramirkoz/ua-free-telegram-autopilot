@@ -268,7 +268,10 @@ def _install_ai_efficiency_contract() -> None:
             if commercial and not calibrated_role else ""
         )
         if calibrated_role:
-            prompt = f"""Ти редактор Telegram-каналу. Визнач, чи це НОВА, конкретна,
+            from .editorial_owner_235 import SCIENCE_GUIDANCE_235, CREATIVE_GUIDANCE_235
+            owner_guidance = SCIENCE_GUIDANCE_235 if calibrated_role == "science" else CREATIVE_GUIDANCE_235
+            prompt = f"""{owner_guidance}
+Ти редактор Telegram-каналу. Визнач, чи це НОВА, конкретна,
 цікава і перевірена інформація у тематиці каналу. Не вимагай надзвичайного
 прориву, масового впливу, продажів або вірусного ефекту. Для CTRL+UA:
 наука, космос, ШІ, кібербезпека, робототехніка, цікаві технології. Для
