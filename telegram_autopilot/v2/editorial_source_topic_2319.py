@@ -83,6 +83,11 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     role = calibrated_editorial_role(channel)
     if role not in {"science", "creative"}:
         return ""
+    # 2.3.35: operator-red false-positive controls, topic only; no fact bypass.
+    from .editorial_owner_235 import owner_source_veto_235
+    owner_veto = owner_source_veto_235(role, article)
+    if owner_veto:
+        return owner_veto
     # 2.3.30: independent, evidence-based audience boundary. This entrypoint
     # is shared by the pre-AI selector AND the final READY/publication gate.
     from .editorial_audience_2330 import editorial_audience_source_reason_2330
