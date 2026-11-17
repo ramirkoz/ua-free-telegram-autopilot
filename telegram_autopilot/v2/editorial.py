@@ -59,6 +59,7 @@ from .editorial_human_calibration_236 import calibrated_editorial_role
 from .editorial_owner_235 import SCIENCE_GUIDANCE_235, CREATIVE_GUIDANCE_235, REGIONAL_GUIDANCE_235
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
+from .editorial_voice_2337 import newsroom_voice_2337, needs_voice_editor_2337
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
 
 # 2.2.4: values that mean the model copied the schema instead of deciding.
@@ -2090,6 +2091,11 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        newsroom_voice = newsroom_voice_2337(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'ОБОВ\'ЯЗКОВО: у першому абзаці природно вживи точну назву «{source_context}» хоча б один раз. '
@@ -2156,6 +2162,7 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 потім поясни його зміст простими словами, додай лише перевірені подробиці.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
 Якщо SOURCE містить кілька незалежних тем (наприклад, ювілей будівлі й прогноз погоди), вибери лише одну підтверджену подію, відповідну SOURCE TITLE; не домішуй сторонній прогноз до культурної новини.
+{newsroom_voice}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
@@ -2242,6 +2249,9 @@ SOURCE:
                 or bool(language_quality_issues(draft))
                 or bool(human_style_issues(draft))
                 or needs_grammar_polish(draft)
+                or needs_voice_editor_2337(
+                    draft, monitoring=channel.mode == ChannelMode.MONITORING,
+                )
             ),
         )
         if needs_trusted_editor:
@@ -2326,6 +2336,12 @@ SOURCE:
             science=is_science_general_channel(channel),
             final=True,
         )
+        newsroom_voice = newsroom_voice_2337(
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+            final=True,
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
@@ -2365,7 +2381,7 @@ SOURCE:
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
