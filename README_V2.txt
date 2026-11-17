@@ -1,4 +1,4 @@
-UA FREE Telegram Autopilot V2 2.3.37 (Windows Portable QA)
+UA FREE Telegram Autopilot V2 2.3.38 (Windows Portable QA)
 
 1) Stop the old Autopilot.
 2) Extract this ZIP into a NEW directory.
@@ -7,8 +7,8 @@ UA FREE Telegram Autopilot V2 2.3.37 (Windows Portable QA)
 5) Check Data\supervisor\status.json and Telegram posts.
 
 Includes Python 3.12 x64, dependencies and launcher from v2.3.33 validated Windows baseline.
-Editorial code v2.3.37 based on v2.3.36. Targeted Linux pytest PASS; full suite/native Windows pending.
-Windows native startup, Defender and operator 24-48h editorial acceptance NOT VERIFIED.
+Source-only v2.3.38 candidate based on v2.3.37; no Windows Portable built for v2.3.38 yet.
+Tests/native Windows/Defender and operator editorial acceptance for v2.3.38 NOT VERIFIED.
 No Data or passwords bundled. Never run two instances against same Data.
 
-2.3.37 writing style: all three channels receive source-only newsroom voice; substantive approved drafts additionally use existing trusted editor when feasible.
+Retains v2.3.37 newsroom voice. An HTTP 410 / end-of-life AI model receives a model-scoped 30-day cooldown; ordinary model-not-found still 6h.

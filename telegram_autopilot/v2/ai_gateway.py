@@ -256,7 +256,13 @@ def _failure_meta(exc: Exception) -> tuple[ProviderState, int, str]:
         if "usage limit" in text or "credits exhausted" in text:
             return ProviderState.QUOTA, min(14 * 24 * 3600, max(60, retry_after)) if retry_after > 0 else 3600, "model"
         return ProviderState.QUOTA, min(6 * 3600, max(300, retry_after or 900)), "model"
-    if kind in {"gone", "model"} or any(x in text for x in ("model_not_found", "model unavailable", "unknown model", "end of life")):
+    # An HTTP 410 or explicit end-of-life is permanent; do not retry every
+    # six hours. The quarantine is scoped to this model, never the provider.
+    status = int(getattr(exc, "status", 0) or 0)
+    if status == 410 or kind == "gone" or any(x in text for x in ("end of life", "no longer available")):
+        return ProviderState.MODEL_UNSUPPORTED, 30 * 24 * 3600, "model"
+    # A plain 404 or unknown model may still be a temporary catalog problem.
+    if kind == "model" or any(x in text for x in ("model_not_found", "model unavailable", "unknown model")):
         return ProviderState.MODEL_UNSUPPORTED, 6 * 3600, "model"
     if kind == "request_too_large" or any(x in text for x in ("request too large", "context length", "context_length")):
         return ProviderState.MODEL_UNSUPPORTED, 0, "task"

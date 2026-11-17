@@ -1,4 +1,4 @@
-# UA FREE Telegram Autopilot v2.3.37 (editorial QA candidate)
+# UA FREE Telegram Autopilot v2.3.38 (editorial QA candidate)
 
 Windows Portable автопілот для збору, відбору, редактури та публікації контенту в Telegram з опційним кроспостингом у Facebook.
 
@@ -29,4 +29,4 @@ README.txt
 
 При штатному оновленні `Data` і `Tools` зберігаються. При закритті V2 runtime явно завершує власний LanguageTool JVM, щоб стара папка не залишалася заблокованою `java.exe`.
 
-Поточна гілка розробки: **v2.3.37** (лише source QA; офіційний реліз після CI, native Windows/Defender і перевірки живих публікацій). Операторський LIVE підтверджено як **v2.3.35** 17.11.2026 10:40 за телеметрією; 2.3.37 ще не встановлено..
+Поточна гілка розробки: **v2.3.38** (DRAFT source QA; не Windows-реліз). 2.3.37 операторський LIVE з 17.11.2026 19:48 Київ. 2.3.38 не встановлена; QA/Windows/Defender/LIVE приймання очікуються.
