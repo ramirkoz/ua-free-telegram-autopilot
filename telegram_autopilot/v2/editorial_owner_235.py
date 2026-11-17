@@ -103,14 +103,14 @@ _BULK_ROUNDUP_SIGNAL_235 = re.compile(
     r"people|parents|guests|influencers|women|men|"
     r"gifts?|finds?|tips?|things?|facts?|"
     r"signs?|notes?|projects?|comics?|ads?|"
-    r"snacks?|foods?|picks?|restaurants?|"
+    r"snacks?|foods?|picks?|restaurants?|solvers?|mothers.in.law|liars?|"
     r"ranked|before.and.afters?|photos?graphers?)\b"
 )
 # Deliberate *review-only* positive control, the one numbered owner-GREEN
 # headline. The article is NOT auto-approved: the LLM and source/fact gates
 # must still independently judge it. Avoid a general 'relationships pass' rule.
 _OWNER_GREEN_RELATIONSHIP_EXCEPTION_235 = re.compile(
-    r"(?iu)^\s*\d{2,3}\s+women\s+share\s+the\s+final\s+straw\b"
+    r"(?iu)^\s*66\s+(?:women\s+share\s+the\s+final\s+straw|real\s+breakup\s+stories\s+shared\s+by\s+women)\b"
 )
 
 
