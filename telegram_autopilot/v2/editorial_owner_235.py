@@ -91,6 +91,28 @@ _CREATIVE_GENERIC_SHOPPING = re.compile(
     r"(?iu)\b(?:gift\s+guide|our\s+picks|shopping\s+list|buying\s+guide)\b"
 )
 
+# Owner-reviewed 13–16 Nov: 51 of 52 creative headlines starting with a
+# two/three-digit count were RED, including 47/48 Bored Panda enumerations.
+# This is a genre preference, NOT a ban on one publisher, all photography,
+# all human interest or numbers describing real research/events.
+_BULK_ROUNDUP_COUNT_235 = re.compile(r"(?iu)^\s*[1-9][0-9]{1,2}\s+")
+_BULK_ROUNDUP_SIGNAL_235 = re.compile(
+    r"(?iu)\b(?:memes?|pics?|photos?|posts?|tweets?|times|"
+    r"images?|stories|opinions?|comments?|responses?|moments?|"
+    r"takes|fails?|secrets?|confessions?|screenshots?|"
+    r"people|parents|guests|influencers|women|men|"
+    r"gifts?|finds?|tips?|things?|facts?|"
+    r"signs?|notes?|projects?|comics?|ads?|"
+    r"snacks?|foods?|picks?|restaurants?|"
+    r"ranked|before.and.afters?|photos?graphers?)\b"
+)
+# Deliberate *review-only* positive control, the one numbered owner-GREEN
+# headline. The article is NOT auto-approved: the LLM and source/fact gates
+# must still independently judge it. Avoid a general 'relationships pass' rule.
+_OWNER_GREEN_RELATIONSHIP_EXCEPTION_235 = re.compile(
+    r"(?iu)^\s*\d{2,3}\s+women\s+share\s+the\s+final\s+straw\b"
+)
+
 
 def _field(row: Any, key: str) -> str:
     try:
@@ -124,6 +146,13 @@ def owner_source_veto_235(role: str, article: Any) -> str:
         if _SCIENCE_INSTRUCTION.search(title) and _SCIENCE_CARPLAY_SETTINGS.search(title):
             return "SCIENCE_CARPLAY_SETTINGS_NOT_NEWS_235"
     else:
+        # Source-only genre veto: owner rejected 51/52 numbered creative
+        # compilations, not merely ones missing concrete examples. This gate
+        # runs in selection AND prepublish, preserving safety and dedupe.
+        if (_BULK_ROUNDUP_COUNT_235.search(title)
+                and _BULK_ROUNDUP_SIGNAL_235.search(title)
+                and not _OWNER_GREEN_RELATIONSHIP_EXCEPTION_235.search(title)):
+            return "CREATIVE_ENUMERATED_SOCIAL_ROUNDUP_OWNER_RED_235"
         if _CREATIVE_GENERIC_GIFT_LIST.search(title) and _CREATIVE_GENERIC_SHOPPING.search(body):
             return "CREATIVE_GENERIC_GIFT_SHOPPING_LIST_235"
     return ""
