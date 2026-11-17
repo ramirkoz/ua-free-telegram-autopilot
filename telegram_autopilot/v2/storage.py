@@ -1734,7 +1734,7 @@ class V2Store:
         with self.connect() as con:
             return list(con.execute(
                 """SELECT a.*,s.name AS source_name
-                   FROM articles a JOIN sources s ON s.id=a.source_id
+                   FROM articles a JOIN sources s ON s.id=a.source_id AND s.enabled=1
                    WHERE a.channel_id=? AND a.stage='READY' AND a.decision='PUBLISH'
                      AND (a.blocked_by='NONE' OR (a.next_retry_at<>'' AND datetime(a.next_retry_at)<=datetime(?)))
                    ORDER BY
