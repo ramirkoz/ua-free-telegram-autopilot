@@ -1,4 +1,4 @@
-"""13.11.2026 owner feedback: decline meme lists and consumer how-to posts.
+"""13 Nov operator correction; 17 Nov owner-235 genre veto has priority over this older rule.
 
 No network, AI calls, Telegram publishing, or operator Data mutations.
 Newer operator preference overrides six older science tutorial positive labels.
@@ -41,7 +41,7 @@ CREATIVE = ChannelConfig(
     (CREATIVE, {
         "title": "61 Random Memes That Are Equal Parts Relatable, Ridiculous, And Hilarious",
         "raw_text": "#1\n#2\n#3\n#4\nGeneric recycled jokes without original creators, a campaign or new event. The list provides numbered images and no original creative achievement.",
-    }, "CREATIVE_GENERIC_MEME_ROUNDUP_2331"),
+    }, "CREATIVE_ENUMERATED_SOCIAL_ROUNDUP_OWNER_RED_235"),
 ])
 def test_owner_rejections_work_before_ai_and_at_ready_publish(channel, post, reason):
     assert editorial_source_topic_reason_2319(channel, post) == reason
