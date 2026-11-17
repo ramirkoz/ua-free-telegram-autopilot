@@ -106,3 +106,30 @@ def test_monitoring_explicit_hard_announcement_policy_still_applies():
     post={"title":"17 листопада у Запоріжжі відбудеться поховання захисника",
           "raw_text":"17 листопада у Запоріжжі відбудеться поховання військовослужбовця. Місто повідомило місце церемонії."}
     assert monitoring_source_reason_2332(post)=="MONITORING_FUTURE_FUNERAL_NOTICE_2333"
+
+
+@pytest.mark.parametrize("title", [
+    "55 People Who Signed NDAs Reveal Just Enough To Leave You Desperately Curious About All The Rest",
+    "79 Random Memes That Have No Business Being This Relatable",
+    "40 Nostalgic-Looking Photos Shared By Photographers On Threads",
+    "55 Divorce Lawyers Share Dirty Secrets About Couples That Had No Business Being This Messy",
+    "64 Nightmare Guests Who Made Themselves Way Too Comfortable In Someone Else's Home",
+])
+def test_owner_red_numbered_social_roundups_never_reach_publish(title):
+    post={"title":title,"raw_text":"The source includes numbered anonymous social media submissions, photos, memes or opinions."}
+    reason="CREATIVE_ENUMERATED_SOCIAL_ROUNDUP_OWNER_RED_235"
+    assert editorial_source_topic_reason_2319(CRE, post)==reason
+    assert hard_editorial_reject(CRE, post, "Old READY story") == reason
+    ed=object.__new__(EditorialEngine)
+    assert ed.select(CRE,post).decision == Decision.REJECT
+
+
+@pytest.mark.parametrize("title", [
+    "66 Women Share The Final Straw That Made Staying With Him No Longer An Option",
+    "66 real breakup stories shared by women",
+    "The 1839 Awards Announce Winners of Photographer of the Year (39 Pics)",
+    "39 artists win an international photography competition",
+])
+def test_owner_positive_66_women_and_award_report_not_genre_blocked(title):
+    post={"title":title,"raw_text":"Original source with article text and independent reviewable facts, subject to subsequent editorial and fact QA."}
+    assert owner_source_veto_235("creative", post)==""
