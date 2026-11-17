@@ -2323,6 +2323,7 @@ class V2Store:
                 row=con.execute(
                     """SELECT j.* FROM jobs j JOIN articles a ON a.id=j.article_id
                        JOIN channels c ON c.id=j.channel_id
+                       JOIN sources s ON s.id=a.source_id AND s.enabled=1
                        WHERE j.state IN ('QUEUED','WAITING')
                          AND datetime(j.available_at)<=datetime('now')
                          AND a.decision='PENDING'"""
