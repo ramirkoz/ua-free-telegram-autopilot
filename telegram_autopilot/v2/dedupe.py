@@ -199,7 +199,8 @@ class DedupeEngine:
             if channel.mode == ChannelMode.MONITORING:
                 from .editorial_live_2339 import recent_committed_source_duplicate
                 confirmed = recent_committed_source_duplicate(
-                    self.store, int(current["channel_id"]), article_id, current
+                    self.store, int(current["channel_id"]), article_id, current,
+                    window_hours=int(channel.published_dedupe_window_hours),
                 )
                 if confirmed:
                     self._mark_duplicate(article_id, confirmed, "confirmed source-fact event in COMMITTED history")
