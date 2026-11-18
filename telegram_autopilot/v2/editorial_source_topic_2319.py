@@ -83,6 +83,13 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     role = calibrated_editorial_role(channel)
     if role not in {"science", "creative"}:
         return ""
+    # 2.3.39: owner-rejected ordinary rescue stories are not creative news.
+    # Source-only veto runs both before paid AI and at the final READY gate.
+    if role == "creative":
+        from .editorial_live_2339 import creative_routine_pet_rescue_reason
+        rescue = creative_routine_pet_rescue_reason(article)
+        if rescue:
+            return rescue
     # 2.3.35: operator-red false-positive controls, topic only; no fact bypass.
     from .editorial_owner_235 import owner_source_veto_235
     owner_veto = owner_source_veto_235(role, article)
