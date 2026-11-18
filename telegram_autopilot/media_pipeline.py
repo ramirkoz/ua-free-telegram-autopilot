@@ -785,7 +785,21 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and resolved.gallery and _in_story_gallery(resolved, title=title, article_text=article_text):
+            # 2.3.40: Creative Boom's gallery markup may include site-wide
+            # images. A gallery class or schema flag alone does not prove
+            # article ownership: require article-specific image metadata.
+            creativeboom = (urlsplit(source_url).hostname or '').casefold().endswith('creativeboom.com')
+            title_hits, body_hits, _ = _semantic_media_evidence(
+                resolved, title=title, article_text=article_text)
+            article_owned_gallery = (
+                not creativeboom or not resolved.gallery or resolved.page_declared or
+                title_hits >= 1 or body_hits >= 2
+            )
+            if not article_owned_gallery:
+                dropped('creativeboom_gallery_not_bound_to_story_2340')
+                continue
+            if (marketing_context and not semantic_ok and resolved.gallery
+                    and _in_story_gallery(resolved, title=title, article_text=article_text)):
                 # Keep genuine creative galleries even when alt text is blank;
                 # disallow repeated sitewide art via cross-story source guard.
                 resolved.relevance_score = max(40.0, resolved.relevance_score)
