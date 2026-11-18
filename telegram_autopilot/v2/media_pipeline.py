@@ -60,6 +60,28 @@ class MediaBundle:
         return [item.encoded for item in self.items]
 
 
+def single_captioned_album_2340(bundle: MediaBundle) -> MediaBundle:
+    """At most 10 ordered source-owned assets in one Telegram album.
+
+    Call after the source-media parity check, before download or SENDING.
+    A diagnostic event records omitted candidates separately.
+    """
+    if bundle.count <= 10:
+        return bundle
+    from dataclasses import replace
+    omitted = bundle.count - 10
+    reasons = dict(bundle.drop_reasons or ())
+    reasons['single_captioned_album_limit_2340'] = reasons.get('single_captioned_album_limit_2340', 0) + omitted
+    return replace(
+        bundle, items=bundle.items[:10],
+        declared_media_count=min(bundle.declared_media_count or 10, 10),
+        source_media_count=min(bundle.source_media_count or 10, 10),
+        gallery_items_kept=min(bundle.gallery_items_kept, 10),
+        filtered_media_count=bundle.filtered_media_count + omitted,
+        drop_reasons=tuple(sorted(reasons.items())),
+    )
+
+
 def build_media_bundle(article: Mapping[str, Any] | Any, *, max_items: int = 24) -> MediaBundle:
     """Build the raw source-owned media bundle without mode decisions."""
     try:
