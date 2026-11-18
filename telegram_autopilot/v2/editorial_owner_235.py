@@ -153,9 +153,18 @@ def owner_source_veto_235(role: str, article: Any) -> str:
         # Source-only genre veto: owner rejected 51/52 numbered creative
         # compilations, not merely ones missing concrete examples. This gate
         # runs in selection AND prepublish, preserving safety and dedupe.
+        # 2.3.39: a real authored artwork/exhibition is not a slideshow,
+        # even if the headline starts with a number or says "memes".
+        # Require original-source evidence of both an ARTWORK and its maker.
+        original_art = bool(
+            re.search(r"(?iu)\b(?:original\s+(?:museum\s+)?installation|original\s+exhibition|artist-led\s+event)\b", body)
+            and re.search(r"(?iu)\b(?:artist|curator|exhibition|museum)\b", body)
+            and not re.search(r"(?iu)\bnot\s+(?:an?\s+)?original\s+(?:exhibition|installation)\b", body)
+        )
         if (_BULK_ROUNDUP_COUNT_235.search(title)
                 and _BULK_ROUNDUP_SIGNAL_235.search(title)
-                and not _OWNER_GREEN_RELATIONSHIP_EXCEPTION_235.search(title)):
+                and not _OWNER_GREEN_RELATIONSHIP_EXCEPTION_235.search(title)
+                and not original_art):
             return "CREATIVE_ENUMERATED_SOCIAL_ROUNDUP_OWNER_RED_235"
         if _CREATIVE_GENERIC_GIFT_LIST.search(title) and _CREATIVE_GENERIC_SHOPPING.search(body):
             return "CREATIVE_GENERIC_GIFT_SHOPPING_LIST_235"
