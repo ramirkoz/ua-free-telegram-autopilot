@@ -618,6 +618,29 @@ _RECOMMENDATION_CONTEXT = (
     "trending", "popular", "you-may-like", "also-like", "outbrain", "taboola",
 )
 
+# 2.3.30: a CMS 'gallery' or schema flag does not prove that its DOM container
+# belongs to this article. A site-wide sidebar/related-story image can carry
+# genuine dimensions and even "schema_verified" while depicting another story.
+# Check only explicit container membership, never a publisher/country/brand.
+_SITE_WIDGET_CONTEXT_2330 = re.compile(
+    r"(?iu)(?:^|[\s_/-])(?:"
+    r"related(?:[-_ ](?:posts?|stories|articles|content))?|"
+    r"recommend(?:ed|ations?)?|read[-_ ]next|"
+    r"you[-_ ]may[-_ ](?:also[-_ ])?like|"
+    r"sidebar|side[-_ ]rail|site[-_ ]wide|"
+    r"more[-_ ]stories|trending|popular[-_ ]posts?|latest[-_ ]posts?|"
+    r"product[-_ ]widgets?|shop[-_ ]now|gear[-_ ]up|"
+    r"outbrain|taboola"
+    r")(?=$|[\s_/-])"
+)
+
+
+def _site_widget_media_2330(item: PreparedMedia) -> bool:
+    # Context is retained by the article extractor from HTML ancestry.
+    # Caption, title, alt, image filename and surrounding news copy cannot
+    # negate direct evidence that a block lives in a shared recommendation rail.
+    return bool(_SITE_WIDGET_CONTEXT_2330.search(str(item.context or "")))
+
 
 def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> bool:
     """Whether a gallery block may use the commercial weak-alt relaxation.
@@ -671,6 +694,9 @@ def prepare_article_media(
     if featured and _media_identity(featured.url) in excluded_identities:
         featured = None
         dropped("already_published")
+    if featured and featured.kind == "image" and _site_widget_media_2330(featured):
+        featured = None
+        dropped("site_wide_widget_media_2330")
     if featured and featured.kind == "image":
         foreign_reason = _foreign_story_image_reason(featured, source_url=source_url)
         if foreign_reason:
@@ -712,6 +738,11 @@ def prepare_article_media(
         seen_urls.add(featured.url)
         seen_identities.add(_media_identity(featured.url))
     for item in body:
+        # Apply before classification, schema/page declarations and the
+        # weak-alt creative-gallery relaxation, including inherited READY.
+        if _site_widget_media_2330(item):
+            dropped("site_wide_widget_media_2330")
+            continue
         foreign_reason = _foreign_story_image_reason(item, source_url=source_url)
         if foreign_reason:
             dropped(foreign_reason)

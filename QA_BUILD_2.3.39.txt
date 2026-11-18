@@ -1,0 +1,9 @@
+Autopilot 2.3.39 Windows Portable QA candidate, 18.11.2026
+
+Contains original 2.3.36 Windows x64 portable Python/runtime plus the reviewed latest
+2.3.37 newsroom, 2.3.38 model retirement and 2.3.39 editorial source/dedupe code.
+177 targeted and related tests PASS on Linux Python 3.13; full suite timed out
+without a final PASS. Native Windows, Defender and operator LIVE QA not verified.
+Not a signed release or approval to overwrite running Data.
+Never run two copies against same Data. Back up operator Data and stop old process.
+Operator LIVE remains 2.3.37 until a user installs newer QA and telemetry confirms.

@@ -23,6 +23,8 @@ _CREATIVE = re.compile(
     r"prototype|invention|gadget|device|concept|"
     r"home|house|ring|oled|e.?ink|visual|"
     r"illustration|sculpture|gaming|game|"
+    r"relationship|romance|breakup|couples?|psycholog|"
+    r"human\s+(?:behavio?r|story)|unusual\s+animal|"
     r"furniture|packaging|logo|object|"
     r"дизайн|креатив|реклам|кампані|прототип|"
     r"пристр|винахід|будин|перст|ілюзі|упаков|"
@@ -80,6 +82,8 @@ SECOND_OPINION_INSTRUCTION_2320 = """
 Самостійно виріши: чи є в SOURCE конкретна новина, оригінальна форма,
 креативна механіка, незвична функція або перевірений науковий результат?
 Для ПРОДАНО! не вимагай вірусності, ROI чи рекламного бюджету.
+Цікаві підтверджені людські історії, психологія стосунків,
+незвичайна поведінка тварин і попкультура можуть бути самостійною темою.
 Відхиляй звичайний PR, добірки покупок, слабкі каталогові описи,
 спекуляції й бездоказові твердження. Не вигадуй цікавинку.
 Якщо обираєш publish, процитуй ДОСЛІВНО 20–180 символів

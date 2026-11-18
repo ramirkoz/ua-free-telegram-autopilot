@@ -80,7 +80,32 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     """
     if getattr(channel, "mode", None) != ChannelMode.EDITORIAL:
         return ""
-    if calibrated_editorial_role(channel) != "science":
+    role = calibrated_editorial_role(channel)
+    if role not in {"science", "creative"}:
+        return ""
+    # 2.3.39: owner-rejected ordinary rescue stories are not creative news.
+    # Source-only veto runs both before paid AI and at the final READY gate.
+    if role == "creative":
+        from .editorial_live_2339 import creative_routine_pet_rescue_reason
+        rescue = creative_routine_pet_rescue_reason(article)
+        if rescue:
+            return rescue
+    # 2.3.35: operator-red false-positive controls, topic only; no fact bypass.
+    from .editorial_owner_235 import owner_source_veto_235
+    owner_veto = owner_source_veto_235(role, article)
+    if owner_veto:
+        return owner_veto
+    # 2.3.30: independent, evidence-based audience boundary. This entrypoint
+    # is shared by the pre-AI selector AND the final READY/publication gate.
+    from .editorial_audience_2330 import editorial_audience_source_reason_2330
+    audience_reason = editorial_audience_source_reason_2330(role, article)
+    if audience_reason:
+        return audience_reason
+    from .editorial_owner_2332 import editorial_source_reason_2332
+    new_reason = editorial_source_reason_2332(role, article)
+    if new_reason:
+        return new_reason
+    if role != "science":
         return ""
     try:
         title = str(article["title"] or "")

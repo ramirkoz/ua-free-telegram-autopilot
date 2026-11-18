@@ -100,6 +100,33 @@ def _ready_buffer_counts(store: V2Store, channel_id: int) -> tuple[int, int]:
     return int(row["total"] or 0), int(row["usable"] or 0)
 
 
+def _reject_source_ineligible_ready_2330(store: V2Store, channel_id: int, *, limit: int = 4) -> int:
+    """Free READY capacity from posts the current publish hard gate will veto.
+
+    Run only on buffer pressure, not on every poll. Never call AI/Telegram or
+    change intervals. Previously attempted Telegram deliveries are left for
+    durable receipt reconciliation, not reinterpreted by the worker.
+    """
+    from .editorial import hard_editorial_reject
+    channel = store.get_channel(channel_id)
+    if channel is None:
+        return 0
+    rejected = 0
+    for article in store.ready_articles(channel_id, limit=max(1, int(limit))):
+        article_id = int(article["id"])
+        if store.delivery_journal(article_id):
+            continue
+        reason = hard_editorial_reject(channel, article, str(article["final_text"] or ""))
+        if not reason:
+            continue
+        store.reject_editorial_article(article_id, reason)
+        rejected += 1
+        event("editorial", "2.3.30 previously READY source vetoed before buffer wait",
+              channel_id=channel_id, article_id=article_id, reason=reason,
+              before_paid_ai=True, no_telegram_attempt=True)
+    return rejected
+
+
 class RuntimeEngine:
     """Clean V2 scheduler with one isolated preparation loop per channel."""
 
@@ -283,19 +310,33 @@ class RuntimeEngine:
                 can_publish, publish_reason = self.publisher.can_publish_now(channel_id)
                 if ready_usable >= ready_buffer and not can_publish:
                     self._touch(state, "idle")
-                    # The same intentional pause may last several minutes.
-                    # Emit a heartbeat state every loop but keep event telemetry bounded.
+                    # Before freezing AI preparation for 30 minutes, enforce
+                    # the SAME hard publication policy on the two buffered
+                    # posts. A source-proven rejected vacancy or shopping
+                    # story must not occupy a slot while real news expires.
+                    # Sweep at most once a minute; no publication/AI work.
                     notice_now = time.monotonic()
                     if notice_now - state.last_ready_pause_notice_monotonic >= 60.0:
                         state.last_ready_pause_notice_monotonic = notice_now
-                        event(
-                            "worker", "AI preparation paused by READY buffer",
-                            channel_id=channel_id, ready=ready_count, ready_usable=ready_usable,
-                            ready_blocked=ready_count-ready_usable, buffer=ready_buffer,
-                            reason=publish_reason, min_publish_interval_minutes=int(channel.min_publish_interval_minutes),
-                        )
-                    self.stop_event.wait(1.0)
-                    continue
+                        purged = _reject_source_ineligible_ready_2330(self.store, channel_id)
+                        if purged:
+                            ready_count, ready_usable = _ready_buffer_counts(self.store, channel_id)
+                        if ready_usable >= ready_buffer:
+                            # 2.3.34: prune only source-proven ineligible pre-AI
+                            # queued work while cadence temporarily fills READY.
+                            # No AI, Telegram, TTL or interval mutation.
+                            self._retire_restart_ineligible_2334(
+                                channel_id, state, limit=48,
+                            )
+                            event(
+                                "worker", "AI preparation paused by READY buffer",
+                                channel_id=channel_id, ready=ready_count, ready_usable=ready_usable,
+                                ready_blocked=ready_count-ready_usable, buffer=ready_buffer,
+                                reason=publish_reason, min_publish_interval_minutes=int(channel.min_publish_interval_minutes),
+                            )
+                    if ready_usable >= ready_buffer:
+                        self.stop_event.wait(1.0)
+                        continue
 
                 self._touch(state, "process")
                 worked = self._process_one(channel_id, worker_id, state)
@@ -377,6 +418,128 @@ class RuntimeEngine:
             state.last_job_activity_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
             event("worker", "stale jobs expired", channel_id=channel_id, count=int(expired), max_age_hours=int(max_age_hours or 0))
 
+
+    def _retire_restart_ineligible_2334(
+        self, channel_id: int, state: ChannelRuntimeState,
+        *, limit: int = 48, now: datetime | None = None,
+    ) -> int:
+        """Bounded, no-AI cleanup during a full publication READY buffer.
+
+        Reuse the exact restart/freshness decision made by _process_one, including
+        safe same-day queued continuity. Only untouched editorial PENDING source
+        rows with QUEUED process jobs can be retired. Editorial actions and any
+        delivery journal evidence are immutable vetoes. Unknown or already
+        prepared publications are never replayed or rewritten.
+        """
+        if not self.started_at:
+            return 0
+        channel = self.store.get_channel(channel_id)
+        if channel is None or channel.mode != ChannelMode.EDITORIAL:
+            return 0
+        max_age = min(24, max(1, int(channel.max_age_hours or 24)))
+        from .carryover_ready_228 import safe_same_day_queued_2330
+        with self.store.connect() as con:
+            rows = con.execute(
+                """SELECT a.id,a.source_id,a.source_published_at,a.discovered_at,
+                          a.published_at,a.telegram_message_id
+                   FROM articles a JOIN jobs j ON j.article_id=a.id
+                   WHERE a.channel_id=? AND a.decision='PENDING'
+                     AND a.stage IN ('COLLECTED','EXTRACTED')
+                     AND a.blocked_by='NONE'
+                     AND j.state='QUEUED' AND j.job_type='process'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM publication_delivery_journal d
+                         WHERE d.article_id=a.id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM editorial_actions ea
+                         WHERE ea.article_id=a.id AND ea.action IN (
+                             'approve','edit','publish_attempt','publish_now'
+                         )
+                     )
+                   ORDER BY julianday(a.source_published_at) ASC,a.id ASC
+                   LIMIT ?""",
+                (int(channel_id), max(1, min(100, int(limit)))),
+            ).fetchall()
+        retired = 0
+        reasons: dict[str, int] = {}
+        for row in rows:
+            if self.stop_event.is_set():
+                break
+            if str(row["published_at"] or "") or str(row["telegram_message_id"] or ""):
+                continue
+            checkpoint = self.restart_checkpoints_260.get(str(row["source_id"]), "")
+            reason = restart_source_rejection(
+                str(row["source_published_at"] or ""), self.started_at,
+                checkpoint, discovered_at=str(row["discovered_at"] or ""),
+                rolling_window_hours=max_age, now=now,
+            )
+            if reason == "SOURCE_PREDATES_RUNTIME_START" and safe_same_day_queued_2330(
+                str(row["source_published_at"] or ""),
+                str(row["discovered_at"] or ""), self.started_at, checkpoint,
+                max_age_hours=max_age, now=now,
+            ):
+                continue
+            if not reason:
+                continue
+            detail = ("SOURCE_FRESHNESS:" + reason)[:2000]
+            # Re-check every veto inside a single SQLite write transaction.
+            # Unlike an unguarded two-step archive, this cannot change a row
+            # concurrently approved, leased, or journalled after the read.
+            with self.store.transaction() as con:
+                con.execute("BEGIN IMMEDIATE")
+                changed = con.execute(
+                    """UPDATE articles SET stage='ARCHIVED',decision='REJECT',
+                           blocked_by='QUALITY',reject_reason=?,
+                           status_detail=?,last_error_code='EDITORIAL_HARD_REJECT',
+                           last_error_detail=?,next_retry_at=''
+                       WHERE id=? AND channel_id=? AND decision='PENDING'
+                         AND source_published_at=? AND discovered_at=? AND source_id=?
+                         AND stage IN ('COLLECTED','EXTRACTED')
+                         AND blocked_by='NONE'
+                         AND COALESCE(published_at,'')=''
+                         AND COALESCE(telegram_message_id,'')=''
+                         AND EXISTS (
+                             SELECT 1 FROM jobs j
+                             WHERE j.article_id=articles.id
+                               AND j.state='QUEUED' AND j.job_type='process'
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM publication_delivery_journal d
+                             WHERE d.article_id=articles.id
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM editorial_actions ea
+                             WHERE ea.article_id=articles.id AND ea.action IN (
+                                 'approve','edit','publish_attempt','publish_now'
+                             )
+                         )""",
+                    (detail, detail, detail, int(row["id"]), int(channel_id),
+                     str(row["source_published_at"] or ""),
+                     str(row["discovered_at"] or ""), int(row["source_id"])),
+                ).rowcount
+                if changed:
+                    con.execute(
+                        """UPDATE jobs SET state='DONE',lease_owner='',
+                               lease_until='',error_code='SOURCE_FRESHNESS',
+                               error_detail=?,updated_at=?
+                           WHERE article_id=? AND state='QUEUED'
+                             AND job_type='process'""",
+                        (detail, datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), int(row["id"])),
+                    )
+                con.commit()
+            if changed:
+                retired += 1
+                reasons[reason] = reasons.get(reason, 0) + 1
+                state.processed += 1
+                self._job_activity(state, "rejected")
+                self._job_activity(state, "completed")
+        if retired:
+            event("worker", "2.3.34 ineligible queued source preflight during READY hold",
+                  channel_id=channel_id, retired=retired, reason_counts=reasons,
+                  saved_paid_ai=True, publish_interval_unchanged=True)
+        return retired
+
     def _process_one(self, channel_id: int, worker_id: str, state: ChannelRuntimeState) -> bool:
         job = self.store.claim_job(channel_id=channel_id, worker_id=worker_id, lease_seconds=240)
         if job is None:
@@ -407,6 +570,29 @@ class RuntimeEngine:
                 discovered_at=str(article["discovered_at"] or ""),
                 rolling_window_hours=editorial_hours,
             )
+            # 2.3.30: the previous runtime may have safely collected an
+            # unreviewed SAME-DAY article shortly before this restart. Preserve
+            # only a pending unsent row with a verified recent source poll and
+            # ZERO durable delivery-journal history. Old-day and long backlog
+            # stays rejected and never reaches AI or Telegram.
+            if (stale_reason == "SOURCE_PREDATES_RUNTIME_START"
+                    and channel_for_freshness is not None
+                    and channel_for_freshness.mode == ChannelMode.EDITORIAL
+                    and str(article["decision"]) == str(Decision.PENDING)
+                    and str(article["stage"]) in {str(Stage.COLLECTED), str(Stage.EXTRACTED)}
+                    and not str(article["published_at"] or "")
+                    and not str(article["telegram_message_id"] or "")):
+                from .carryover_ready_228 import safe_same_day_queued_2330
+                checkpoint = self.restart_checkpoints_260.get(str(article["source_id"]), "")
+                if safe_same_day_queued_2330(
+                    str(article["source_published_at"] or ""),
+                    str(article["discovered_at"] or ""), self.started_at,
+                    checkpoint, max_age_hours=editorial_hours,
+                ) and not self.store.delivery_journal(article_id):
+                    stale_reason = ""
+                    event("worker", "2.3.30 fresh unsent QUEUED retained after short restart",
+                          channel_id=channel_id, article_id=article_id,
+                          recent_source_checkpoint=True, delivery_journal_absent=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 state.processed += 1

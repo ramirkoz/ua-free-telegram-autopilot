@@ -45,6 +45,71 @@ _PRIVATE_CLASSIFIED = re.compile(
     r"(?:житл\w*|квартир\w*|будинок|авто|робот\w*)|"
     r"надаю\s+послуг\w*|пропоную\s+послуг\w*)\b"
 )
+# 2.3.30: live #4933 "Шукаємо інспектора відділу кадрів".
+# 2.3.22 caught vacancies and a few professions, but not uncommon job
+# titles or the wording "запрошує до команди фахівця". Require a recruitment
+# action plus explicit employment terms; do not veto job-market statistics,
+# newly opened employment services, or completed job fairs.
+_ACTIVE_RECRUITMENT_2330 = re.compile(
+    r"(?iu)(?:\bшукаємо\s+(?:[\w’'-]+\s+){0,3}(?:у\s+\w+\s+)?"
+    r"(?:інспектор\w*|фахівц\w*|спеціаліст\w*|"
+    r"інженер\w*|керівник\w*|лікар\w*|працівник\w*)\b|"
+    r"\bзапрошу\w*\s+до\s+(?:нашої\s+)?команди\b|"
+    r"\b(?:потрібен|потрібна|потрібні)\s+"
+    r"(?:інспектор\w*|фахівц\w*|спеціаліст\w*|інженер\w*|"
+    r"працівник\w*|менеджер\w*)\b)"
+)
+# Broad job titles are open-ended. A high-precision active hiring instruction
+# AND employment-offer terms are stronger evidence than a profession whitelist.
+# Never reject completed employment-service news merely for mentioning hiring.
+_OPEN_RECRUITMENT_2330 = re.compile(
+    r"(?iu)(?:\b(?:шукаємо|потрібен|потрібна|потрібні|наймаємо)\s+"
+    r"[\w’'-]+(?:\s+[\w’'-]+){0,5}\b|"
+    r"\b(?:запрошуємо|запрошує|запрошують)\s+"
+    r"(?:[\w’'-]+\s+){0,5}(?:до\s+команди|на\s+роботу|працювати)\b|"
+    r"\bвідкрит\w*\s+вакансі\w*\b|"
+    r"\b(?:подайте|надішліть|надсилайте)\s+(?:своє\s+)?резюм[еє]\b)"
+)
+
+
+_EMPLOYMENT_OFFER_2330 = re.compile(
+    r"(?iu)(?:заробітн\w*\s+плат\w*|офіційн\w*\s+працевлаштуванн\w*|"
+    r"резюм[еє]|співбесід\w*|робоч\w*\s+графік\w*|"
+    r"умови\s+роботи|бронюванн\w*\s+працівник\w*|"
+    r"що\s+ми\s+пропонуємо)"
+)
+
+
+# A report that an employment fair already happened is civic news, unlike
+# advertising any individual opening.  Restrict this exception to the actual
+# completed event and NEVER allow it to override active hiring with salary/CTA.
+_COMPLETED_EMPLOYMENT_FAIR_2330 = re.compile(
+    r"(?iu)(?:\b(?:провели|відбувся|відбулася|організували|завершився)"
+    r"\s+(?:\w+\s+){0,3}ярмарок\s+вакансій\b|"
+    r"\bярмарок\s+вакансій\b.{0,120}\b(?:відбувся|відбулася|завершився)\b)"
+)
+
+
+# 2.3.30 full 1472 owner-label replay, article 94262: emergency evacuation
+# and lawful passport replacement are not private lost-document notices.
+# The old lost-found regexp matched the words "втрачений паспорт" even when
+# a humanitarian organization offered to replace it through the State Migration
+# Service. Exempt only a demonstrable replacement SERVICE, never found-item
+# requests, private phone returns or requests to locate a missing passport.
+_DOCUMENT_REISSUE_SERVICE_2330 = re.compile(
+    r"(?iu)\b(?:віднов\w*|замін\w*|переоформ\w*).{0,110}"
+    r"(?:втрачен\w*|пошкоджен\w*).{0,80}(?:паспорт\w*|документ\w*)"
+)
+_DOCUMENT_REISSUE_OPERATOR_2330 = re.compile(
+    r"(?iu)(?:\bдмс\b|\bцнап\b|юридичн\w*\s+(?:супровід|консультац\w*)|"
+    r"безоплатн\w*\s+евакуюва\w*)"
+)
+_ACTUAL_FOUND_RETURN_2330 = re.compile(
+    r"(?iu)\b(?:знайшл\w*|знайден\w*|поверніть|віддам|"
+    r"шукаємо\s+власник\w*|на\s+ім[’']?я)\b"
+)
+
+
 _PRIVATE_RECRUITMENT = re.compile(
     r"(?iu)(?:\bвакансі\w*\b|"
     r"\b(?:шукаємо|потрібн\w*|запрошуємо)\s+"
@@ -102,7 +167,11 @@ def no_announcement_reason_2322(article: Any) -> str:
     original = (_field(article, "title") + "\n" + _field(article, "raw_text"))[:10000]
     if not original.strip():
         return ""
-    if _LOST_FOUND.search(original):
+    if _LOST_FOUND.search(original) and not (
+        _DOCUMENT_REISSUE_SERVICE_2330.search(original)
+        and _DOCUMENT_REISSUE_OPERATOR_2330.search(original)
+        and not _ACTUAL_FOUND_RETURN_2330.search(original)
+    ):
         return "MONITORING_CLASSIFIED_LOST_FOUND_2322"
     if _PET_OWNER_SEARCH.search(original) and _PET_SPECIES.search(original):
         return "MONITORING_CLASSIFIED_PET_OWNER_SEARCH_2325"
@@ -112,8 +181,16 @@ def no_announcement_reason_2322(article: Any) -> str:
         return "MONITORING_STANDALONE_ANNOUNCEMENT_2322"
     if _PRIVATE_CLASSIFIED.search(original):
         return "MONITORING_PRIVATE_CLASSIFIED_2322"
-    if _PRIVATE_RECRUITMENT.search(original):
+    # A completed job fair does not exempt a separate active vacancy inside
+    # the same article. Both legacy and expanded recruitment patterns count.
+    # Otherwise an old READY article can pass the final no-ads preflight.
+    active_hiring = bool(_ACTIVE_RECRUITMENT_2330.search(original)
+                         or _OPEN_RECRUITMENT_2330.search(original))
+    completed_fair = bool(_COMPLETED_EMPLOYMENT_FAIR_2330.search(original))
+    if _PRIVATE_RECRUITMENT.search(original) and not (completed_fair and not active_hiring):
         return "MONITORING_JOB_ADVERTISEMENT_2322"
+    if active_hiring and _EMPLOYMENT_OFFER_2330.search(original):
+        return "MONITORING_JOB_OFFER_2330"
     if _SALE_AD.search(original):
         return "MONITORING_SALES_ADVERTISEMENT_2322"
     # Bare prospective participation notice, not a report about a finished event.

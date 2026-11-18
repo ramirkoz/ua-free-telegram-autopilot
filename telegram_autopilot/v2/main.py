@@ -308,6 +308,15 @@ def main() -> int:
             except Exception as exc:
                 event("ingest", "2.3.27 source portfolio not applied; Data retained",
                       level=40, detail=str(exc)[:1200])
+            # 2.3.36: one-time exact owner-reviewed Bored Panda retirement.
+            # Preserve source/article history and allow subsequent manual re-enable.
+            try:
+                from .editorial_source_retirement_236 import disable_bored_panda_236
+                event("ingest", "2.3.36 source retirement checked",
+                      **disable_bored_panda_236(store))
+            except Exception as exc:
+                event("ingest", "2.3.36 source retirement not applied; Data retained",
+                      level=40, detail=str(exc)[:1200])
             # Upgrade science channel policy before its workers can publish.
             # Run historical RC103 once first to prevent a background override.
             from .operational_retention import _apply_scientific_news_profile

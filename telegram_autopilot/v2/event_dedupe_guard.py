@@ -449,6 +449,15 @@ def event_fingerprint_same_event(
         if material_update:
             return False, material_update
 
+    # 2.3.33: one completed spacecraft milestone is one event, whether
+    # the next source is a recap, video, or differently worded headline.
+    # Evaluated before generic title-overlap and per-article event keys.
+    if not monitoring_profile:
+        from .mission_milestone_2333 import mission_milestone_same_event_2333
+        same_milestone, milestone_reason = mission_milestone_same_event_2333(current, candidate)
+        if same_milestone:
+            return True, milestone_reason
+
     # 2.2.31: daily regional summaries use original-report day, totals and
     # independently reported victims, not English title overlap or AI captions.
     from .regional_daily_event_231 import regional_daily_relation
@@ -925,6 +934,23 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
             raise KeyError(article_id)
         channel_id = int(current["channel_id"])
         channel = self.store.get_channel(channel_id)
+        # 2.3.33: a concrete finished mission milestone has a deterministic
+        # source-owned identity. Check the durable *published* ledger before
+        # legacy per-article event memory can treat a recap as a new update.
+        # No brand-only block, and no change to Telegram UNKNOWN handling.
+        if channel is not None and channel.mode == ChannelMode.EDITORIAL:
+            from .mission_milestone_2333 import (
+                mission_milestone_key_2333, mission_milestone_same_event_2333,
+            )
+            mission_key = mission_milestone_key_2333(current)
+            if mission_key:
+                hours = max(24, int(channel.published_dedupe_window_hours or 24))
+                for previous in self._ledger_candidates(channel_id, int(article_id), hours):
+                    if mission_milestone_key_2333(previous) != mission_key:
+                        continue
+                    same, why = mission_milestone_same_event_2333(current, previous)
+                    if same:
+                        return DedupeResult("DUPLICATE", int(previous["id"]), why)
         # 2.2.25: confirmed source-grounded event memory precedes broad
         # similarity; a material count update must not be hidden by dedupe.
         try:
