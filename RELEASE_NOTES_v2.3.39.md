@@ -1,6 +1,6 @@
 # Autopilot 2.3.39: owner-rejected LIVE posts and committed cross-source events
 
-18.11.2026. **SOURCE-ONLY DRAFT. NOT INSTALLED. NO PRODUCTION GO.**
+18.11.2026. **WINDOWS PORTABLE QA CANDIDATE. NOT INSTALLED. NO PRODUCTION GO.**
 Stacked on 2.3.38 draft PR #316; operator remains v2.3.37 Windows LIVE.
 No changes to operator SQLite, installed Data, Telegram, media/source settings,
 publication cadence (30/30/5), OpenRouter limits, or UNKNOWN delivery safety.
@@ -51,3 +51,4 @@ publication cadence (30/30/5), OpenRouter limits, or UNKNOWN delivery safety.
   stacked branch; install only after operator acceptance; monitor 24-48h posts.
 - Current source-only controls do not reclassify past published Telegram posts
   or delete previously published duplicates.
+\n## QA result (18.11.2026)\n- 177 focused/related pytest cases PASS on Linux Python 3.13.\n- Source file GitHub blobs checked before assembly; source and Windows QA ZIP CRC verified.\n- One inherited v2.3.35 broad roundup rule rejected two genuine original art cases in v2.3.37 tests; narrow source-backed art exception added and both controls PASS.\n- Full pytest is INCOMPLETE (timed out about 61%, no failure shown before timeout); no native Windows launch/Defender, no independent CI and no post-install acceptance.\n- Portable QA assembled from v2.3.36 Windows baseline, with exact 2.3.39 source files overlaid. No operator Data/credentials, no signed updater GO.\n\n- Read-only operator SQLite replay exact IDs 104290/104337/104329/104380/104373: pet and appeal rejected, duplicate traffic-light story matched, distinct utility restoration not matched.\n
