@@ -68,7 +68,7 @@ def test_new_numerical_fact_is_not_silenced():
 def test_different_streets_are_not_merged():
     a = dict(FOLLOWUP)
     b = dict(POSTED)
-    a["raw_text"] += " На вулиці Хортицькій було завершено заміну."
+    a["raw_text"] += " На вулиці Хортицькій замінювали батареї."
     b["raw_text"] += " На вулиці Соборній роботи тривають."
     assert not source_same_event_without_update(a, b)
 
