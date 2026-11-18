@@ -91,23 +91,23 @@ jobs:
           if (-not $env:UPDATE_SIGNING_PRIVATE_KEY_PEM) { throw 'UPDATE_SIGNING_PRIVATE_KEY_PEM secret is required; unsigned auto-update manifests are forbidden' }
           python -m pip install --disable-pip-version-check "cryptography>=42,<47"
           @'
-import base64, json, os
-from pathlib import Path
-from cryptography.hazmat.primitives import serialization
-from telegram_autopilot.v2.update_signing import canonical_manifest_bytes
-
-path = Path(os.environ["UPDATE_MANIFEST"])
-data = json.loads(path.read_text(encoding="utf-8-sig"))
-private = serialization.load_pem_private_key(
-    os.environ["UPDATE_SIGNING_PRIVATE_KEY_PEM"].replace("\\n", "\n").encode("utf-8"),
-    password=None,
-)
-signature = private.sign(canonical_manifest_bytes(data))
-data["signature_algorithm"] = "ed25519"
-data["key_id"] = "autopilot-update-v1"
-data["signature_b64"] = base64.b64encode(signature).decode("ascii")
-path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-'@ | python -
+          import base64, json, os
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from telegram_autopilot.v2.update_signing import canonical_manifest_bytes
+          
+          path = Path(os.environ["UPDATE_MANIFEST"])
+          data = json.loads(path.read_text(encoding="utf-8-sig"))
+          private = serialization.load_pem_private_key(
+              os.environ["UPDATE_SIGNING_PRIVATE_KEY_PEM"].replace("\\n", "\n").encode("utf-8"),
+              password=None,
+          )
+          signature = private.sign(canonical_manifest_bytes(data))
+          data["signature_algorithm"] = "ed25519"
+          data["key_id"] = "autopilot-update-v1"
+          data["signature_b64"] = base64.b64encode(signature).decode("ascii")
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+          '@ | python -
 
       - name: Validate release manifest
         shell: pwsh
