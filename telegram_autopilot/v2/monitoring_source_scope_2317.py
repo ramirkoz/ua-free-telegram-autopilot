@@ -95,6 +95,19 @@ _NATIONAL_ORDER_2322 = re.compile(
 )
 
 
+# 2.3.40: A local aggregator's global-news repost is not a local event.
+# Require a source-owned concrete Zaporizhzhia consequence for these cases.
+_FOREIGN_FALSE_FLAG_2340 = re.compile(
+    r"(?iu)(?:\bпольщ\w*\b|\bpoland\b).{0,550}"
+    r"(?:диверсі\w*|спецслужб\w*|чужим\s+прапором|false[ -]flag)|"
+    r"(?:диверсі\w*|чужим\s+прапором|false[ -]flag).{0,550}"
+    r"(?:\bпольщ\w*\b|\bpoland\b)"
+)
+_FOREIGN_AID_2340 = re.compile(
+    r"(?iu)(?:велик\w*\s+британі\w*|британі\w*|united\s+kingdom|\buk\b)"
+    r".{0,550}(?:пакет\w*\s+допомог\w*|ракет\w*|радар\w*|ппо|missiles?|air[ -]defen[cs]e)"
+)
+
 _RETAIL_CONTEXT = re.compile(
     r"(?iu)\b(?:магазин\w*|супермаркет\w*|гіпермаркет\w*|"
     r"торгов\w*\s+(?:мереж\w*|центр\w*|точк\w*)|"
@@ -129,6 +142,12 @@ def monitoring_source_scope_reason_2317(channel: Any, article: Any) -> str:
     original = (_field(article, "title") + "\n" + _field(article, "raw_text"))[:10000]
     if not original.strip():
         return ""
+
+    if not _LOCAL_EVENT.search(original):
+        if _FOREIGN_FALSE_FLAG_2340.search(original):
+            return "MONITORING_UNRELATED_FOREIGN_SECURITY_2340"
+        if _FOREIGN_AID_2340.search(original):
+            return "MONITORING_NONLOCAL_FOREIGN_MILITARY_AID_2340"
 
     if (not _LOCAL_EVENT.search(original)
             and _NATIONAL_MILITARY_PAPERWORK_2322.search(original)
