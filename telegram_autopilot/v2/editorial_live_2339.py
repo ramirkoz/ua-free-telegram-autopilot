@@ -162,19 +162,25 @@ def source_same_event_without_update(current: Any, prior: Any) -> bool:
     return True
 
 
-def recent_committed_source_duplicate(store: Any, channel_id: int, article_id: int, article: Any) -> int:
+def recent_committed_source_duplicate(
+    store: Any, channel_id: int, article_id: int, article: Any, *, window_hours: int = 6
+) -> int:
     """READ-ONLY lookup against Telegram COMMITTED, never READY/UNKNOWN.
 
     Caller may mark the returned article as a duplicate before sending;
     this function never writes to the operator database.
     """
+    # Honor tighter operator channel windows; never expand them to six hours.
+    hours = min(6, int(window_hours))
+    if hours <= 0:
+        return 0
     with store.connect() as con:
         rows = con.execute(
             """SELECT a.id,a.source_id,a.title,a.raw_text,a.published_at
                FROM articles a
                WHERE a.channel_id=? AND a.id<>? AND a.stage='PUBLISHED'
                  AND a.published_at<>''
-                 AND datetime(a.published_at)>=datetime('now','-6 hours')
+                 AND datetime(a.published_at)>=datetime('now',?)
                  AND (
                    EXISTS (SELECT 1 FROM publication_delivery_journal d
                            WHERE d.article_id=a.id AND d.channel_id=a.channel_id
@@ -184,7 +190,7 @@ def recent_committed_source_duplicate(store: Any, channel_id: int, article_id: i
                                 AND h.state='COMMITTED')
                  )
                ORDER BY datetime(a.published_at) DESC LIMIT 120""",
-            (int(channel_id), int(article_id)),
+            (int(channel_id), int(article_id), f'-{hours} hours'),
         ).fetchall()
     now = datetime.now(timezone.utc)
     for row in rows:
@@ -193,7 +199,7 @@ def recent_committed_source_duplicate(store: Any, channel_id: int, article_id: i
             if published.tzinfo is None:
                 continue
             lag = now - published.astimezone(timezone.utc)
-            if lag < timedelta(0) or lag > timedelta(hours=6):
+            if lag < timedelta(0) or lag > timedelta(hours=hours):
                 continue
         except ValueError:
             continue
