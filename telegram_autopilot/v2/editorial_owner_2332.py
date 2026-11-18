@@ -124,6 +124,12 @@ def monitoring_source_reason_2332(article: Any) -> str:
     raw = _v(article, "raw_text")[:16000]
     if not title and not raw:
         return ""
+    # 2.3.39: a channel pleading with officials for information is not a
+    # verified civic event or an official restoration announcement.
+    from .editorial_live_2339 import monitoring_appeal_not_news_reason
+    appeal = monitoring_appeal_not_news_reason(article)
+    if appeal:
+        return appeal
     # Title is often the full stitched Telegram message. Cap fragments to
     # avoid a publisher promo/footer falsely turning a real recap into alert.
     paragraphs = re.split(r"(?<=[.!?])\s*|(?=[🚧✈🚀])", (raw or title)[:1500])
