@@ -191,6 +191,22 @@ class DedupeEngine:
         if current is None: raise KeyError(article_id)
         channel=self.store.get_channel(int(current["channel_id"]))
         hours=channel.dedupe_window_hours if channel else 72
+        # 2.3.39: before AI, compare the source's own facts to verified
+        # Telegram COMMITTED publications. The same check runs again at
+        # prepublish to close READY/race windows; UNKNOWN never proves a post.
+        if channel is not None:
+            from .domain import ChannelMode
+            if channel.mode == ChannelMode.MONITORING:
+                from .editorial_live_2339 import recent_committed_source_duplicate
+                confirmed = recent_committed_source_duplicate(
+                    self.store, int(current["channel_id"]), article_id, current
+                )
+                if confirmed:
+                    self._mark_duplicate(article_id, confirmed, "confirmed source-fact event in COMMITTED history")
+                    event("editorial", "committed source-fact duplicate blocked before AI",
+                          channel_id=int(current["channel_id"]), article_id=article_id,
+                          duplicate_of=confirmed)
+                    return DedupeResult("DUPLICATE", confirmed, "confirmed prior COMMITTED event")
         candidates=self._candidate_rows(int(current["channel_id"]),article_id,hours)
         for candidate in candidates:
             # Never let an already-known duplicate bridge unrelated stories.
