@@ -767,7 +767,8 @@ class Publisher:
         if channel.mode == ChannelMode.MONITORING:
             from .editorial_live_2339 import recent_committed_source_duplicate
             committed_duplicate = recent_committed_source_duplicate(
-                self.store, channel_id, article_id, article
+                self.store, channel_id, article_id, article,
+                window_hours=int(channel.published_dedupe_window_hours),
             )
             if committed_duplicate:
                 self.store.mark_duplicate(
