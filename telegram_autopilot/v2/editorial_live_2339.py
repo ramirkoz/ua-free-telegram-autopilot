@@ -62,7 +62,7 @@ def creative_routine_pet_rescue_reason(article: Any) -> str:
 
 
 _APPEAL_TITLE = re.compile(
-    r"(?iu)\b(?:оприлюдніть|опублікуйте|поясніть|повідомте|"
+    r"(?iu)\b(?:оприлюдніть|оприлюднить|опублікуйте|поясніть|повідомте|"
     r"дайте\s+(?:відповідь|інформацію)|просимо\s+(?:надати|пояснити|оприлюднити)|"
     r"please\s+(?:publish|explain|tell\s+us))\b"
 )
