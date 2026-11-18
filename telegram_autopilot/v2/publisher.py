@@ -761,6 +761,23 @@ class Publisher:
                 article_id=article_id, reason=critical,
             )
             return critical
+        # 2.3.39: cross-source paraphrases of an already COMMITTED local
+        # event must not be republished. This source-only check does not
+        # equate topic similarity with event identity, and allows updates.
+        if channel.mode == ChannelMode.MONITORING:
+            from .editorial_live_2339 import recent_committed_source_duplicate
+            committed_duplicate = recent_committed_source_duplicate(
+                self.store, channel_id, article_id, article
+            )
+            if committed_duplicate:
+                self.store.mark_duplicate(
+                    article_id, committed_duplicate,
+                    f"Confirmed same-source-facts event already published #{committed_duplicate}",
+                )
+                event("publish", "committed cross-source same-event duplicate blocked",
+                      channel_id=channel_id, article_id=article_id,
+                      duplicate_of=committed_duplicate)
+                return "DUPLICATE_PUBLISHED"
         # LIVE 58853/58855: short newsroom summaries of the same reported
         # local strike must not both appear as independent channel posts.
         # Compare only previously committed posts from this exact monitoring
