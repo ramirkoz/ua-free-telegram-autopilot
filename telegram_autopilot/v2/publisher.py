@@ -16,7 +16,7 @@ from ..telegram import (
 from .source_attribution import attribution_for_article
 from .domain import BlockedBy, ChannelMode, EditorialRuntimeProfile
 from .loghub import event
-from .media_pipeline import build_publication_media_bundle, media_asset_keys, media_bundle_complete
+from .media_pipeline import build_publication_media_bundle, media_asset_keys, media_bundle_complete, single_captioned_album_2340
 from .evidence_first import video_required_by_copy
 from .visual_media_dedupe import remove_visual_duplicates
 from .storage import V2Store, now_iso
@@ -761,6 +761,31 @@ class Publisher:
                 article_id=article_id, reason=critical,
             )
             return critical
+        # 2.3.40: cross-source science milestone duplicate at the final
+        # COMMITTED boundary. READY/UNKNOWN are not proof of Telegram delivery.
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .editorial_live_2340 import same_science_milestone_without_new_facts
+            with self.store.connect() as con:
+                earlier = con.execute(
+                    """SELECT a.title,a.source_id,a.id FROM articles a
+                       WHERE a.channel_id=? AND a.id<>? AND a.stage='PUBLISHED'
+                         AND datetime(a.published_at)>=datetime('now','-6 hours')
+                         AND (EXISTS(SELECT 1 FROM publication_delivery_journal j
+                                     WHERE j.article_id=a.id AND j.state='COMMITTED')
+                              OR EXISTS(SELECT 1 FROM delivery_receipt_archive h
+                                         WHERE h.article_id=a.id AND h.state='COMMITTED'))
+                       ORDER BY datetime(a.published_at) DESC LIMIT 100""",
+                    (channel_id, article_id),
+                ).fetchall()
+            for earlier_row in earlier:
+                if (str(earlier_row['source_id']) != str(article['source_id']) and
+                        same_science_milestone_without_new_facts(article, earlier_row)):
+                    self.store.mark_duplicate(article_id, int(earlier_row['id']),
+                                              'Same science milestone already COMMITTED')
+                    event('publish', 'science milestone duplicate blocked', channel_id=channel_id,
+                          article_id=article_id, duplicate_of=int(earlier_row['id']))
+                    return 'DUPLICATE_PUBLISHED'
+
         # 2.3.39: cross-source paraphrases of an already COMMITTED local
         # event must not be republished. This source-only check does not
         # equate topic similarity with event identity, and allows updates.
@@ -870,6 +895,14 @@ class Publisher:
             if isinstance(verified, str):
                 return verified
             article, bundle = verified
+
+        # One story, one captioned Telegram album. Cap AFTER exact original
+        # media parity checks and BEFORE downloading or contacting Telegram.
+        if bundle.count > 10:
+            event('media', 'publication gallery capped at one captioned album',
+                  channel_id=channel_id, article_id=article_id,
+                  source_candidates=bundle.count, selected=10, omitted=bundle.count - 10)
+            bundle = single_captioned_album_2340(bundle)
 
         # RC56: if the story is actually about a video, a YouTube/Vimeo embed must
         # remain reachable from the Telegram post even when Telegram receives only a
@@ -1203,6 +1236,15 @@ class Publisher:
                 message_id=caption_message_id, published_media_count=delivery_count, upload_mode="multipart_local",
             )
             return "PUBLISHED"
+
+        # Never start a second uncaptained group, including on resumed sends.
+        if delivery_count > 10 or len(media_ids) > 10:
+            self.store.publication_backoff(
+                article_id, blocked_by=BlockedBy.MEDIA, error_code='MEDIA_ALBUM_LIMIT_2340',
+                detail='Одна публікація допускає максимум 10 медіа з текстом',
+                retry_seconds=None, count_attempt=False,
+            )
+            return 'MEDIA_ALBUM_LIMIT_2340'
 
         already_sent = min(len(media_ids), delivery_count)
         pending = list(prepared[already_sent:])
