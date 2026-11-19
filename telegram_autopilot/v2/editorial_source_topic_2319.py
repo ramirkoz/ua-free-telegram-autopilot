@@ -111,6 +111,10 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
         return new_reason
     if role != "science":
         return ""
+    from .editorial_owner_2343 import science_procedural_teardown_reason_2343
+    teardown = science_procedural_teardown_reason_2343(article)
+    if teardown:
+        return teardown
     try:
         title = str(article["title"] or "")
     except (KeyError, IndexError, TypeError):
