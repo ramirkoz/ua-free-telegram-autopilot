@@ -12,7 +12,7 @@ import pytest
 from telegram_autopilot import ai_router as legacy_ai
 import telegram_autopilot.v2.ai_gateway as module
 from telegram_autopilot.v2.ai_gateway import AIGateway, GatewayExhausted
-from telegram_autopilot.v2.domain import ProviderHealth
+from telegram_autopilot.v2.domain import ProviderHealth, AIModelHealth, ProviderState
 from telegram_autopilot.v2.storage import V2Store
 
 
@@ -127,3 +127,18 @@ def test_paid_attempt_is_charged_only_after_admission():
     assert "paid_attempt_charged=False" in code
     assert "congested=True" in code
     assert "provider_outage=False" in code
+
+
+def test_confirmed_unsupported_model_not_retried_automatically(tmp_path, monkeypatch):
+    gateway = AIGateway(V2Store(tmp_path / "unsupported.sqlite3"))
+    dead = AIModelHealth(provider="nvidia", model="nvidia/nemotron-3-super-120b-a12b",
+                         state=ProviderState.MODEL_UNSUPPORTED,
+                         cooldown_until="2026-11-18T01:49:29+02:00")
+    live = AIModelHealth(provider="nvidia", model="nvidia/nemotron-3-ultra-550b-a55b",
+                         state=ProviderState.HEALTHY)
+    monkeypatch.setattr(gateway, "_model_health_map",
+                        lambda: {(x.provider, x.model): x for x in (dead, live)})
+    assert gateway._model_blocked(dead.provider, dead.model)
+    assert not gateway._model_blocked(live.provider, live.model)
+    # Manual authenticated probe explicitly rechecks and may rehabilitate it;
+    # no operator settings are silently edited here.
