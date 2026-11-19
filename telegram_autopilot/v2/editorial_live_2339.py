@@ -179,7 +179,7 @@ def recent_committed_source_duplicate(
         return 0
     with store.connect() as con:
         rows = con.execute(
-            """SELECT a.id,a.source_id,a.title,a.raw_text,a.source_published_at,a.published_at
+            """SELECT a.id,a.source_id,a.title,a.raw_text,a.published_at
                FROM articles a
                WHERE a.channel_id=? AND a.id<>? AND a.stage='PUBLISHED'
                  AND a.published_at<>''
