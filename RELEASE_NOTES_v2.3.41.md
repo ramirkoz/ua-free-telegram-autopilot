@@ -19,3 +19,6 @@
 Повністю зупинити стару програму, створити копію папки `Data` та розпакувати новий Portable у **нову папку**. Перенести `Data` до нового Portable відповідно до чинної операторської процедури (не видаляти та не створювати нові облікові дані); запустити `UA_FREE_Telegram_Autopilot.exe`. Стару папку залишити для відкату до перевірки всіх трьох каналів.
 
 **Release gates:** publish only when full CI and native Windows validation including Defender are successful; operator LIVE editorial acceptance follows installation.
+
+## Контроль версії перед використанням
+Збірку з PR перевірити як повний Windows Portable (runtime, launcher, інтерфейс, профільні модулі), а не як patch-only пакет. До успішного Windows CI/Defender це лише кандидат на встановлення.
