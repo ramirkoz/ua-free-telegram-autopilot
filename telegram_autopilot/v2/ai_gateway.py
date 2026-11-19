@@ -57,10 +57,13 @@ class GatewayExhausted(RuntimeError):
         retry_seconds: int = 300,
         provider_outage: bool = True,
         failures: Iterable[str] = (),
+        congested: bool = False,
     ) -> None:
         super().__init__(message)
         self.retry_seconds = max(30, int(retry_seconds))
         self.provider_outage = bool(provider_outage)
+        # Capacity saturation is not an API outage or a content-quality failure.
+        self.congested = bool(congested)
         self.failures = tuple(failures)
 
 
@@ -308,14 +311,22 @@ class AIGateway:
     PROVIDER_ORDER = ("gemini", "nvidia", "groq", "cloudflare", "openrouter", "local", "codex")
     LOCAL_SHORT_TASK_MAX_OUTPUT = 220
     LOCAL_LONG_MAX_OUTPUT = 720
-    _PROVIDER_CALL_LOCKS = {name: threading.Lock() for name in PROVIDER_ORDER}
+    # 2.3.42: Windows runs three editorial workers. One Lock for ALL OpenRouter
+    # models serialized them and consumed paid-attempt caps on lock failures.
+    # Permit at most three concurrent OpenRouter API calls, independently of
+    # chosen model. All other providers keep their previous single-call limit.
+    # Shared across gateway instances; bounded release catches double-release.
+    _PROVIDER_CALL_LOCKS = {
+        name: threading.BoundedSemaphore(3 if name == "openrouter" else 1)
+        for name in PROVIDER_ORDER
+    }
 
     def __init__(self, store: V2Store):
         self.store = store
         self._route_circuit = RouteContractCircuit()
 
-    def _provider_call_lock(self, provider: str) -> threading.Lock:
-        return self._PROVIDER_CALL_LOCKS.setdefault(str(provider), threading.Lock())
+    def _provider_call_lock(self, provider: str) -> threading.BoundedSemaphore:
+        return self._PROVIDER_CALL_LOCKS.setdefault(str(provider), threading.BoundedSemaphore(1))
 
     def _health_map(self) -> dict[str, ProviderHealth]:
         return {item.provider: item for item in self.store.provider_health()}
@@ -988,18 +999,36 @@ class AIGateway:
                       operator_configuration_unchanged=True)
                 continue
 
+            # Wait in a bounded provider-capacity queue. An OpenRouter call on
+            # model A must not block otherwise free capacity for model B.
+            # A lock timeout means NOTHING was sent: no paid attempt/token charge,
+            # no model-health change and no reason to classify article QUALITY.
+            lock = self._provider_call_lock(provider)
+            wait_for_lock = 6.0 if provider == "local" else min(
+                25.0, max(8.0, float(timeout_seconds) * 0.75)
+            )
+            queued_at = time.monotonic()
+            acquired = lock.acquire(timeout=wait_for_lock)
+            if not acquired:
+                busy_routes += 1
+                failures.append(f"{slot.label}: local AI capacity queue timed out")
+                event("ai", "AI work capacity wait timed out",
+                      provider=provider, model=slot.model,
+                      waited_seconds=round(time.monotonic() - queued_at, 2),
+                      purpose=str(purpose or "content"),
+                      paid_attempt_charged=False)
+                continue
+            # Only a real admitted request consumes a per-task paid attempt.
             if provider == "openrouter" and editorial_cost_guard:
                 paid_attempts_232 += 1
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
-            lock = self._provider_call_lock(provider)
-            wait_for_lock = 6.0 if provider == "local" else min(2.0, max(0.25, float(timeout_seconds) * 0.08))
-            acquired = lock.acquire(timeout=wait_for_lock)
-            if not acquired:
-                busy_routes += 1
-                failures.append(f"{slot.label}: provider busy")
-                event("ai", "provider busy; trying next route", provider=provider, model=slot.model)
-                continue
+            queue_wait = started - queued_at
+            if queue_wait >= 0.5:
+                event("ai", "AI work admitted after capacity wait",
+                      provider=provider, model=slot.model,
+                      waited_seconds=round(queue_wait, 2),
+                      purpose=str(purpose or "content"))
             try:
                 try:
                     output, runtime_model, label, input_tokens, output_tokens, total_tokens = self._call_slot(
@@ -1196,9 +1225,10 @@ class AIGateway:
             )
         if busy_routes and transport_attempts == 0 and validation_failures == 0:
             raise GatewayExhausted(
-                "AI-провайдери тимчасово зайняті. " + " | ".join(failures[-6:]),
-                retry_seconds=25,
+                "Черга AI тимчасово заповнена; спробу не надіслано. " + " | ".join(failures[-6:]),
+                retry_seconds=30,
                 provider_outage=False,
+                congested=True,
                 failures=failures,
             )
         raise GatewayExhausted(
@@ -1235,8 +1265,12 @@ class AIGateway:
         for slot in self._provider_slots(provider, cfg):
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
-            if not lock.acquire(timeout=2.0):
-                event("ai", "health probe provider busy", provider=provider, model=slot.model)
+            # Manual diagnostics must never wait ahead of editor requests.
+            # Nonblocking probes can only use spare provider capacity.
+            if not lock.acquire(blocking=False):
+                event("ai", "health probe deferred: work capacity reserved",
+                      provider=provider, model=slot.model,
+                      status_unchanged=True)
                 continue
             try:
                 try:
