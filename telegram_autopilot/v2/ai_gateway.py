@@ -518,7 +518,14 @@ class AIGateway:
 
     def _model_blocked(self, provider: str, model: str) -> bool:
         current = self._model_health_map().get((provider, model))
-        return bool(current and _cooldown_active(current.cooldown_until))
+        # 2.3.42: a confirmed HTTP 410/404 or unsupported output contract
+        # does not magically recover when an old cooldown timestamp expires.
+        # Keep operator configuration intact: a successful EXPLICIT health
+        # probe can still restore this model through _mark_probe_success().
+        return bool(current and (
+            current.state == ProviderState.MODEL_UNSUPPORTED
+            or _cooldown_active(current.cooldown_until)
+        ))
 
     def _mark_model_success(self, provider: str, model: str, detail: str = "") -> None:
         current = self._model_health_map().get((provider, model), AIModelHealth(provider=provider, model=model))
