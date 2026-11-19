@@ -109,6 +109,13 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     new_reason = editorial_source_reason_2332(role, article)
     if new_reason:
         return new_reason
+    # 2.3.44: preserve every established owner-veto reason first. The new
+    # source-only owner rule closes uncovered categories before paid AI, and
+    # this same hook runs again on legacy READY at the prepublish boundary.
+    from .editorial_owner_2344 import owner_reader_value_reason_2344
+    owner_reader_value = owner_reader_value_reason_2344(role, article)
+    if owner_reader_value:
+        return owner_reader_value
     if role != "science":
         return ""
     from .editorial_owner_2343 import science_procedural_teardown_reason_2343
