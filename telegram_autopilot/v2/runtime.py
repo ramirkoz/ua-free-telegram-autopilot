@@ -667,10 +667,14 @@ class RuntimeEngine:
                   retry_seconds=1200)
             return True
         except GatewayExhausted as exc:
-            blocker = BlockedBy.AI if exc.provider_outage else BlockedBy.QUALITY
-            code = "WAITING_AI" if exc.provider_outage else "QUALITY_RETRY"
+            # 2.3.42: a full local provider-capacity queue is not article QA.
+            # Never burn QUALITY retries or reject an article without an AI call.
+            ai_wait = exc.provider_outage or getattr(exc, "congested", False)
+            blocker = BlockedBy.AI if ai_wait else BlockedBy.QUALITY
+            code = ("AI_CAPACITY_WAIT" if getattr(exc, "congested", False)
+                    else "WAITING_AI" if exc.provider_outage else "QUALITY_RETRY")
             attempts=int(job["attempts"] or 0)
-            if not exc.provider_outage and attempts >= _rc111_quality_retry_limit(str(exc)):
+            if not ai_wait and attempts >= _rc111_quality_retry_limit(str(exc)):
                 outcome=self.store.exhaust_quality_job(job_id, detail=str(exc))
                 self._job_activity(state, "completed")
                 if outcome == "REJECTED":
@@ -681,8 +685,8 @@ class RuntimeEngine:
                     attempts=attempts,outcome=outcome,detail=str(exc)[:700],
                 )
                 return True
-            retry = exc.retry_seconds if exc.provider_outage else min(3600, max(180, exc.retry_seconds * (1 + attempts)))
-            self.store.defer_job(job_id, blocked_by=blocker, error_code=code, detail=str(exc), retry_seconds=retry, count_attempt=not exc.provider_outage)
+            retry = exc.retry_seconds if ai_wait else min(3600, max(180, exc.retry_seconds * (1 + attempts)))
+            self.store.defer_job(job_id, blocked_by=blocker, error_code=code, detail=str(exc), retry_seconds=retry, count_attempt=not ai_wait)
             self._job_activity(state, "deferred")
             event("worker", "job deferred", channel_id=channel_id, article_id=article_id, blocked_by=str(blocker), code=code, retry_seconds=retry, detail=str(exc)[:700])
             return True
