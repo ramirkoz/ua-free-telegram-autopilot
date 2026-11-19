@@ -117,6 +117,18 @@ def owner_reader_value_reason_2344(role: str, article: Any) -> str:
     if _SAUCE_TOPIC.search(title) and _SAUCE_RANKING.search(title):
         return "CREATIVE_SAUCE_RANKING_NOT_NEWS_2344"
 
+    # Original authored installation/exhibition is a creative work, not
+    # a recycled screenshot gallery. Preserve independent positive controls.
+    original_art = bool(
+        re.search(r"(?iu)\b(?:original\s+(?:museum\s+)?installation|"
+                  r"original\s+exhibition|new\s+exhibition|artist-led\s+event)\b", raw)
+        and re.search(r"(?iu)\b(?:artist|curator|exhibition|museum)\b", raw)
+        and not re.search(r"(?iu)\bnot\s+(?:an?\s+)?original\s+"
+                          r"(?:exhibition|installation)\b", raw)
+    )
+    if original_art:
+        return ""
+
     if _MEME_TOPIC.search(title) and (
         _MEME_ROUNDUP.search(title)
         or len(_MEME_GALLERY.findall(raw[:12000])) >= 3
