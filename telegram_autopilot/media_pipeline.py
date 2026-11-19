@@ -642,6 +642,33 @@ def _site_widget_media_2330(item: PreparedMedia) -> bool:
     return bool(_SITE_WIDGET_CONTEXT_2330.search(str(item.context or "")))
 
 
+def _creativeboom_source_media_proof_2341(
+    item: PreparedMedia, *, source_url: str, title: str, article_text: str
+) -> bool:
+    """Do not trust Creative Boom's shared video/related-story rails as art.
+
+    Page/schema declarations establish a DOM location, not this story's media.
+    Require source-specific descriptive image evidence for body/gallery items.
+    """
+    host = (urlsplit(source_url).hostname or "").casefold()
+    if host not in {"creativeboom.com", "www.creativeboom.com"}:
+        return True
+    if item.kind != "image" or item.featured:
+        return True
+    # A shared word ("making money" vs "making a paper boat") is not
+    # enough to prove provenance, even if the CMS marks a thumb as schema
+    # verified or article-level page-declared media.
+    weak = {"making", "watch", "video", "other", "thumbnail", "thumb", "latest",
+            "gallery", "content", "website", "image", "images", "article", "story",
+            "stories", "news", "page", "clip", "reel", "post", "posts"}
+    evidence = _text_tokens(_evidence_text(item)) - weak
+    title_hits = len(evidence & (_text_tokens(title) - weak))
+    body_hits = len(evidence & (_text_tokens(article_text[:4500]) - weak))
+    return title_hits >= 1 or body_hits >= 2 or (
+        item.classification in {"infographic", "screenshot"} and body_hits >= 1
+    )
+
+
 def _in_story_gallery(item: PreparedMedia, *, title: str, article_text: str) -> bool:
     """Whether a gallery block may use the commercial weak-alt relaxation.
 
@@ -760,6 +787,11 @@ def prepare_article_media(
             continue
         item.classification = _classify(item)
         if item.kind == "image":
+            if not _creativeboom_source_media_proof_2341(
+                item, source_url=source_url, title=title, article_text=article_text
+            ):
+                dropped("creativeboom_nonstory_media_2341")
+                continue
             resolved = _probe_article_image(item, marketing_context=marketing_context,
                                             title=title, article_text=article_text)
             if not resolved:
@@ -778,6 +810,11 @@ def prepare_article_media(
             if resolved.url in seen_urls:
                 dropped("binary_duplicate")
                 continue
+            if not _creativeboom_source_media_proof_2341(
+                resolved, source_url=source_url, title=title, article_text=article_text
+            ):
+                dropped("creativeboom_nonstory_media_2341")
+                continue
             resolved.relevance_score = _score(
                 resolved, title=title, article_text=article_text, marketing_context=marketing_context
             )
@@ -785,7 +822,21 @@ def prepare_article_media(
             # For marketing stories an early in-article creative is legitimate even
             # if its alt text says only "promo"/"campaign". Do not extend this to
             # late recommendation cards.
-            if marketing_context and not semantic_ok and resolved.gallery and _in_story_gallery(resolved, title=title, article_text=article_text):
+            # 2.3.40: Creative Boom's gallery markup may include site-wide
+            # images. A gallery class or schema flag alone does not prove
+            # article ownership: require article-specific image metadata.
+            creativeboom = (urlsplit(source_url).hostname or '').casefold().endswith('creativeboom.com')
+            title_hits, body_hits, _ = _semantic_media_evidence(
+                resolved, title=title, article_text=article_text)
+            article_owned_gallery = (
+                not creativeboom or not resolved.gallery or resolved.page_declared or
+                title_hits >= 1 or body_hits >= 2
+            )
+            if not article_owned_gallery:
+                dropped('creativeboom_gallery_not_bound_to_story_2340')
+                continue
+            if (marketing_context and not semantic_ok and resolved.gallery
+                    and _in_story_gallery(resolved, title=title, article_text=article_text)):
                 # Keep genuine creative galleries even when alt text is blank;
                 # disallow repeated sitewide art via cross-story source guard.
                 resolved.relevance_score = max(40.0, resolved.relevance_score)

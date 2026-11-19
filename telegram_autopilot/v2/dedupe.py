@@ -90,6 +90,17 @@ def _same_event(current: Any, candidate: Any) -> tuple[bool,str]:
     if ah and bh and ah==bh:
         return True,"same content hash"
 
+    # 2.3.40: repeated scientific milestone; distinct discoveries stay eligible.
+    from .editorial_live_2340 import same_science_milestone_without_new_facts
+    if same_science_milestone_without_new_facts(current, candidate):
+        return True, "same confirmed science milestone, no source-owned new outcome"
+
+    # 2.3.41: same daily regional bulletin wins over URL fragments
+    # mistakenly classified as conflicting product/version codes.
+    from .editorial_live_2341 import same_zaporizhzhia_daily_attack_bulletin_2341
+    if same_zaporizhzhia_daily_attack_bulletin_2341(current, candidate):
+        return True, "same daily Zaporizhzhia attack figures, no new outcome"
+
     ac,bc=_codes(current),_codes(candidate); shared_codes=ac&bc
     if (ac and bc and not shared_codes) or (shared_codes and (ac-shared_codes) and (bc-shared_codes)):
         return False,"conflicting strong event/version/product codes"
