@@ -86,6 +86,10 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     # 2.3.39: owner-rejected ordinary rescue stories are not creative news.
     # Source-only veto runs both before paid AI and at the final READY gate.
     if role == "creative":
+        from .editorial_live_2341 import creative_ordinary_cooking_recipe_reason_2341
+        recipe = creative_ordinary_cooking_recipe_reason_2341(article)
+        if recipe:
+            return recipe
         from .editorial_live_2339 import creative_routine_pet_rescue_reason
         rescue = creative_routine_pet_rescue_reason(article)
         if rescue:
