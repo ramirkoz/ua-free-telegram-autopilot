@@ -75,7 +75,8 @@ def same_zaporizhzhia_daily_attack_bulletin_2341(current: Any, prior: Any) -> bo
         return False
     if a[5] and b[5] and a[5] != b[5]:
         return False
-    ad, bd = _f(current, "source_published_at"), _f(prior, "source_published_at")
+    ad = _f(current, "source_published_at") or _f(current, "published_at")
+    bd = _f(prior, "source_published_at") or _f(prior, "published_at")
     if ad and bd:
         try:
             at = datetime.fromisoformat(ad.replace("Z", "+00:00"))
