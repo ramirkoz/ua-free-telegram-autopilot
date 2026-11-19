@@ -83,6 +83,12 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     role = calibrated_editorial_role(channel)
     if role not in {"science", "creative"}:
         return ""
+    # 2.3.44: broad-reader source-only veto BEFORE any AI costs, shared with
+    # hard_editorial_reject at the final publication boundary for legacy READY.
+    from .editorial_owner_2344 import owner_reader_value_reason_2344
+    owner_reader_value = owner_reader_value_reason_2344(role, article)
+    if owner_reader_value:
+        return owner_reader_value
     # 2.3.39: owner-rejected ordinary rescue stories are not creative news.
     # Source-only veto runs both before paid AI and at the final READY gate.
     if role == "creative":
