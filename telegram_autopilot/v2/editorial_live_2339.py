@@ -134,6 +134,9 @@ def source_same_event_without_update(current: Any, prior: Any) -> bool:
     are required. A new confirmed status, number or different street wins
     over similarity. This is not a broad embedding/AI topic classifier.
     """
+    from .editorial_live_2341 import same_zaporizhzhia_daily_attack_bulletin_2341
+    if same_zaporizhzhia_daily_attack_bulletin_2341(current, prior):
+        return True
     if _field(current, "source_id") == _field(prior, "source_id"):
         return False
     current_text, prior_text = _facts(current), _facts(prior)
