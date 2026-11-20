@@ -83,6 +83,12 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     role = calibrated_editorial_role(channel)
     if role not in {"science", "creative"}:
         return ""
+    # 2.3.45: no recipes or cooking tips in editorial channels; check source
+    # before any paid AI and repeat through the same READY/publication gate.
+    from .editorial_owner_2345 import absolute_recipe_reason_2345
+    recipe_2345 = absolute_recipe_reason_2345(article)
+    if recipe_2345:
+        return recipe_2345
     # 2.3.39: owner-rejected ordinary rescue stories are not creative news.
     # Source-only veto runs both before paid AI and at the final READY gate.
     if role == "creative":
