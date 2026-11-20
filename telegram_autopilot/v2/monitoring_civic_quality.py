@@ -201,6 +201,12 @@ def civic_relevance_exclusion(channel: Any, article: Any) -> str:
     if "[LIVE_NOW_RC96]" not in str(channel.policy.rejection_rules or ""):
         return ""
     original = (_value(article, "title") + "\n" + _value(article, "raw_text"))[:8000]
+    # 2.3.46: a donor greeting or emotive childhood reflection is not a
+    # standalone local event; this runs pre-AI and again on legacy READY.
+    from .monitoring_no_event_2346 import childhood_reflection_without_event_2346
+    no_event = childhood_reflection_without_event_2346(article)
+    if no_event:
+        return no_event
     # Exact, high-confidence 03.11 LIVE false-positive specimens. Neither
     # a local Telegram channel name nor a forwarded commentary is local fact.
     if not _LOCAL_ANCHOR.search(original):

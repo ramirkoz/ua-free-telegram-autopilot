@@ -448,6 +448,16 @@ def event_fingerprint_same_event(
         material_update = material_monitoring_update_237(current, candidate)
         if material_update:
             return False, material_update
+        from .monitoring_no_event_2346 import (
+            same_source_reflective_continuation_2346,
+            same_source_telegram_thread_2346,
+        )
+        same_continuation, continuation_reason = same_source_reflective_continuation_2346(current, candidate)
+        if same_continuation:
+            return True, continuation_reason
+        same_donor_story, donor_reason = same_source_telegram_thread_2346(current, candidate)
+        if same_donor_story:
+            return True, donor_reason
 
     # 2.3.33: one completed spacecraft milestone is one event, whether
     # the next source is a recap, video, or differently worded headline.
@@ -864,11 +874,14 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
         self._sync_ledger(channel_id, hours)
         with self.store.connect() as con:
             return con.execute(
-                """SELECT article_id AS id,channel_id,source_id,title,raw_text,final_text,event_summary,
-                          source_name,published_at,'PUBLISHED' AS stage,'PUBLISH' AS decision
-                   FROM published_event_ledger
-                   WHERE channel_id=? AND article_id<>?
-                   ORDER BY datetime(published_at) DESC,ledger_id DESC LIMIT ?""",
+                """SELECT l.article_id AS id,l.channel_id,l.source_id,l.title,l.raw_text,l.final_text,l.event_summary,
+                          l.source_name,l.published_at,'PUBLISHED' AS stage,'PUBLISH' AS decision,
+                          COALESCE(a.canonical_source_url,'') AS canonical_source_url,
+                          COALESCE(a.source_url,'') AS source_url,
+                          COALESCE(a.source_published_at,'') AS source_published_at
+                   FROM published_event_ledger AS l LEFT JOIN articles AS a ON a.id=l.article_id
+                   WHERE l.channel_id=? AND l.article_id<>?
+                   ORDER BY datetime(l.published_at) DESC,l.ledger_id DESC LIMIT ?""",
                 (int(channel_id), int(article_id), self.LEDGER_LIMIT),
             ).fetchall()
 
