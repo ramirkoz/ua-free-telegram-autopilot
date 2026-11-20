@@ -467,6 +467,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         science_topic_problem = editorial_source_topic_reason_2319(channel, article)
         if science_topic_problem:
             return science_topic_problem
+    # 2.3.45: a global owner veto, including monitoring posts and old READY.
+    # For editorial channels the role-specific legacy reasons above retain
+    # their priority; this path also protects direct monitoring selection.
+    from .editorial_owner_2345 import absolute_recipe_reason_2345
+    recipe_2345 = absolute_recipe_reason_2345(article)
+    if recipe_2345:
+        return recipe_2345
     from .editorial_owner_2332 import final_artifact_reason_2332
     final_problem = final_artifact_reason_2332(article, text)
     if final_problem:
