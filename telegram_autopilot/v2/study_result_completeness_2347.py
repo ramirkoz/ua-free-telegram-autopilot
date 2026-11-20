@@ -77,9 +77,29 @@ def source_study_findings_2347(article: Any) -> tuple[str, ...]:
                 and _SOURCE_FINDING.search(sentence)
                 and sentence not in found):
             found.append(sentence)
-            if len(found) == 3:
-                break
-    return tuple(found) if len(found) >= 2 else ()
+    if len(found) < 2:
+        return ()
+    # An overview may first cover brief anger spikes and only later establish
+    # that a longer randomized experiment found no lasting difference.
+    # Keep the first measured finding, and pin the first important null result
+    # as a separate, source-verbatim piece of evidence when it exists.
+    chosen = [found[0]]
+    null_results = [
+        sentence for sentence in found[1:]
+        if re.search(
+            r"(?i)\b(?:no statistically significant|not statistically significant|"
+            r"no significant|no evidence|none survived|absence of an effect|"
+            r"no detrimental impact)\b", sentence
+        )
+    ]
+    if null_results:
+        chosen.append(null_results[0])
+    for sentence in found[1:]:
+        if len(chosen) >= 3:
+            break
+        if sentence not in chosen:
+            chosen.append(sentence)
+    return tuple(chosen)
 
 
 def study_results_guidance_2347(article: Any) -> str:
