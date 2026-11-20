@@ -157,3 +157,23 @@ def test_generalities_plus_only_a_method_still_fail():
         "взяли участь 135 студентів, які грали три тижні."
     )
     assert study_results_missing_2347(_study(), post).startswith("STUDY_RESULTS_MISSING_2347")
+
+def test_negative_planaria_learning_result_is_accepted():
+    """Historic published article #87346: failure to train is a measured outcome."""
+    post = (
+        "У дослідженні на 12 штамах планарій ученим не вдалося "
+        "навчити черв'яків реагувати на світло. "
+        "Жоден із штамів не продемонстрував навчання."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_equivalent_exercise_strength_result_is_accepted():
+    """Historic published article #85571: no difference + strength progress."""
+    post = (
+        "У восьмитижневому експерименті 45 учасників виконували "
+        "короткі або довгі тренування. В обох групах однаково "
+        "покращилися сила й м'язова витривалість. "
+        "Різниця не була статистично значущою."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
