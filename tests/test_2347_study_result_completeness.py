@@ -109,3 +109,71 @@ def test_measured_hook_memory_result_is_not_overblocked():
         "Під час експерименту студентів також відволікали словами."
     )
     assert study_results_missing_2347(a, post) == ""
+
+
+# Replay-proven positives (READ-ONLY 400 historic LIVE posts):
+# 105679 walking brain response; 105041 survey perceptions;
+# 102703 fruit fly heart/pulse; 100811 macaques semantic processing.
+# The older heuristic blocked these correct findings simply because its
+# measured-object vocabulary omitted them. Do not regress this safety balance.
+def test_walking_brain_activity_result_is_accepted():
+    post = (
+        "Після експерименту активність мозку у старших учасників залишалася "
+        "стабільною, а у молодших знижувалася. У дослідженні взяли участь "
+        "молодші та старші дорослі."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_survey_self_reported_preferences_result_is_accepted():
+    post = (
+        "Дорослі загалом вважають, що те, що їх сексуально збуджує, "
+        "може помірно змінюватися. Учасники онлайн-опитування "
+        "оцінювали свої вподобання."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_dopamine_heartbeat_response_result_is_accepted():
+    post = (
+        "Дослідники виявили у мушок клітини, що сповільнюють серцебиття "
+        "під час раптової небезпеки. Реакцію досліджували в експерименті."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_primate_video_processing_result_is_accepted():
+    post = (
+        "Мозок людей і макак реагує на нову смислову інформацію. "
+        "Дослідники вивчали мозкову активність і рухи очей учасників."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_generalities_plus_only_a_method_still_fail():
+    post = (
+        "Результати досліджень суперечливі. Деякі ефекти помічали "
+        "одразу, інші не виявляли згодом. У досліді "
+        "взяли участь 135 студентів, які грали три тижні."
+    )
+    assert study_results_missing_2347(_study(), post).startswith("STUDY_RESULTS_MISSING_2347")
+
+def test_negative_planaria_learning_result_is_accepted():
+    """Historic published article #87346: failure to train is a measured outcome."""
+    post = (
+        "У дослідженні на 12 штамах планарій ученим не вдалося "
+        "навчити черв'яків реагувати на світло. "
+        "Жоден із штамів не продемонстрував навчання."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
+
+
+def test_equivalent_exercise_strength_result_is_accepted():
+    """Historic published article #85571: no difference + strength progress."""
+    post = (
+        "У восьмитижневому експерименті 45 учасників виконували "
+        "короткі або довгі тренування. В обох групах однаково "
+        "покращилися сила й м'язова витривалість. "
+        "Різниця не була статистично значущою."
+    )
+    assert study_results_missing_2347(_study(), post) == ""
