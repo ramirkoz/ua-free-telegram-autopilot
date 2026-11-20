@@ -2087,6 +2087,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             statistic_contexts=len(source_fact_card.statistic_contexts),
             truncated=source_fact_card.truncated,
         )
+        from .study_result_completeness_2347 import (
+            study_results_guidance_2347, study_results_missing_2347,
+        )
+        study_result_guidance = (
+            study_results_guidance_2347(article)
+            if channel.mode == ChannelMode.EDITORIAL else ""
+        )
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
         style_memory = self.learning.style_memory_block(channel.id, article)
@@ -2168,6 +2175,7 @@ EXTRA: {p.writer_extra_prompt}
 {style_memory}
 ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {source_fact_card.text}
+{study_result_guidance}
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
@@ -2220,6 +2228,10 @@ SOURCE:
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+            if study_result_guidance:
+                missing = study_results_missing_2347(article, candidate)
+                if missing:
+                    raise ValueError(missing)
 
         try:
             result = self.gateway.run(
@@ -2251,6 +2263,10 @@ SOURCE:
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
         )
+        if study_result_guidance:
+            missing = study_results_missing_2347(article, draft)
+            if missing:
+                raise ValueError(missing)
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
         from .reader_first import requires_final_reader_copyedit
         needs_trusted_editor = requires_final_reader_copyedit(
@@ -2307,7 +2323,11 @@ SOURCE:
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
         # Local LanguageTool may run AFTER trusted AI; never let it undo
-        # draft-to-final factual safeguards. This does not call another model.
+        # source results or draft-to-final factual safeguards.
+        if study_result_guidance:
+            missing = study_results_missing_2347(article, final)
+            if missing:
+                raise ValueError(missing)
         delta_issues = draft_final_regressions(draft, final)
         if delta_issues:
             raise ValueError(
@@ -2362,6 +2382,13 @@ SOURCE:
         source_attribution_instruction = source_body_instruction(channel, article)
         from .source_fact_card import build_source_fact_card
         source_fact_card = build_source_fact_card(article, char_budget=1700)
+        from .study_result_completeness_2347 import (
+            study_results_guidance_2347, study_results_missing_2347,
+        )
+        study_result_guidance = (
+            study_results_guidance_2347(article)
+            if channel.mode == ChannelMode.EDITORIAL else ""
+        )
         from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
         source_voice_instruction = SOURCE_VOICE_INSTRUCTION if channel.mode == ChannelMode.MONITORING else ""
         from .monitoring_editorial_stance_232 import MONITORING_STANCE_INSTRUCTION
@@ -2386,6 +2413,7 @@ SOURCE:
 {source_voice_instruction}
 {source_stance_instruction}
 {source_fact_card.text}
+{study_result_guidance}
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
@@ -2431,6 +2459,12 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
             )
+            # Study coverage: a post with study methods also needs a measured
+            # outcome grounded in the original source, not merely the sample.
+            if study_result_guidance:
+                missing = study_results_missing_2347(article, candidate)
+                if missing:
+                    raise ValueError(missing)
             # 2.2.51: A syntactically cleaner FINAL must not strengthen the
             # same qualified assertion or promote a contributor to author.
             # This compares same-language DRAFT -> FINAL, not English NLI.

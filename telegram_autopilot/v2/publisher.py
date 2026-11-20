@@ -725,9 +725,12 @@ class Publisher:
                     "publish", "removed non-actionable source/media URL from body",
                     channel_id=channel_id, article_id=article_id,
                 )
-        # Telegram receives plain text here; raw Markdown markers must not leak.
-        # Only unwrap paired title-line bold tokens, never remove arbitrary stars.
-        formatted = re.sub(r"(?m)^(\s*)\*\*(.{4,180}?)\*\*(\s*)$", r"\1\2\3", current_text)
+        # Telegram Bot API is plain text (with attribution entities, not Markdown).
+        # Normalize paired inline *journal names* / **emphasis** before both
+        # single-text sends and captioned photo/album sends. Literal operators
+        # and unbalanced/escaped stars are preserved.
+        from .publication_markup_2347 import normalize_plaintext_markup_2347
+        formatted = normalize_plaintext_markup_2347(current_text)
         if channel.mode == ChannelMode.MONITORING:
             formatted = clean_orphan_video_cues(formatted)
         if formatted != current_text:
@@ -736,6 +739,21 @@ class Publisher:
             article = self.store.get_article(article_id) or article
             event("publish", "normalized plain-text formatting and orphan video cues",
                   channel_id=channel_id, article_id=article_id)
+        # Study reviews must contain a measured result, not only details
+        # about sample size and experiment duration. Re-check old READY at
+        # publication to prevent stale drafts from bypassing the writer gate.
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .study_result_completeness_2347 import study_results_missing_2347
+            missing_result = study_results_missing_2347(article, current_text)
+            if missing_result:
+                outcome = self.store.requeue_quality_rewrite(
+                    article_id, error_code="STUDY_RESULTS_MISSING_2347",
+                    detail=missing_result, max_attempts=3,
+                )
+                event("publish", "methods-only study result blocked",
+                      level=30, channel_id=channel_id, article_id=article_id,
+                      reason=missing_result, outcome=outcome)
+                return outcome
         # 2.3.28: prevent truncated READY copy (e.g. #1854 ended
         # after "за інших умов:") from reaching Telegram as a valid caption.
         from .terminal_text_guard_228 import incomplete_terminal_text_228
