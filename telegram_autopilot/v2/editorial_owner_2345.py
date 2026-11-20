@@ -35,6 +35,8 @@ _CULINARY_CONTEXT = re.compile(
     r"(?iu)\b(?:steaks?|beef|turkey|chicken|meat|pork|salmon|fish|shrimp|"
     r"sandwich(?:es)?|hoagie|pasta|noodles?|ramen|soup|salad|rice|"
     r"potatoes?|vegetables?|bread|muffins?|cookies?|cakes?|desserts?|"
+    r"chocolate|coffee|tea|cocktails?|smoothies?|pancakes?|sushi|bacon|"
+    r"dough|flour|cheese|eggs?|milk|ice[ -]cream|"
     r"tacos?|burgers?|pizza|dinners?|breakfast|lunch|meals?|dishes?|"
     r"marinad(?:e|es)|sauces?|gravy|baking|roast(?:ing)?|grilling|"
     r"стейк\w*|м.яс\w*|курк\w*|риб\w*|маринад\w*|"
@@ -84,8 +86,15 @@ def absolute_recipe_reason_2345(article: Any) -> str:
                       r"tender(?:er)?|secret\s+trick|cooking\s+tips?|"
                       r"інгредієнт\w*|смачніш\w*|соковитіш\w*)\b", title)
     )
+    # The headline may conceal the recipe as a "flavour trick" or "the
+    # easiest way". Require a food subject in the original headline plus
+    # three *different* preparation cues in its opening source paragraphs.
+    cooking_signals_early = sum(bool(p.search(body[:2400])) for p in _COOKING_STEPS)
+    cooking_instruction_story = bool(
+        _CULINARY_CONTEXT.search(title) and cooking_signals_early >= 3
+    )
     if not (_RECIPE_TITLE.search(title) or _EXPLICIT_HOWTO.search(title)
-            or food_tip_title):
+            or food_tip_title or cooking_instruction_story):
         return ""
     src = title + "\n" + body[:2400]
     if not _CULINARY_CONTEXT.search(src):
@@ -105,4 +114,37 @@ def absolute_recipe_reason_2345(article: Any) -> str:
     return ""
 
 
-__all__ = ["absolute_recipe_reason_2345"]
+# Independent last-mile veto: a writer may hallucinate a recipe even where
+# its original source headline looked innocent. Only clear directions with
+# at least two distinct cooking signals count; food-tech descriptions do not.
+_OUTPUT_DISH = re.compile(
+    r"(?iu)\b(?:рецепт\w*|маринад\w*|стейк\w*|соус\w*|"
+    r"м.яс\w*|курк\w*|індичк\w*|риб\w*|суп(?:у|ом|ів|и)?|"
+    r"салат\w*|картопл\w*|пиріг\w*|кава\w*|"
+    r"страв\w*|десерт\w*|випічк\w*|рис\w*|паст\w*)\b"
+)
+_OUTPUT_STEPS = (
+    re.compile(r"(?iu)\b(?:додати|додають|додайте|додає|змішати|змішайте|"
+               r"змішують|замаринувати|маринуйте|маринувати|запікати|"
+               r"запікайте|запікають|смажити|смажте|варити|варіть)\b"),
+    re.compile(r"(?iu)\b(?:склянк\w*|ложк\w*|\d+\s*(?:грам\w*|хвилин\w*|годин\w*))\b"),
+    re.compile(r"(?iu)\b(?:часник\w*|імбир\w*|оцет|оцту|олія|"
+               r"молок\w*|вершк\w*|сіль|цукор|мед|соєв\w*\s+соус)\b"),
+    re.compile(r"(?iu)\b(?:інгредієнт\w*|пропорці\w*|марину\w*|"
+               r"залишит\w*\s+(?:на\s+ніч|у\s+холодильник\w*))\b"),
+)
+
+
+def final_recipe_reason_2345(text: str) -> str:
+    """Block obvious Ukrainian cooking instructions at the actual send gate."""
+    value = str(text or "").strip()[:2500]
+    if not value or not _OUTPUT_DISH.search(value):
+        return ""
+    # Demand an actual preparation VERB. Ingredient/amount mentions alone
+    # also occur in science, product news, and retailer price reports.
+    if _OUTPUT_STEPS[0].search(value) and sum(bool(pattern.search(value)) for pattern in _OUTPUT_STEPS) >= 2:
+        return "EDITORIAL_NO_RECIPES_FINAL_TEXT_2345"
+    return ""
+
+
+__all__ = ["absolute_recipe_reason_2345", "final_recipe_reason_2345"]

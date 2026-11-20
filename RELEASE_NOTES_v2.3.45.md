@@ -3,7 +3,7 @@
 ## Owner-authorized changes (20 Nov 2026)
 
 - **ABSOLUTE NO RECIPES:** deterministic original source title/body veto, covering marinades, cooking tips, secret ingredients, roast/steak instructions and indirect culinary advice. The exact published violation `article #106938` must never pass. Additional cases replayed: `#107194`, `#103419`, `#105713`. Does not accidentally ban real restaurant design, appliance inventions or food-tech.
-- **Every channel:** new source-only recipe veto wired into the shared editorial pre-AI topic gate and global non-AI hard reject for old READY/prepublication, including monitoring. No new AI requests. No stale READY recipe is sent to Telegram on 2.3.45.
+- **Every channel:** new source-only recipe veto wired into the shared editorial pre-AI topic gate and global non-AI hard reject for old READY/prepublication, including monitoring. Additional independent final-text recipe-instruction veto prevents a writer from introducing a recipe not flagged in the original headline. No new AI requests. No stale READY recipe is sent to Telegram on 2.3.45.
 - **Editor voice:** all channel writer and final-editor instructions now enforce a reader-first hook, 1 main verified event, accessible explanation and grounded caveats. Separate calibrated instructions for `CTRL+UA` science, `ПРОДАНО!` creative, and `ЗАПОРІЖЖЯ | ГРОМАДИ` monitoring. No historical article is injected as a factual example and no model/price changes.
 - **Regression:** negative actual LIVE examples and positive authentic innovation/design controls; existing 2.3.44 safeguards and publication safety remain.
 

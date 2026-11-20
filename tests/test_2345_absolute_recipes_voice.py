@@ -10,7 +10,7 @@ import pytest
 
 from telegram_autopilot.v2.domain import ChannelMode, DedupeProfile, EditorialRuntimeProfile
 from telegram_autopilot.v2.editorial_human_calibration_236 import MARKER
-from telegram_autopilot.v2.editorial_owner_2345 import absolute_recipe_reason_2345
+from telegram_autopilot.v2.editorial_owner_2345 import absolute_recipe_reason_2345, final_recipe_reason_2345
 from telegram_autopilot.v2.editorial_source_topic_2319 import editorial_source_topic_reason_2319
 from telegram_autopilot.v2.editorial import hard_editorial_reject
 from telegram_autopilot.v2.editorial_voice_2337 import newsroom_voice_2337
@@ -113,3 +113,23 @@ def test_owner_reader_voice_calibration_is_channel_scoped(role,mandatory,forbidd
     assert mandatory in writer and forbidden not in writer
     assert "ПОВТОРНЕ РЕДАКТОРСЬКЕ ЧИТАННЯ" in final
     assert "ніяких нових дат" in writer
+
+
+def test_final_generated_recipe_detected_even_when_source_title_is_indirect():
+    bad_copy = (
+        "Кокосове молоко може стати основою маринаду для стейка. На 1–2 фунти "
+        "м'яса потрібно пів склянки молока. До маринаду можна додати соус і часник."
+    )
+    assert final_recipe_reason_2345(bad_copy) == "EDITORIAL_NO_RECIPES_FINAL_TEXT_2345"
+    disguised = {"title":"Unusual new steak product concept",
+                "raw_text":"The design is a surprising meat product with no cooking instructions."}
+    assert absolute_recipe_reason_2345(disguised) == ""
+    assert hard_editorial_reject(CREATIVE, disguised, bad_copy) == "EDITORIAL_NO_RECIPES_FINAL_TEXT_2345"
+    good_copy = "Новий дизайн кавомашини нагадує скульптуру. Її корпус повторює форму кактуса."
+    assert final_recipe_reason_2345(good_copy) == ""
+
+
+def test_hidden_cooking_recipe_headline_still_blocked_from_body_evidence():
+    title = "3 Magic Words at Texas Roadhouse Make Baked Potatoes Twice as Good"
+    body = "Bake potatoes for 20 minutes. Add butter, mix with sour cream, sprinkle salt and pepper."
+    assert absolute_recipe_reason_2345({"title":title,"raw_text":body}) == EXPECTED

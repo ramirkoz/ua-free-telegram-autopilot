@@ -474,6 +474,11 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     recipe_2345 = absolute_recipe_reason_2345(article)
     if recipe_2345:
         return recipe_2345
+    # Independent generated-copy safeguard after the source-only veto.
+    from .editorial_owner_2345 import final_recipe_reason_2345
+    final_recipe = final_recipe_reason_2345(text)
+    if final_recipe:
+        return final_recipe
     from .editorial_owner_2332 import final_artifact_reason_2332
     final_problem = final_artifact_reason_2332(article, text)
     if final_problem:
