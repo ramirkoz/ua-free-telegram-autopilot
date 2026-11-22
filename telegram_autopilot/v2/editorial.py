@@ -503,6 +503,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     source_exclusion = civic_relevance_exclusion(channel, article)
     if source_exclusion:
         return source_exclusion
+    # 2.3.48: opt-in newsroom gate applies before AI and to older READY.
+    if "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or ""):
+        from .monitoring_newsroom_2348 import source_non_news_reason_2348
+        no_news = source_non_news_reason_2348(article)
+        if no_news:
+            return no_news
     # Keep legacy emergency diagnostics stable; the new source veto applies
     # before paid AI and again to stored READY candidates at send time.
     from .editorial_owner_2332 import monitoring_source_reason_2332
@@ -1431,6 +1437,12 @@ class EditorialEngine:
                 source_short = ""
         if source_short:
             return EditorialOutcome(Decision.REJECT, reason=source_short, fit_score=0)
+        if (channel.mode == ChannelMode.MONITORING
+                and "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or "")):
+            from .monitoring_newsroom_2348 import source_non_news_reason_2348
+            no_news = source_non_news_reason_2348(article)
+            if no_news:
+                return EditorialOutcome(Decision.REJECT, reason=no_news, fit_score=0)
         # 2.3.29: source-only shopping-guide rejection before paid AI,
         # including wrapped selection paths. Publisher repeats it for READY.
         if channel.mode == ChannelMode.EDITORIAL:
@@ -1787,6 +1799,8 @@ SOURCE:
         )
         # 2.3.27 reader-first direction is a SOFT preference, calibrated by
         # owner labels.  Does not override an approved original design concept.
+        from .editorial_owner_choices_2348 import owner_choice_guidance_2348
+        choice_guidance = owner_choice_guidance_2348(calibrated_role)
         theme_direction = (
             "CTRL+UA: наукові відкриття простими словами, роботи, незвичайні "
             "гаджети, ШІ у повсякденному житті, практична кібербезпека, "
@@ -1856,6 +1870,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {commercial_audience_instruction}
 {commercial_mix_instruction}
 {theme_direction}
+{choice_guidance}
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
 {calibrated_feedback_2320(calibrated_role)}
@@ -2115,6 +2130,11 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        from .monitoring_newsroom_2348 import monitoring_newsroom_instruction_2348
+        monitoring_2348 = (
+            monitoring_newsroom_instruction_2348(article)
+            if channel.mode == ChannelMode.MONITORING else ""
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'ОБОВ\'ЯЗКОВО: у першому абзаці природно вживи точну назву «{source_context}» хоча б один раз. '
@@ -2176,6 +2196,7 @@ EXTRA: {p.writer_extra_prompt}
 ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {source_fact_card.text}
 {study_result_guidance}
+{monitoring_2348}
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
@@ -2190,6 +2211,7 @@ PROTECTED ACTIONABLE FACTS: якщо релевантні правилам ка�
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
 SOURCE:
 {_source_pack(article, 6200)}
+{monitoring_2348}
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
 
         def prepared_text(raw: str) -> str:
@@ -2269,6 +2291,7 @@ SOURCE:
                 raise ValueError(missing)
         quality = assess_rewrite(draft, hard_limit=validation_hard_max)
         from .reader_first import requires_final_reader_copyedit
+        from .monitoring_newsroom_2348 import robotic_lead_reason_2348
         needs_trusted_editor = requires_final_reader_copyedit(
             monitoring=channel.mode == ChannelMode.MONITORING,
             legacy_quality_risk=(
@@ -2279,6 +2302,10 @@ SOURCE:
                 or needs_grammar_polish(draft)
                 or needs_voice_editor_2337(
                     draft, monitoring=channel.mode == ChannelMode.MONITORING,
+                )
+                or (
+                    channel.mode == ChannelMode.MONITORING
+                    and bool(robotic_lead_reason_2348(draft))
                 )
             ),
         )
@@ -2374,6 +2401,11 @@ SOURCE:
             science=is_science_general_channel(channel),
             final=True,
         )
+        from .monitoring_newsroom_2348 import monitoring_newsroom_instruction_2348
+        monitoring_2348 = (
+            monitoring_newsroom_instruction_2348(article, final=True)
+            if channel.mode == ChannelMode.MONITORING else ""
+        )
         source_context_instruction = (
             f'SOURCE CONTEXT: {source_context}\n'
             f'Не прибирай і не змінюй точну назву «{source_context}»: вона потрібна, щоб пост був зрозумілий поза контекстом джерела.\n'
@@ -2414,6 +2446,7 @@ SOURCE:
 {source_stance_instruction}
 {source_fact_card.text}
 {study_result_guidance}
+{monitoring_2348}
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
@@ -2421,7 +2454,7 @@ SOURCE:
 кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\n{monitoring_2348}\nПоверни тільки фінальний текст."""
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
