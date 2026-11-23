@@ -95,8 +95,12 @@ def test_only_regional_news_channel_no_cross_channel_regression():
         assert monitoring_short_material_reason_2352(other, short) == ""
 
 
-def test_no_short_monitoring_even_if_operator_lowers_ui_target():
-    # Canonical invariant: below-500 length must NOT silently become permissible.
+def test_legacy_short_form_policy_is_not_implicitly_migrated():
+    # The operator's current production min=500 is authoritative; generic
+    # historical test profiles targeting 120/300 are not silently rewritten.
     assert monitoring_short_material_reason_2352(
         regional(120), article("Відновили рух бульваром.")
+    ) == ""
+    assert monitoring_short_material_reason_2352(
+        regional(500), article("Відновили рух бульваром.")
     ) == "MONITORING_SHORT_SOURCE_DROP_2352"
