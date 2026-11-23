@@ -505,6 +505,13 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
             final_context = monitoring_final_context_issue_2351(article, text)
             if final_context:
                 return final_context
+    # 2.3.52: owner's hard regional rule. Short original reports are not
+    # news articles, even if the AI could fabricate a longer text. This is
+    # checked during source admission AND again before Telegram publication.
+    from .monitoring_short_material_2352 import monitoring_short_material_reason_2352
+    short_material = monitoring_short_material_reason_2352(channel, article, text)
+    if short_material:
+        return short_material
     if "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or ""):
         from .editorial_admission_2349 import (
             expired_service_reason_2349, regional_no_result_reason_2349,
