@@ -444,6 +444,15 @@ def event_fingerprint_same_event(
     and normalized facts.
     """
     if monitoring_profile:
+        # 2.3.49: a rescue republished tomorrow is the same incident when
+        # independent source-owned rescue, injury, method, terrain and place
+        # agree. This runs before English/title/numeric overlap shortcuts.
+        from .monitoring_event_identity_2349 import rescue_same_event_2349
+        rescue_same, rescue_reason = rescue_same_event_2349(current, candidate)
+        if rescue_same:
+            from .monitoring_event_update_237 import material_monitoring_update_237
+            if not material_monitoring_update_237(current, candidate):
+                return True, rescue_reason
         from .monitoring_event_update_237 import material_monitoring_update_237
         material_update = material_monitoring_update_237(current, candidate)
         if material_update:
