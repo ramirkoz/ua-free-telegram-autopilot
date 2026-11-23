@@ -70,6 +70,7 @@ def test_different_victim_or_rescue_method_must_not_merge():
     assert not rescue_same_event_2349(third, first)[0]
     _, _, third = _rescues()
     third["raw_text"] = third["raw_text"].replace("човен", "гелікоптер")
+    third["title"] = third["title"].replace("човен", "гелікоптер")
     assert not rescue_same_event_2349(third, first)[0]
 
 
