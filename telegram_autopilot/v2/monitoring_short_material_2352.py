@@ -1,8 +1,9 @@
 """Fail-closed regional source and final length floor, owner editorial rule.
 
 A source with too few confirmed facts is not made publishable by an AI
-rewriter. The minimum 500-character source/final policy is only for the
-regional news channel; never alter CTRL+UA or ПРОДАНО!.
+rewriter. The minimum 500-character source/final policy applies to the actual
+regional news channel configured for 500+ characters; never alter older
+short-form profiles, CTRL+UA or ПРОДАНО!.
 
 Applied in hard_editorial_reject before AI and before Telegram, including
 previously READY items, so no legacy short post can bypass it.
@@ -41,7 +42,13 @@ def monitoring_short_material_reason_2352(channel: Any, article: Any, text: str 
     # At least the actual configured threshold; never silently downgrade it
     # to 20/85/270 characters because the original was short.
     policy = getattr(channel, "policy", None)
-    min_chars = max(MIN_REGIONAL_NEWS_CHARS, int(getattr(policy, "target_min_chars", 0) or 0))
+    configured_min = int(getattr(policy, "target_min_chars", 0) or 0)
+    # This rule enforces the owner's configured 500+ news-article policy.
+    # Historical test/profile channels explicitly configured at 300 chars
+    # are not silently migrated to a different editorial policy.
+    if configured_min < MIN_REGIONAL_NEWS_CHARS:
+        return ""
+    min_chars = max(MIN_REGIONAL_NEWS_CHARS, configured_min)
 
     source = _content_text(_value(article, "raw_text") or _value(article, "title"))
     if len(source) < min_chars:
