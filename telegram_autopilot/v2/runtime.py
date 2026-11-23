@@ -610,6 +610,23 @@ class RuntimeEngine:
                 return True
 
             if str(article["stage"]) in {str(Stage.COLLECTED), str(Stage.EXTRACTED)}:
+                # 2.3.53: source eligibility precedes ALL event dedupe. Without
+                # this, a 303-character rejected notice can become the canonical
+                # anchor that silences two 686-character reports before editorial.
+                # No AI call, no Data migration, no historical replay.
+                channel_for_admission = self.store.get_channel(channel_id)
+                if (channel_for_admission is not None
+                        and channel_for_admission.mode == ChannelMode.MONITORING):
+                    from .monitoring_short_material_2352 import monitoring_short_material_reason_2352
+                    source_veto = monitoring_short_material_reason_2352(channel_for_admission, article)
+                    if source_veto:
+                        self.store.reject_editorial_article(article_id, source_veto)
+                        state.processed += 1
+                        self._job_activity(state, "rejected")
+                        self._job_activity(state, "completed")
+                        event("editorial", "2.3.53 source rejected before event dedupe",
+                              channel_id=channel_id, article_id=article_id, reason=source_veto)
+                        return True
                 self.store.update_article(article_id, stage=str(Stage.EXTRACTED))
                 duplicate = self.dedupe.evaluate(article_id)
                 if duplicate.relation == "DUPLICATE":

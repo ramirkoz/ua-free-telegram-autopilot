@@ -232,6 +232,13 @@ def _breaking_incident_same_event(current: Any, candidate: Any) -> tuple[bool, s
     shared_targets = _incident_groups(left, _INCIDENT_TARGET_GROUPS) & _incident_groups(right, _INCIDENT_TARGET_GROUPS)
     if not shared_actions or not shared_targets:
         return False, "incident action/target mismatch"
+    # 2.3.53: generic words "damaged", "affected" and "medical" also occur
+    # in civic benefit guides and repair-compensation programs. Those are not
+    # live breaking incidents. Only a concrete attack/fire (or rescue with
+    # casualty/evacuation) can use this broad incident clustering lane.
+    if not ({"attack", "fire"} & shared_actions or
+            ("casualty" in shared_actions and "evacuation" in shared_targets)):
+        return False, "administrative/damage topic is not an incident identity"
     ta, tb = _incident_time(current), _incident_time(candidate)
     if ta is not None and tb is not None and abs((ta - tb).total_seconds()) > 3 * 3600:
         return False, "incident outside three-hour clustering window"
