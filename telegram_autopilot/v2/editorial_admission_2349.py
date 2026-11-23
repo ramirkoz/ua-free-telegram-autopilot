@@ -6,11 +6,19 @@ Time-critical services are evaluated at selection AND before Telegram delivery.
 from __future__ import annotations
 
 from datetime import datetime, date, time
+from functools import lru_cache
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-_KYIV = ZoneInfo("Europe/Kyiv")
+@lru_cache(maxsize=1)
+def _kyiv_tz() -> ZoneInfo:
+    """Resolve time-zone data only for time-sensitive service notices.
+
+    The commercial and general newsroom gates must never depend on a platform
+    timezone database merely to import their own editorial rules.
+    """
+    return ZoneInfo("Europe/Kyiv")
 _MONTHS = {
     "січня": 1, "лютого": 2, "березня": 3, "квітня": 4,
     "травня": 5, "червня": 6, "липня": 7, "серпня": 8,
@@ -59,7 +67,7 @@ def _effective_day(row: Any, source: str, now: datetime) -> date | None:
         dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return dt.astimezone(_KYIV).date() if dt.tzinfo else None
+    return dt.astimezone(_kyiv_tz()).date() if dt.tzinfo else None
 
 
 def expired_service_reason_2349(row: Any, now: datetime | None = None) -> str:
@@ -76,15 +84,16 @@ def expired_service_reason_2349(row: Any, now: datetime | None = None) -> str:
     ends = [time(int(h), int(m)) for h, m in _END.findall(source)]
     if not ends:
         return ""
-    instant = now or datetime.now(_KYIV)
+    kyiv = _kyiv_tz()
+    instant = now or datetime.now(kyiv)
     if instant.tzinfo is None:
         raise ValueError("now must have a timezone")
-    local = instant.astimezone(_KYIV)
+    local = instant.astimezone(kyiv)
     valid_day = _effective_day(row, source, local)
     if valid_day is None:
         return ""
     # Multiple intervals are valid until their final confirmed end.
-    if datetime.combine(valid_day, max(ends), tzinfo=_KYIV) >= local:
+    if datetime.combine(valid_day, max(ends), tzinfo=kyiv) >= local:
         return ""
     return "MONITORING_SERVICE_EXPIRED_AT_PUBLISH_2349"
 
