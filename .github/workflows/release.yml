@@ -124,7 +124,10 @@ jobs:
             Remove-Item (Join-Path $stage $junk) -Recurse -Force -ErrorAction SilentlyContinue
           }
 
-          python -m pip install --disable-pip-version-check --no-compile --target $sp 'cryptography>=42,<47' 'Telethon>=1.36,<2' 'Pillow>=11.3,<13' pip
+          # 2.3.50: Python on Windows ships without IANA timezone data. The
+          # portable --target environment is distinct from CI Python; install
+          # tzdata into the actual isolated runtime, not only requirements.txt.
+          python -m pip install --disable-pip-version-check --no-compile --target $sp 'cryptography>=42,<47' 'Telethon>=1.36,<2' 'Pillow>=11.3,<13' 'tzdata>=2025.2' pip
           if ($LASTEXITCODE -ne 0) { throw 'portable runtime dependency install failed' }
 
           Copy-Item telegram_autopilot -Destination $stage -Recurse -Force
@@ -275,6 +278,19 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Compact base runtime gate failed' }
           } finally { Pop-Location }
 
+      - name: Validate IANA Kyiv timezone in isolated portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Push-Location $env:PORTABLE_STAGE
+          try {
+            # Must execute with the frozen launcher's own ._pth, not CI's Python.
+            # The previous release passed CI with tzdata but omitted it from
+            # portable Lib/site-packages, starving two live news channels.
+            & .\_runtime_console.exe -I -c "from datetime import datetime, timezone; from zoneinfo import ZoneInfo; import tzdata; from telegram_autopilot.v2.editorial_admission_2349 import expired_service_reason_2349, commercial_catalog_reason_2349; z=ZoneInfo('Europe/Kyiv'); assert datetime(2026,11,23,tzinfo=timezone.utc).astimezone(z).utcoffset().total_seconds()==7200; assert datetime(2026,7,23,tzinfo=timezone.utc).astimezone(z).utcoffset().total_seconds()==10800; assert not commercial_catalog_reason_2349({'title': 'Original art installation'}); print('V2_PORTABLE_KYIV_ZONEINFO_AND_EDITORIAL_PASS')"
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged Kyiv zoneinfo/editorial smoke failed' }
+          } finally { Pop-Location }
+          
       - name: Validate real first-run Codex bootstrap
         shell: pwsh
         run: |
