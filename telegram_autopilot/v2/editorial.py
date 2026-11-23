@@ -483,8 +483,20 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     final_problem = final_artifact_reason_2332(article, text)
     if final_problem:
         return final_problem
+    if channel.mode == ChannelMode.EDITORIAL and calibrated_editorial_role(channel) == "creative":
+        from .editorial_admission_2349 import commercial_catalog_reason_2349
+        catalog_problem = commercial_catalog_reason_2349(article)
+        if catalog_problem:
+            return catalog_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
+    if "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or ""):
+        from .editorial_admission_2349 import (
+            expired_service_reason_2349, regional_no_result_reason_2349,
+        )
+        admission = expired_service_reason_2349(article) or regional_no_result_reason_2349(article)
+        if admission:
+            return admission
     if _denied_original_monitoring_source(channel, article):
         return "MONITORING_REPOST_DENYLIST_SOURCE"
     # 2.3.11: source content, not the Telegram channel brand,
@@ -1379,6 +1391,21 @@ class EditorialEngine:
         self._coverage_reviews_234: dict[str, list[float]] = {}
 
     def select(self, channel: ChannelConfig, article: Any) -> EditorialOutcome:
+        # 2.3.49: source-only admission before any paid selection.
+        # The publisher repeats the check for already READY/carryover items.
+        if (channel.mode == ChannelMode.MONITORING
+                and "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or "")):
+            from .editorial_admission_2349 import (
+                expired_service_reason_2349, regional_no_result_reason_2349,
+            )
+            reason = expired_service_reason_2349(article) or regional_no_result_reason_2349(article)
+            if reason:
+                return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
+        if channel.mode == ChannelMode.EDITORIAL and calibrated_editorial_role(channel) == "creative":
+            from .editorial_admission_2349 import commercial_catalog_reason_2349
+            reason = commercial_catalog_reason_2349(article)
+            if reason:
+                return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         # Source-only P0 veto is not delegated to a fallible AI selector.
         if channel.mode == ChannelMode.MONITORING:
             from .source_safety_2315 import monitoring_invite_bait_reason
