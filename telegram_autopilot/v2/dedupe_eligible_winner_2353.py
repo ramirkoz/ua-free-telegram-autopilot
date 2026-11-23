@@ -45,11 +45,16 @@ def eligible_event_anchor_2353(channel: Any, current: Any, candidate: Any) -> bo
     if monitoring_short_material_reason_2352(channel, candidate):
         return False
 
-    # A source ruled out by the existing factual/source gates is not a
-    # canonical representative of a cluster merely because it arrived first.
-    from .editorial import hard_editorial_reject
+    # Source eligibility uses only deterministic, *source-only* sufficiency.
+    # Do not run the entire AI/editorial policy twice while deciding an event
+    # anchor. In particular, an ordinary long civic report is not rejected
+    # here by a post-writing or content-relevance rule meant for the editor.
     from .editorial_hard_floor import two_sentence_reason
-    if hard_editorial_reject(channel, candidate) or two_sentence_reason(candidate):
+    if two_sentence_reason(candidate):
+        return False
+    from .monitoring_source_context_2351 import monitoring_source_context_reason_2351
+    rules = str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or "")
+    if "[LIVE_NOW_RC96]" in rules and monitoring_source_context_reason_2351(candidate):
         return False
 
     if stage not in {str(Stage.READY), str(Stage.QA_PASSED)}:
