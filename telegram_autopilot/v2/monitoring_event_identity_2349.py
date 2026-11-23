@@ -42,19 +42,19 @@ _RESCUE = re.compile(r"(?iu)\b(?:рятув\w*|врятув\w*|порятун\w*
 _BOAT = re.compile(r"(?iu)\b(?:човн\w*|човен|човна|катер\w*|плавзасоб\w*|boat\w*|vessel\w*)")
 _INJURY = re.compile(r"(?iu)\b(?:травм\w*|перелом\w*|зламал\w*|ушкоджен\w*|поранен\w*|injur\w*|fractur\w*)")
 _ROCK = re.compile(r"(?iu)\b(?:скел\w*|скеля\w*|скеляст\w*|кам'янист\w*|rock\w*|cliff\w*)")
-_SHORE = re.compile(r"(?iu)\b(?:берег\w*|узбереж\w*|прибереж\w*|остров\w*|shore\w*|riverbank\w*)")
+_SHORE = re.compile(r"(?iu)\b(?:бер(?:ег|ез)\w*|узбереж\w*|прибереж\w*|остров\w*|shore\w*|riverbank\w*)")
 _WOMAN = re.compile(r"(?iu)\b(?:жін\w*|дівчин\w*|woman|female)\b")
 _MAN = re.compile(r"(?iu)\b(?:чолов\w*|хлопц\w*|man|male)\b")
 _CHILD = re.compile(r"(?iu)\b(?:дитин\w*|дітей|підлітк\w*|child\w*|teen\w*)")
 _OUTCOME = re.compile(r"(?iu)\b(?:померл\w*|загинул\w*|загибл\w*|death|died|fatalit\w*)")
 _DISTRICT = re.compile(r"\b([А-ЯІЇЄҐ][А-Яа-яІЇЄҐіїєґ'’\-]{4,})\s+(?:район\w*|громад\w*)\b")
-_WATER = re.compile(r"\b(?:берег\w*|узбереж\w*|річк\w*)\s+(?:(?:річк\w*|водосховищ\w*)\s+)?([А-ЯІЇЄҐ][А-Яа-яІЇЄҐіїєґ'’\-]{3,})\b")
+_WATER = re.compile(r"\b(?:бер(?:ег|ез)\w*|узбереж\w*|річк\w*)\s+(?:(?:річк\w*|водосховищ\w*)\s+)?([А-ЯІЇЄҐ][А-Яа-яІЇЄҐіїєґ'’\-]{3,})\b")
 
 
 def _stem(value: str) -> str:
     # A stable local-name root without hardcoding a district or river name.
     name = value.casefold().replace("’", "'")
-    return name[:7] if len(name) >= 8 else name
+    return name[:7] if len(name) >= 8 else name[:5] if len(name) >= 6 else name
 
 
 def _places(source: str) -> tuple[set[str], set[str]]:
