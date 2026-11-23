@@ -491,6 +491,21 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
     if channel.mode != ChannelMode.MONITORING:
         return ""
     if "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or ""):
+        # 2.3.51: immutable source facts define whether a regional item is a
+        # standalone news report. Final QA then ensures a real incident site
+        # was not erased by the writer. Protect existing READY before Telegram.
+        from .monitoring_source_context_2351 import (
+            monitoring_source_context_reason_2351,
+            monitoring_final_context_issue_2351,
+        )
+        source_context = monitoring_source_context_reason_2351(article)
+        if source_context:
+            return source_context
+        if text:
+            final_context = monitoring_final_context_issue_2351(article, text)
+            if final_context:
+                return final_context
+    if "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or ""):
         from .editorial_admission_2349 import (
             expired_service_reason_2349, regional_no_result_reason_2349,
         )
