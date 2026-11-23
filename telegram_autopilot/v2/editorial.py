@@ -490,7 +490,7 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
             return catalog_problem
     if channel.mode != ChannelMode.MONITORING:
         return ""
-    if "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or ""):
+    if "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or ""):
         from .editorial_admission_2349 import (
             expired_service_reason_2349, regional_no_result_reason_2349,
         )
@@ -1394,7 +1394,7 @@ class EditorialEngine:
         # 2.3.49: source-only admission before any paid selection.
         # The publisher repeats the check for already READY/carryover items.
         if (channel.mode == ChannelMode.MONITORING
-                and "[LIVE_NOW_RC96]" in str(channel.policy.rejection_rules or "")):
+                and "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or "")):
             from .editorial_admission_2349 import (
                 expired_service_reason_2349, regional_no_result_reason_2349,
             )
