@@ -8,7 +8,7 @@ Status: candidate pending CI and native Windows Portable; not operator LIVE unti
 
 ## Remediation
 
-- New `monitoring_short_material_2352.py`: for regional channel ID 3 / monitoring only, original source **minimum 500 meaningful text characters**, excluding links; **before AI** and **before actual Telegram send**. Retains stricter configured minimum if greater.
+- New `monitoring_short_material_2352.py`: for regional channel ID 3 / monitoring with the owner-configured **500+ character** policy, original source **minimum 500 meaningful text characters**, excluding links; **before AI** and **before actual Telegram send**. Retains stricter configured minimum if greater; this patch does not silently migrate historical profiles explicitly targeting fewer than 500 characters.
 - Final generated text must independently contain **at least 500 meaningful characters**; otherwise `MONITORING_SHORT_FINAL_DROP_2352`; do **not** instruct model to artificially pad or invent to fill 500.
 - Existing hard rejection for stale, rumor, lack of incident context, unsupported facts remains. The short-source ban is an additional fail-closed admission layer.
 - Existing 2.3.51 specific blocks for #5712 orphan casualty, #5714 pinned-donor schedule remain.
