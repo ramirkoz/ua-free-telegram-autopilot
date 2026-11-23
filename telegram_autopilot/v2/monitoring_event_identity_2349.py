@@ -86,6 +86,12 @@ def rescue_same_event_2349(current: Any, previous: Any) -> tuple[bool, str]:
     actor_a, actor_b = _victim(a), _victim(b)
     if actor_a and actor_b and actor_a != actor_b:
         return False, ""
+    # An explicit airlift in one source versus a boat-only rescue in another
+    # is not proof of the same incident.
+    airlift = re.compile(r"(?iu)\b(?:гелікоптер\w*|вертольот\w*|helicopter\w*)")
+    if bool(airlift.search(_get(current, "raw_text"))) != bool(
+            airlift.search(_get(previous, "raw_text"))):
+        return False, ""
     # A confirmed newly fatal outcome is an update, not a republication.
     if _OUTCOME.search(a) and not _OUTCOME.search(b):
         return False, "new confirmed fatal outcome"
