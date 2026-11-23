@@ -2,3 +2,4 @@ cryptography>=42,<47
 Telethon>=1.36,<2
 Pillow>=11.3,<13
 openai-codex==0.156.1
+tzdata>=2025.2
