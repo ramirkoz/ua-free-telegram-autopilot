@@ -33,22 +33,23 @@ def _content_text(text: str) -> str:
     return clean.strip()
 
 
-def monitoring_short_material_reason_2352(channel: Any, article: Any, text: str = "") -> str:
+def regional_publication_floor_2355(channel: Any) -> int:
+    """Return the *configured* owner rule for the real regional channel only.
+
+    Other channels and historical short-form fixtures retain their policies.
+    """
     if (int(getattr(channel, "id", 0) or 0) != REGIONAL_CHANNEL_ID
             or str(getattr(getattr(channel, "mode", None), "value", getattr(channel, "mode", ""))).casefold()
             != "monitoring"):
-        return ""
+        return 0
+    configured = int(getattr(getattr(channel, "policy", None), "target_min_chars", 0) or 0)
+    return max(MIN_REGIONAL_NEWS_CHARS, configured) if configured >= MIN_REGIONAL_NEWS_CHARS else 0
 
-    # At least the actual configured threshold; never silently downgrade it
-    # to 20/85/270 characters because the original was short.
-    policy = getattr(channel, "policy", None)
-    configured_min = int(getattr(policy, "target_min_chars", 0) or 0)
-    # This rule enforces the owner's configured 500+ news-article policy.
-    # Historical test/profile channels explicitly configured at 300 chars
-    # are not silently migrated to a different editorial policy.
-    if configured_min < MIN_REGIONAL_NEWS_CHARS:
+
+def monitoring_short_material_reason_2352(channel: Any, article: Any, text: str = "") -> str:
+    min_chars = regional_publication_floor_2355(channel)
+    if not min_chars:
         return ""
-    min_chars = max(MIN_REGIONAL_NEWS_CHARS, configured_min)
 
     source = _content_text(_value(article, "raw_text") or _value(article, "title"))
     if len(source) < min_chars:
@@ -62,4 +63,4 @@ def monitoring_short_material_reason_2352(channel: Any, article: Any, text: str 
     return ""
 
 
-__all__ = ["monitoring_short_material_reason_2352"]
+__all__ = ["monitoring_short_material_reason_2352", "regional_publication_floor_2355"]
