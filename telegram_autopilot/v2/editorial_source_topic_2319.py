@@ -100,6 +100,12 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
         rescue = creative_routine_pet_rescue_reason(article)
         if rescue:
             return rescue
+    # 2.3.54: owner-reviewed retail/obituary and story-video requirements.
+    # This is a source-only check; it is repeated at the final READY gate.
+    from .editorial_owner_2354 import owner_source_veto_2354
+    owner_2354 = owner_source_veto_2354(role, article)
+    if owner_2354:
+        return owner_2354
     # 2.3.35: operator-red false-positive controls, topic only; no fact bypass.
     from .editorial_owner_235 import owner_source_veto_235
     owner_veto = owner_source_veto_235(role, article)
