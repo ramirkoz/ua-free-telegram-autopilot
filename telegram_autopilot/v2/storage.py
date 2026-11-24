@@ -2471,11 +2471,8 @@ class V2Store:
                     # The legacy shared rewrite job is named "rewrite_oversize",
                     # but source factual failures must never masquerade as
                     # Telegram length errors when the safe retry budget ends.
-                    terminal_code = (
-                        "SOURCE_FACT_QA_BLOCKED" if str(error_code) == "PREPUBLISH_SOURCE_SAFETY"
-                        else "PREPUBLISH_QA_BLOCKED" if str(error_code) == "PREPUBLISH_QA"
-                        else "TELEGRAM_OVERSIZE_BLOCKED"
-                    )
+                    from .quality_code_2355 import terminal_quality_code_2355
+                    terminal_code = terminal_quality_code_2355(error_code, detail)
                     con.execute("UPDATE articles SET stage=?,decision=?,blocked_by=?,last_error_code=?,last_error_detail=?,retry_count=retry_count+1,next_retry_at='' WHERE id=?",(str(Stage.QA_PASSED),str(Decision.PENDING),str(BlockedBy.QUALITY),terminal_code,str(detail)[:2000],int(article_id)))
                     con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',attempts=?,error_code=?,error_detail=?,updated_at=? WHERE article_id=? AND job_type='rewrite_oversize'",(attempt,terminal_code,str(detail)[:2000],stamp,int(article_id)))
                     con.commit(); return "QUALITY_BLOCKED"

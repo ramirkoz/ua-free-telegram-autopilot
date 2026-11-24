@@ -59,6 +59,7 @@ from .editorial_human_calibration_236 import calibrated_editorial_role
 from .editorial_owner_235 import SCIENCE_GUIDANCE_235, CREATIVE_GUIDANCE_235, REGIONAL_GUIDANCE_235
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
+from .monitoring_short_material_2352 import regional_publication_floor_2355
 from .editorial_voice_2337 import newsroom_voice_2337, needs_voice_editor_2337
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
 
@@ -819,6 +820,20 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
         return configured_min, configured_max, int(body_hard_max)
 
     source_len = len(_source_text(article))
+    from .monitoring_short_material_2352 import regional_publication_floor_2355
+    regional_floor = regional_publication_floor_2355(channel)
+    # 2.3.55: if a regionally publishable source is 500+ chars, a 220/350
+    # character generation target is internally contradictory. Do not
+    # override the regional 500+ owner rule via a dynamic/schedule ceiling.
+    # A short source is rejected by source admission *before* the AI writer;
+    # its legacy dynamic limit remains harmless for historical fixtures.
+    if regional_floor and source_len >= regional_floor:
+        if int(body_hard_max) < regional_floor:
+            raise ValueError("REGIONAL_BODY_CAP_BELOW_REQUIRED_FLOOR_2355")
+        ceiling = min(int(configured_max), int(body_hard_max))
+        if ceiling < regional_floor:
+            raise ValueError("REGIONAL_CONFIG_MAX_BELOW_REQUIRED_FLOOR_2355")
+        return regional_floor, ceiling, ceiling
     if source_len <= 220:
         # 2.2.4: a short notice must not grow. The old floor of 80 chars and
         # "+100" ceiling made models pad a 28-char "Загроза КАБ" with invented
@@ -969,6 +984,9 @@ def _rc111_prepare_candidate(
         # belongs in Telegram's separate footer. Remove before paid QA retries.
         value=strip_monitoring_nonform_urls(article,value)
     value=strip_forbidden_source_body_attribution(channel,article,value)
+    if channel.mode == ChannelMode.MONITORING:
+        from .terminal_repair_2355 import remove_orphaned_terminal_callout_2355
+        value = remove_orphaned_terminal_callout_2355(value, min_chars=min_chars)
     value=_trim_candidate_to_hard_limit(value,hard_max_chars,min_chars=min_chars)
     return value
 
@@ -1053,6 +1071,7 @@ def validate_writer_output(
     hard_max_chars: int | None = None,
     required_context: str = "",
     slop_profile: str = "",
+    strict_min_chars: bool = False,
 ) -> str:
     # Gate 1 is deterministic sanitation: strip invisible/bidi junk before any
     # language or factual validation. This mirrors the upstream anti-ai-slop
@@ -1069,7 +1088,10 @@ def validate_writer_output(
     from .publication_safety import is_ai_rejection_text
     if is_ai_rejection_text(value):
         raise ValueError("AI_REJECTION_LEAK_BLOCKED: службова відмова замість Telegram-поста")
-    if len(value) < max(80, int(min_chars) * 2 // 3):
+    # Regional hard floor must be checked at WRITER and FINAL-EDITOR time,
+    # not first discovered by the Telegram publisher after expensive AI calls.
+    minimum = max(80, int(min_chars)) if strict_min_chars else max(80, int(min_chars) * 2 // 3)
+    if len(value) < minimum:
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
         raise ValueError(f"Непридатна довжина Telegram-тексту: понад жорсткий ліміт {int(hard_max_chars)}")
@@ -1385,6 +1407,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
             article, value, min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_body_context_name(channel, article),
             slop_profile=_anti_slop_profile(channel),
+            strict_min_chars=bool(regional_publication_floor_2355(channel)),
         )
     except Exception as exc:
         issues.append(str(exc))
@@ -2143,6 +2166,13 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
                 configured_min=int(p.target_min_chars), effective_min=effective_min, effective_max=effective_max,
             )
         from .source_fact_card import build_source_fact_card
+        from .story_brief_2355 import build_story_brief_2355
+        story_brief = build_story_brief_2355(
+            article,
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+        )
         source_fact_card = build_source_fact_card(article, char_budget=1900)
         event(
             "editorial", "source fact card created", channel_id=channel.id,
@@ -2190,12 +2220,30 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             'Не замінюй її безликим описом джерела.\n'
             if source_context else ""
         )
+        # 2.3.55: for the owner-governed 500+ regional channel, the
+        # short-source instruction is applied only to short-form historical
+        # fixtures, which are not admitted by the real regional hard guard.
         monitoring_rule = (
             "\nКОРОТКЕ ДЖЕРЕЛО: не добирай обсяг штучно. Якщо SOURCE містить лише 1–2 факти, напиши короткий пост і завершуй. "
             "Не додавай фрази про те, що деталі/терміни не надані, якщо SOURCE цього прямо не каже. "
             "Не додавай від себе порад, моралей, застережень, оцінок важливості, висновків або загальних фраз. "
             "Не пиши «це свідчить/показує/підкреслює», «важливий крок», «продовжує працювати/підтримувати» та подібні інтерпретації, якщо SOURCE прямо цього не стверджує. "
-            if channel.mode == ChannelMode.MONITORING else ""
+            if (channel.mode == ChannelMode.MONITORING
+                and not regional_publication_floor_2355(channel)) else ""
+        )
+        regional_writer_rule_2355 = (
+            "РЕГІОНАЛЬНИЙ ФАКТИЧНИЙ МАТЕРІАЛ: першоджерело перевірено на "
+            "мінімальну змістовну довжину до генерації. Готовий текст має "
+            "містити щонайменше 500 підтверджених змістовних символів і "
+            "вміститися в 900 із футером; зазвичай 500–750 символів тіла. "
+            "Не прибирай із SOURCE уточнення про дату, місце, кількість, "
+            "учасників, дії посадових осіб, контактні дані й важливі умови, "
+            "якщо вони стосуються головної події. Не вигадуй даних для "
+            "добору довжини. Якщо фактів дійсно мало, чесно не дописуй "
+            "воду: система відхилить невідповідний матеріал. "
+            "Не завершуй текст двокрапкою, незакінченим переліком чи "
+            "обіцянкою посилання, якого немає в тексті.\n"
+            if regional_publication_floor_2355(channel) else ""
         )
         named_source_style = source_body_instruction(channel, article)
         from .monitoring_source_voice_230 import SOURCE_VOICE_INSTRUCTION
@@ -2227,6 +2275,8 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {reader_rules}
 {reader_payoff_instruction}
 {blueprint.prompt_block()}
+{story_brief.prompt_block()}
+{regional_writer_rule_2355}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
@@ -2248,8 +2298,10 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {monitoring_2348}
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
-ОБОВ'ЯЗКОВИЙ ПОРЯДОК: спершу встанови з SOURCE хто саме що зробив;
-потім поясни його зміст простими словами, додай лише перевірені подробиці.
+ПОРЯДОК ЖУРНАЛІСТА: до написання визнач найважливіший перевірений результат,
+дію чи незвичну деталь, що буде цікава людині без професійної підготовки.
+Почни з цього факту. Далі назви учасників і поясни підтверджені подробиці.
+Не починай механічним переказом авторського заголовка або пресрелізу.
 Не склеюй незалежні приклади/відсотки в одну причину чи новий наслідок.
 Якщо SOURCE містить кілька незалежних тем (наприклад, ювілей будівлі й прогноз погоди), вибери лише одну підтверджену подію, відповідну SOURCE TITLE; не домішуй сторонній прогноз до культурної новини.
 {newsroom_voice}
@@ -2298,6 +2350,7 @@ SOURCE:
             validate_writer_output(
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
+                strict_min_chars=bool(regional_publication_floor_2355(channel)),
             )
             if study_result_guidance:
                 missing = study_results_missing_2347(article, candidate)
@@ -2333,6 +2386,7 @@ SOURCE:
         draft = validate_writer_output(
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
+            strict_min_chars=bool(regional_publication_floor_2355(channel)),
         )
         if study_result_guidance:
             missing = study_results_missing_2347(article, draft)
@@ -2392,12 +2446,22 @@ SOURCE:
         # is already available we accept only conservative edits and re-run every gate.
         lt = apply_local_languagetool_detailed(final, timeout=1.2, max_changes=18, require_ready=False, source_text=_source_pack(article, 6200))
         if lt.changes and preserves_content(final, lt.text):
-            candidate = prepared_text(lt.text)
-            validator(candidate)
-            final = validate_writer_output(
-                article, candidate, min_chars=effective_min, max_chars=effective_max,
-                hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
-            )
+            try:
+                candidate = prepared_text(lt.text)
+                validator(candidate)
+                validated_lt = validate_writer_output(
+                    article, candidate, min_chars=effective_min, max_chars=effective_max,
+                    hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
+                    strict_min_chars=bool(regional_publication_floor_2355(channel)),
+                )
+            except ValueError as exc:
+                # Optional spelling polish is never allowed to turn a
+                # previously safe completed source-backed post into a BLOCK.
+                event("editorial", "2.3.55 optional LanguageTool candidate discarded",
+                      channel_id=channel.id, article_id=int(_v(article,"id",0) or 0),
+                      reason=str(exc)[:180])
+            else:
+                final = validated_lt
         # Local LanguageTool may run AFTER trusted AI; never let it undo
         # source results or draft-to-final factual safeguards.
         if study_result_guidance:
@@ -2462,6 +2526,13 @@ SOURCE:
         )
         source_attribution_instruction = source_body_instruction(channel, article)
         from .source_fact_card import build_source_fact_card
+        from .story_brief_2355 import build_story_brief_2355
+        story_brief = build_story_brief_2355(
+            article,
+            monitoring=channel.mode == ChannelMode.MONITORING,
+            commercial=_is_commercial_editorial(channel),
+            science=is_science_general_channel(channel),
+        )
         source_fact_card = build_source_fact_card(article, char_budget=1700)
         from .study_result_completeness_2347 import (
             study_results_guidance_2347, study_results_missing_2347,
@@ -2483,6 +2554,7 @@ SOURCE:
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {blueprint.prompt_block(final=True)}
+{story_brief.prompt_block(final=True)}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
@@ -2499,8 +2571,12 @@ SOURCE:
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
-ПЕРЕВІР ФІНАЛ: перше речення чітко називає подію та учасників;
-кожен відсоток пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
+ПЕРЕВІР ФІНАЛ: перше речення називає головний підтверджений факт або результат,
+а всі потрібні учасники стають зрозумілими в першому абзаці; кожен відсоток
+пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
+Для регіонального каналу з політикою 500+: НЕ стискай перевірену чернетку нижче
+її обов'язкового мінімуму й НЕ викидай конкретні місцеві обставини. Якщо DRAFT
+уже точний і завершений, краще залиш його без змін, ніж знищити корисні факти.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\n{monitoring_2348}\nПоверни тільки фінальний текст."""
@@ -2540,6 +2616,7 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
             validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
+                strict_min_chars=bool(regional_publication_floor_2355(channel)),
             )
             # Study coverage: a post with study methods also needs a measured
             # outcome grounded in the original source, not merely the sample.
@@ -2571,6 +2648,7 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
             return validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
+                strict_min_chars=bool(regional_publication_floor_2355(channel)),
             )
         except GatewayExhausted:
             if fail_closed:
