@@ -31,6 +31,8 @@ def choose_editorial_media(candidates, title: str, article_text: str):
     items = [x for x in candidates if x is not None and x.kind in {"image", "video"} and x.url]
     if not items:
         return []
+    if len(items) == 1:
+        return items
     def score(x):
         evidence = _evidence_text(x)
         title_hits, body_hits, _ = _semantic_media_evidence(x, title=title, article_text=article_text)

@@ -71,7 +71,7 @@ def test_rc112_jsonld_article_image_list_is_kept() -> None:
     assert "https://cdn.example.com/wing-3.jpg" in out.media_urls
 
 
-def test_rc112_publication_bundle_keeps_all_validated_gallery_media(monkeypatch) -> None:
+def test_2357_publication_bundle_keeps_single_lead_from_validated_gallery(monkeypatch) -> None:
     prepared=SimpleNamespace(
         featured=PreparedMedia(0,"image","https://cdn.example.com/hero.jpg",data=b"x",relevance_score=80),
         body=[
@@ -98,13 +98,9 @@ def test_rc112_publication_bundle_keeps_all_validated_gallery_media(monkeypatch)
     })
     article={"media_json":"[]","article_layout_json":layout,"title":"T","raw_text":"body","final_text":"done"}
     bundle=build_publication_media_bundle(channel,article)
-    assert [x.url for x in bundle.items] == [
-        "https://cdn.example.com/hero.jpg",
-        "https://cdn.example.com/one.jpg",
-        "https://cdn.example.com/two.jpg",
-        "https://i.ytimg.com/vi/AbCdEf12345/hqdefault.jpg",
-    ]
-    assert bundle.video_link=="https://www.youtube.com/watch?v=AbCdEf12345"
+    assert [x.url for x in bundle.items] == ["https://cdn.example.com/hero.jpg"]
+    assert bundle.video_link == ""
+    assert bundle.gallery_items_kept == 1
     assert bundle.gallery_detected is True
     assert bundle.gallery_items_found == 3
     assert bundle.video_embed_count == 1

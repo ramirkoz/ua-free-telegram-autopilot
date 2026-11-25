@@ -184,9 +184,9 @@ def build_publication_media_bundle(
 ) -> MediaBundle:
     """Build the validated publication media set.
 
-    RC112 removes the historical EDITORIAL single-media truncation. A validated
-    source gallery remains a gallery, while embedded YouTube/Vimeo players remain
-    reachable through canonical video links and a safe preview when available.
+    Editorial publication selects one validated source-owned lead by default.
+    Explicit before/after comparisons may retain two independently labelled images.
+    Monitoring channels retain their existing source media behavior.
     """
     raw = build_media_bundle(article)
     if channel.mode != ChannelMode.EDITORIAL:
@@ -265,7 +265,7 @@ def build_publication_media_bundle(
             drop_reasons = tuple(sorted(counts.items()))
         # A direct uploaded video does not need a second video footer. An
         # unrelated secondary player must not accompany the selected image.
-        if candidates and not any(x.kind == "image" and x.context == "youtube video preview" for x in candidates):
+        if candidates and not any(x.kind == "image" and getattr(x, "context", "") == "youtube video preview" for x in candidates):
             if any(x.kind == "video" for x in candidates):
                 video_link = ""
             elif not (getattr(prepared, "primary_video", None) is not None and
