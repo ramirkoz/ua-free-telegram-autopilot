@@ -831,7 +831,9 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
     configured_max = max(120, min(int(p.target_max_chars), int(body_hard_max)))
     configured_min = max(80, min(int(p.target_min_chars), configured_max))
     if channel.mode != ChannelMode.MONITORING:
-        return configured_min, configured_max, int(body_hard_max)
+        from .full_story_2357 import editorial_length_targets
+        return editorial_length_targets(len(_source_text(article)), configured_min,
+                                        configured_max, int(body_hard_max))
 
     source_len = len(_source_text(article))
     from .monitoring_short_material_2352 import regional_publication_floor_2355
@@ -2299,6 +2301,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             "оригіналу; технічні терміни коротко пояснюй.\n"
             if channel.mode == ChannelMode.EDITORIAL else ""
         )
+        from .full_story_2357 import full_story_instruction_2357
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
@@ -2336,6 +2339,7 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 Якщо SOURCE містить кілька незалежних тем (наприклад, ювілей будівлі й прогноз погоди), вибери лише одну підтверджену подію, відповідну SOURCE TITLE; не домішуй сторонній прогноз до культурної новини.
 {newsroom_voice}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
+{full_story_instruction_2357(channel, article, validation_hard_max)}
 Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
@@ -2503,6 +2507,11 @@ SOURCE:
             missing = study_results_missing_2347(article, final)
             if missing:
                 raise ValueError(missing)
+        if channel.mode == ChannelMode.EDITORIAL:
+            from .full_story_2357 import final_story_loss_2357
+            story_loss = final_story_loss_2357(draft, final, validation_hard_max)
+            if story_loss:
+                raise ValueError(story_loss)
         delta_issues = draft_final_regressions(draft, final)
         if delta_issues:
             raise ValueError(
@@ -2589,6 +2598,7 @@ SOURCE:
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        from .full_story_2357 import full_story_instruction_2357, final_story_loss_2357
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {blueprint.prompt_block(final=True)}
@@ -2610,6 +2620,7 @@ SOURCE:
 {schedule_guidance(_v(article, 'raw_text', ''))}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
+{full_story_instruction_2357(channel, article, final_hard_max)}
 ПЕРЕВІР ФІНАЛ: перше речення називає головний підтверджений факт або результат,
 а всі потрібні учасники стають зрозумілими в першому абзаці; кожен відсоток
 пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
@@ -2671,6 +2682,10 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
             # 2.2.51: A syntactically cleaner FINAL must not strengthen the
             # same qualified assertion or promote a contributor to author.
             # This compares same-language DRAFT -> FINAL, not English NLI.
+            if channel.mode == ChannelMode.EDITORIAL:
+                story_loss = final_story_loss_2357(draft, candidate, final_hard_max)
+                if story_loss:
+                    raise ValueError(story_loss)
             delta_issues = draft_final_regressions(draft, candidate)
             if delta_issues:
                 raise ValueError(
