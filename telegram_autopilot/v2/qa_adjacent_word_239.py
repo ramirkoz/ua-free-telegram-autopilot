@@ -27,15 +27,25 @@ def repair_adjacent_repeated_word(text: str, error: Exception) -> str:
     if len(source) < 80 or len(source) > 4000:
         return ""
     if "https://" in source.casefold() or "http://" in source.casefold():
-        # Avoid touching literal source URLs and embedded citations.
-        return ""
-    # Avoid quotations: repeated words inside direct speech may be deliberate.
-    if any(char in source for char in ("«", "»", "“", "”", '"')):
+        # Keep the historical hard no-URLs rule; links can contain opaque
+        # tokens or source identifiers whose apparent repetition is literal.
         return ""
     matches = list(_ADJACENT_WORDS.finditer(source))
     if len(matches) != 1:
         return ""
     match = matches[0]
+    # Never mutate text inside quoted speech; the presence of an unrelated
+    # quoted name elsewhere in the post is NOT a reason to waste another AI
+    # attempt to fix an obvious duplicated word outside that quote.
+    prefix = source[:match.start()]
+    for opener, closer in (("«", "»"), ("“", "”"), ('"', '"')):
+        if opener == closer:
+            if prefix.count(opener) % 2:
+                return ""
+        elif prefix.count(opener) > prefix.count(closer):
+            return ""
+    if re.search(r"(?i)https?://[^\s]*$",prefix):
+        return ""
     # A clearly lowercase duplication is safe to propose for full QA.
     word = match.group(1)
     if not word.islower():
