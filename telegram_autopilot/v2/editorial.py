@@ -912,6 +912,11 @@ def _monitoring_grounding_blockers(article: Any, value: str) -> tuple[str, ...]:
     source = _source_text(article).casefold()
     text = str(value or "")
     issues: list[str] = list(_source_grounding_night_issues(article, text))
+    # Check actual claim polarity during writer/final QA, not only after paid editing.
+    from .polarity_verifier import verify_source_polarity
+    original = str(_v(article, "raw_text", "") or _v(article, "title", ""))
+    source_id = str(_v(article, "source_url", "") or _v(article, "id", "") or "unknown")
+    issues.extend(v.code for v in verify_source_polarity(original, text, source_id=source_id))
     # Do not summarize different phases of a rapidly changing situation as
     # simultaneous facts. Ask editor to keep the current settled status only.
     low_output = text.casefold()
@@ -2228,7 +2233,8 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
         )
         facts = extract_actionable_facts(article)
         protected = "\n".join("- " + item for item in facts) if facts else "Немає."
-        style_memory = self.learning.style_memory_block(channel.id, article)
+        from .ai_cost_2360 import compact_style_memory, compact_prompt
+        style_memory = compact_style_memory(self.learning.style_memory_block(channel.id, article))
         from .editorial_blueprint_250 import build_editorial_blueprint
         blueprint = build_editorial_blueprint(
             article,
@@ -2355,8 +2361,8 @@ PROTECTED ACTIONABLE FACTS: якщо релевантні правилам ка�
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
 SOURCE:
 {_source_pack(article, 6200)}
-{monitoring_2348}
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
+        prompt = compact_prompt(prompt)
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
@@ -2546,7 +2552,8 @@ SOURCE:
             channel, article, default_body_limit=TELEGRAM_BODY_SAFE_MAX
         )
         final_hard_max = min(body_hard_max, int(hard_max_chars or body_hard_max))
-        style_memory = self.learning.style_memory_block(channel.id, article)
+        from .ai_cost_2360 import compact_style_memory, compact_prompt
+        style_memory = compact_style_memory(self.learning.style_memory_block(channel.id, article))
         from .editorial_blueprint_250 import build_editorial_blueprint
         blueprint = build_editorial_blueprint(
             article,
@@ -2609,9 +2616,11 @@ SOURCE:
         )
         from .full_story_2357 import full_story_instruction_2357, final_story_loss_2357
         from .reader_gate_2359 import WRITER_RULE
+        from .ai_cost_2360 import COMBINED_EDITOR_RULE, save_review_receipt
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
 {WRITER_RULE}
+{COMBINED_EDITOR_RULE}
 {blueprint.prompt_block(final=True)}
 {story_brief.prompt_block(final=True)}
 {visual_story_2356}
@@ -2640,7 +2649,8 @@ SOURCE:
 уже точний і завершений, краще залиш його без змін, ніж знищити корисні факти.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
-CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\n{monitoring_2348}\nПоверни тільки фінальний текст."""
+CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+        prompt = compact_prompt(prompt)
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
@@ -2652,6 +2662,8 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
         slop_profile = _anti_slop_profile(channel)
 
         def validator(raw: str) -> None:
+            if "REJECT_READER_2360" in raw:
+                raise ValueError("REJECT_READER_2360: source lacks broad reader value")
             if _is_editorial_prompt_echo(raw):
                 raise ValueError("AI повторив службову інструкцію промпту")
             candidate = prepared_text(raw)
@@ -2715,11 +2727,13 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
             )
             candidate = prepared_text(result.text)
             validator(candidate)
-            return validate_writer_output(
+            final = validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
                 strict_min_chars=bool(regional_publication_floor_2355(channel)),
             )
+            save_review_receipt(self.store, channel, article, final, "Combined source and reader final editor 2360")
+            return final
         except GatewayExhausted:
             if fail_closed:
                 raise
@@ -2783,14 +2797,19 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
                     model=str(_v(article, "ai_model", "") or ""),
                 )
             except (GatewayExhausted, ValueError) as exc:
-                # Preserve existing bounded retry limits and continue the
-                # standard writer only when the trusted one-pass correction
-                # cannot satisfy source-owned facts.
+                # A failed targeted edit must not restart the full pipeline.
                 event(
                     "editorial", "targeted source rewrite insufficient",
                     level=30, article_id=article_id, channel_id=channel.id,
                     error=type(exc).__name__, detail=str(exc)[:350],
                 )
+                # Do not pay for selection/writer again on an already selected story.
+                from .ai_gateway import ArticleBudgetExhausted
+                if isinstance(exc, ArticleBudgetExhausted):
+                    raise
+                if isinstance(exc, GatewayExhausted) and (exc.provider_outage or exc.congested):
+                    raise
+                raise GatewayExhausted("TARGETED_REPAIR_QA: " + str(exc), provider_outage=False) from exc
         # v2.3.21: exact first-party full article before a short-RSS reject.
         # Only the verified exact article may enrich raw_text; source date,
         # URL, media identity and every downstream fact gate remain unchanged.

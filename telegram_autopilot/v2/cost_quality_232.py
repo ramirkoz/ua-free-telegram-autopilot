@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 EXPENSIVE_DEFAULT_MODELS = frozenset({"x-ai/grok-4.20", "x-ai/grok-4.20-multi-agent"})
-PAID_EDITORIAL_PURPOSES = frozenset({"writer", "final_editor", "rewrite", "complex_rewrite"})
+PAID_EDITORIAL_PURPOSES = frozenset({"writer", "final_editor", "reader_gate", "rewrite", "complex_rewrite"})
 
 
 def order_openrouter_editorial_models(models: tuple[str, ...], *, manual: bool) -> tuple[str, ...]:

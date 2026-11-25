@@ -849,7 +849,7 @@ class Publisher:
             detail = "; ".join(hard_source_issues[:6])
             outcome = self.store.requeue_quality_rewrite(
                 article_id, error_code="PREPUBLISH_SOURCE_SAFETY",
-                detail=detail, max_attempts=3,
+                detail=detail, max_attempts=2 if "MONITORING_SOURCE_POLARITY_FLIP" in detail else 3,
             )
             event("publish", "non-overridable source safety blocked READY article",
                   level=40, channel_id=channel_id, article_id=article_id,
@@ -871,30 +871,6 @@ class Publisher:
         schedule_ok, schedule_reason = self.can_publish_now(channel_id)
         if not schedule_ok:
             return schedule_reason
-
-        # Independent semantic reader gate: also covers inherited READY.
-        # Run after schedule and durable delivery preflight, before Telegram.
-        from .ai_gateway import AIGateway, GatewayExhausted
-        from .reader_gate_2359 import review
-        if not hasattr(self, "_reader_gateway_2359"):
-            self._reader_gateway_2359 = AIGateway(self.store)
-        if heartbeat:
-            heartbeat()
-        try:
-            reader_issues, reader_reason = review(self._reader_gateway_2359, channel, article, current_text)
-        except (GatewayExhausted, ValueError) as exc:
-            self.store.publication_backoff(article_id, blocked_by=BlockedBy.AI,
-                error_code="READER_GATE_2359_UNAVAILABLE", detail=str(exc), retry_seconds=300)
-            return "READER_GATE_2359_UNAVAILABLE"
-        if reader_issues:
-            detail = "READER_GATE_2359: " + ", ".join(reader_issues) + "; " + reader_reason
-            outcome = self.store.requeue_quality_rewrite(article_id,
-                error_code="READER_GATE_2359", detail=detail, max_attempts=3)
-            event("editorial", "reader acceptance blocked READY", channel_id=channel_id,
-                article_id=article_id, detail=detail, outcome=outcome)
-            return outcome
-        event("editorial", "reader acceptance passed READY", channel_id=channel_id,
-            article_id=article_id, reason=reader_reason)
 
         source_urls = _source_urls(article)
         source_url = source_urls[0] if source_urls else ""
@@ -1063,6 +1039,41 @@ class Publisher:
         if heartbeat is not None:
             try: heartbeat()
             except Exception: pass
+
+        # Paid reader only if the exact final body/source has no verified editor receipt.
+        # Local QA, source ownership, schedule, media and delivery gates are never waived.
+        from .ai_gateway import AIGateway, GatewayExhausted, ArticleBudgetExhausted
+        from .ai_cost_2360 import review_receipt, save_review_receipt
+        from .ai_economics_237 import ai_article_scope
+        from .reader_gate_2359 import review
+        reader_reason = review_receipt(self.store, channel, article, text)
+        if not reader_reason:
+            if not hasattr(self, "_reader_gateway_2359"):
+                self._reader_gateway_2359 = AIGateway(self.store)
+            try:
+                with ai_article_scope(channel_id, article_id):
+                    reader_issues, reader_reason = review(self._reader_gateway_2359, channel, article, text)
+            except ArticleBudgetExhausted as exc:
+                self.store.block_article(article_id, blocked_by=BlockedBy.QUALITY,
+                    error_code="ARTICLE_AI_BUDGET_2360", detail=str(exc))
+                return "QUALITY_BLOCKED"
+            except (GatewayExhausted, ValueError) as exc:
+                self.store.publication_backoff(article_id, blocked_by=BlockedBy.AI,
+                    error_code="READER_GATE_2359_UNAVAILABLE", detail=str(exc), retry_seconds=300, count_attempt=False)
+                return "READER_GATE_2359_UNAVAILABLE"
+            if reader_issues:
+                detail = "READER_GATE_2359: " + ", ".join(reader_issues) + "; " + reader_reason
+                outcome = self.store.requeue_quality_rewrite(article_id,
+                    error_code="READER_GATE_2359", detail=detail, max_attempts=2)
+                event("editorial", "reader acceptance blocked READY", channel_id=channel_id,
+                      article_id=article_id, detail=detail, outcome=outcome)
+                return outcome
+            save_review_receipt(self.store, channel, article, text, reader_reason)
+            event("editorial", "reader acceptance passed READY", channel_id=channel_id,
+                  article_id=article_id, reason=reader_reason)
+        else:
+            event("editorial", "reader receipt reused 2360", channel_id=channel_id,
+                  article_id=article_id, ai_calls_saved=1)
 
         # RC17 publication contract:
         #   * no media -> one normal text post;

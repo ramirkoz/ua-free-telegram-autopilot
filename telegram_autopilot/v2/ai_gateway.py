@@ -67,6 +67,11 @@ class GatewayExhausted(RuntimeError):
         self.failures = tuple(failures)
 
 
+class ArticleBudgetExhausted(GatewayExhausted):
+    def __init__(self):
+        super().__init__('ARTICLE_AI_BUDGET_2360: paid editorial budget exhausted', provider_outage=False)
+
+
 class CandidateRejected(RuntimeError):
     pass
 
@@ -931,7 +936,7 @@ class AIGateway:
         ]
         openrouter_slots = self._openrouter_task_slots(
             cfg,
-            purpose=str(purpose or "content"),
+            purpose="final_editor" if purpose == "reader_gate" else str(purpose or "content"),
             prompt_chars=len(text_prompt),
             max_output_tokens=max_output_tokens,
         ) if mode in {"codex", "openrouter"} else []
@@ -960,7 +965,7 @@ class AIGateway:
         )
         paid_attempts_232 = 0
         paid_spend_232 = 0.0
-        paid_attempt_limit_232 = 2
+        paid_attempt_limit_232 = 1 if purpose == "reader_gate" else 2
         paid_spend_limit_232 = 0.006  # USD per gateway invocation, not a per-day budget.
         for slot in route_slots:
             provider = slot.provider
@@ -1026,8 +1031,19 @@ class AIGateway:
                       paid_attempt_charged=False)
                 continue
             # Only a real admitted request consumes a per-task paid attempt.
-            if provider == "openrouter" and editorial_cost_guard:
-                paid_attempts_232 += 1
+            if provider == "openrouter":
+                from .ai_economics_237 import current_ai_article
+                from .ai_cost_2360 import reserve_paid_attempt
+                try:
+                    admitted = reserve_paid_attempt(self.store, current_ai_article()[1], editorial=editorial_cost_guard)
+                except Exception:
+                    lock.release()
+                    raise
+                if not admitted:
+                    lock.release()
+                    raise ArticleBudgetExhausted()
+                if editorial_cost_guard:
+                    paid_attempts_232 += 1
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             queue_wait = started - queued_at
