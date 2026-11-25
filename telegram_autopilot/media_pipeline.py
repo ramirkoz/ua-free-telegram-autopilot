@@ -718,6 +718,10 @@ def prepare_article_media(
         drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
 
     excluded_identities = {_media_identity(url) for url in (excluded_urls or set())}
+    if featured and featured.kind != "image":
+        # Non-image OG hints have not passed article-specific video proof.
+        body.insert(0, featured)
+        featured = None
     if featured and _media_identity(featured.url) in excluded_identities:
         featured = None
         dropped("already_published")
@@ -857,13 +861,9 @@ def prepare_article_media(
             item.relevance_score = _score(
                 item, title=title, article_text=article_text, marketing_context=marketing_context
             )
-            video_story = item.kind in {"video", "iframe"} and _video_story_signal(title, article_text)
-            semantic_ok = _semantic_media_match(item, title=title, article_text=article_text)
-            if marketing_context and item.gallery and _in_story_gallery(item, title=title, article_text=article_text):
-                semantic_ok = True
-                item.relevance_score = max(40.0, item.relevance_score)
-            if not video_story and not semantic_ok:
-                dropped("not_story_media")
+            from .source_media_2357 import video_has_story_proof
+            if not video_has_story_proof(item, title, article_text):
+                dropped("video_without_article_proof_2357")
                 continue
             if item.relevance_score < 38:
                 dropped("low_relevance")

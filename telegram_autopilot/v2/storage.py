@@ -2748,15 +2748,18 @@ class V2Store:
                 layout = json.loads(str(layout_raw or "{}"))
                 if isinstance(layout, dict):
                     entries.append(str(layout.get("featured") or ""))
+                    entries.append(str(layout.get("featured_video") or ""))
                     for block in layout.get("blocks", []):
                         if isinstance(block, dict) and block.get("type") == "media":
-                            entries.append(str(block.get("url") or ""))
+                            kind = str(block.get("kind") or "image")
+                            url = str(block.get("url") or "")
+                            entries.append(url if kind == "image" else f"{kind}|{url}")
             except (TypeError, ValueError):
                 pass
             result: dict[str, str] = {}
             for value in entries:
                 parsed = valid_public_media(value)
-                if not parsed or parsed[0] != "image":
+                if not parsed or parsed[0] not in {"image", "video", "iframe"}:
                     continue
                 _, url = parsed
                 result.setdefault(canonical_asset_key(url), url)
@@ -2822,7 +2825,7 @@ class V2Store:
         with self.connect() as con:
             self._ensure_published_web_media_2324(con)
             for item in prepared:
-                if str(getattr(item, "kind", "")) != "image":
+                if str(getattr(item, "kind", "")) not in {"image", "video"}:
                     continue
                 asset = canonical_asset_key(str(getattr(item, "source_url", "")))
                 digest = str(getattr(item, "digest", "") or "")
@@ -2847,7 +2850,7 @@ class V2Store:
         with self.connect() as con:
             self._ensure_published_web_media_2324(con)
             for item in prepared:
-                if str(getattr(item, "kind", "")) != "image":
+                if str(getattr(item, "kind", "")) not in {"image", "video"}:
                     continue
                 con.execute("""INSERT OR IGNORE INTO published_web_media_2324
                     (channel_id,article_id,source_url,asset_key,sha256,recorded_at)
