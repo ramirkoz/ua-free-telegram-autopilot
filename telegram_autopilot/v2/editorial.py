@@ -489,6 +489,12 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
         catalog_problem = commercial_catalog_reason_2349(article)
         if catalog_problem:
             return catalog_problem
+    if channel.mode == ChannelMode.EDITORIAL and text:
+        from .editorial_quality_2356 import missing_visual_story_bridge_2356
+        bridge = missing_visual_story_bridge_2356(
+            article, text, commercial=calibrated_editorial_role(channel) == "creative")
+        if bridge:
+            return bridge
     if channel.mode != ChannelMode.MONITORING:
         return ""
     if "[LIVE_NOW_RC96]" in str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or ""):
@@ -506,6 +512,14 @@ def hard_editorial_reject(channel: ChannelConfig, article: Any, text: str = "") 
             final_context = monitoring_final_context_issue_2351(article, text)
             if final_context:
                 return final_context
+    # 2.3.56: extremely narrow internal school-week recap without an
+    # externally meaningful result. Runs again before Telegram for READY.
+    if (channel.mode == ChannelMode.MONITORING
+            and "[LIVE_NOW_RC96]" in str(getattr(channel.policy, "rejection_rules", "") or "")):
+        from .editorial_quality_2356 import regional_non_news_reason_2356
+        no_news_2356 = regional_non_news_reason_2356(article)
+        if no_news_2356:
+            return no_news_2356
     # 2.3.52: owner's hard regional rule. Short original reports are not
     # news articles, even if the AI could fabricate a longer text. This is
     # checked during source admission AND again before Telegram publication.
@@ -977,6 +991,10 @@ def _rc111_prepare_candidate(
     from .editorial_copyedit_237 import safe_copyedit_237
     paragraph_limit = 420 if int(hard_max_chars) <= 900 else 620
     value = safe_copyedit_237(str(raw or "").strip(), paragraph_limit=paragraph_limit)
+    # 2.3.56: punctuation-only insertion with exact source quote proof;
+    # the complete writer/final validator still checks every fact and length.
+    from .quote_repair_2356 import source_verified_guillemet_2356
+    value = source_verified_guillemet_2356(article, value)
     if channel.mode == ChannelMode.MONITORING:
         value=restore_practical_literals(article,value,hard_max_chars=hard_max_chars)
         value=strip_non_actionable_article_urls(article,value)
@@ -1452,6 +1470,12 @@ class EditorialEngine:
             if reason:
                 return EditorialOutcome(Decision.REJECT, reason=reason, fit_score=0)
         # Source-only P0 veto is not delegated to a fallible AI selector.
+        if (channel.mode == ChannelMode.MONITORING
+                and "[LIVE_NOW_RC96]" in str(getattr(channel.policy, "rejection_rules", "") or "")):
+            from .editorial_quality_2356 import regional_non_news_reason_2356
+            no_news_2356 = regional_non_news_reason_2356(article)
+            if no_news_2356:
+                return EditorialOutcome(Decision.REJECT, reason=no_news_2356, fit_score=0)
         if channel.mode == ChannelMode.MONITORING:
             from .source_safety_2315 import monitoring_invite_bait_reason
             bait = monitoring_invite_bait_reason(article)
@@ -1547,8 +1571,10 @@ class EditorialEngine:
         if not inclusion and not exclusion:
             return EditorialOutcome(Decision.PUBLISH, reason="MONITORING_PASS: explicit inclusion/exclusion empty; interest gates disabled", fit_score=100, angle="Передай факт точно і стисло.")
         types = "\n".join(f"- {key}: {label}" for key, label in MONITORING_EVENT_TYPES.items())
+        from .editorial_quality_2356 import REGIONAL_NEWS_VALUE_PROMPT_2356
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 {REGIONAL_GUIDANCE_235}
+{REGIONAL_NEWS_VALUE_PROMPT_2356}
 Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
 INCLUSION RULES:
 {inclusion or 'Не задано: inclusion виконаний.'}
@@ -2173,6 +2199,9 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        from .editorial_quality_2356 import visual_story_prompt_2356
+        visual_story_2356 = visual_story_prompt_2356(
+            article, commercial=_is_commercial_editorial(channel))
         source_fact_card = build_source_fact_card(article, char_budget=1900)
         event(
             "editorial", "source fact card created", channel_id=channel.id,
@@ -2276,6 +2305,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
 {reader_payoff_instruction}
 {blueprint.prompt_block()}
 {story_brief.prompt_block()}
+{visual_story_2356}
 {regional_writer_rule_2355}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
@@ -2347,6 +2377,11 @@ SOURCE:
                 mixed = mixed_topic_issues_2316(article, candidate)
                 if mixed:
                     raise ValueError("Source-coherence QA: " + "; ".join(mixed))
+            from .editorial_quality_2356 import missing_visual_story_bridge_2356
+            visual_issue_2356 = missing_visual_story_bridge_2356(
+                article, candidate, commercial=_is_commercial_editorial(channel))
+            if visual_issue_2356:
+                raise ValueError(visual_issue_2356)
             validate_writer_output(
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
@@ -2533,6 +2568,9 @@ SOURCE:
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
         )
+        from .editorial_quality_2356 import visual_story_prompt_2356
+        visual_story_2356 = visual_story_prompt_2356(
+            article, commercial=_is_commercial_editorial(channel))
         source_fact_card = build_source_fact_card(article, char_budget=1700)
         from .study_result_completeness_2347 import (
             study_results_guidance_2347, study_results_missing_2347,
@@ -2555,6 +2593,7 @@ SOURCE:
 {reader_rules}
 {blueprint.prompt_block(final=True)}
 {story_brief.prompt_block(final=True)}
+{visual_story_2356}
 {tone_rule}
 {SOURCE_FINAL_FIDELITY_RULE_255}
 {UA_EDITORIAL_POLISH_RULE_259}
@@ -2613,6 +2652,11 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
                 mixed = mixed_topic_issues_2316(article, candidate)
                 if mixed:
                     raise ValueError("Source-coherence QA: " + "; ".join(mixed))
+            from .editorial_quality_2356 import missing_visual_story_bridge_2356
+            visual_issue_2356 = missing_visual_story_bridge_2356(
+                article, candidate, commercial=_is_commercial_editorial(channel))
+            if visual_issue_2356:
+                raise ValueError(visual_issue_2356)
             validate_writer_output(
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
