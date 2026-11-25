@@ -136,6 +136,11 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     owner_reader_value = owner_reader_value_reason_2344(role, article)
     if owner_reader_value:
         return owner_reader_value
+    if role == "creative":
+        from .creative_reader_2358 import creative_portfolio_reason
+        portfolio = creative_portfolio_reason(article)
+        if portfolio:
+            return portfolio
     if role != "science":
         return ""
     from .editorial_owner_2343 import science_procedural_teardown_reason_2343

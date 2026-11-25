@@ -36,6 +36,8 @@ def focused_rewrite_instructions(row: Any) -> str:
     Never infer missing prior source facts and never accept blank prior drafts.
     """
     code = _read(row, "last_error_code")
+    if code == "READER_GATE_2359":
+        return "Перебудуй весь текст за джерелом, якщо він незрозумілий. Усунь недоліки попереднього читацького QA: " + _read(row, "last_error_detail")[:500]
     if code not in {"PREPUBLISH_SOURCE_SAFETY", "PREPUBLISH_QA"}:
         return ""
     prior_text = _read(row, "final_text").strip()

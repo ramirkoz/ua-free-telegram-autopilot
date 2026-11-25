@@ -137,6 +137,7 @@ class RuntimeEngine:
         self.dedupe = DedupeEngine(store)
         self.editorial = EditorialEngine(store, self.gateway)
         self.publisher = Publisher(store)
+        self.publisher._reader_gateway_2359 = self.gateway
         self.stop_event = threading.Event()
         self.stop_event.set()  # not running until start() explicitly clears it
         self._threads: dict[int, threading.Thread] = {}

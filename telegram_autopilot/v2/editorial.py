@@ -1718,6 +1718,7 @@ SOURCE:
         fit: Mapping[str, Any], fit_result: Any
     ) -> EditorialOutcome | None:
         """One source-quoted independent opinion, never a safety override."""
+        from .creative_reader_2358 import CREATIVE_READER_GUIDANCE
         code = str(fit.get("reject_code") or "").strip().casefold()
         if not eligible_second_opinion_2320(article, role, code):
             return None
@@ -1734,6 +1735,7 @@ SOURCE:
         current.append(now)
         prompt = (
             SECOND_OPINION_INSTRUCTION_2320 + "\n"
+            + (CREATIVE_READER_GUIDANCE + "\n" if role == "creative" else "")
             + calibrated_feedback_2320(role) + "\n"
             + "SOURCE TITLE: " + _clean(_v(article, "title", ""), 700) + "\n"
             + "SOURCE BODY:\n" + _clean(_v(article, "raw_text", ""), 3600)
@@ -1782,6 +1784,7 @@ SOURCE:
         self, channel: ChannelConfig, article: Any, role: str, score: int
     ) -> EditorialOutcome:
         """Source-cited independent second opinion for a risky primary PUBLISH."""
+        from .creative_reader_2358 import CREATIVE_READER_GUIDANCE
         now = time.monotonic()
         key = str(channel.id) + ":publish_2321"
         reviews = getattr(self, "_coverage_reviews_234", None)
@@ -1798,6 +1801,7 @@ SOURCE:
         recent.append(now)
         prompt = (
             VERIFY_PUBLISH_PROMPT_2321 + "\n"
+            + (CREATIVE_READER_GUIDANCE + "\n" if role == "creative" else "")
             + "CHANNEL: " + role + "\n"
             + "TITLE: " + _clean(_v(article, "title", ""), 600) + "\n"
             + "SOURCE BODY:\n" + _clean(_v(article, "raw_text", ""), 3600)
@@ -1960,10 +1964,13 @@ SOURCE:
             '"mechanism":0,"reader_payoff":0,"retellability":0,"concrete_stakes":0,'
             '"why_now":0,"curiosity_only":false}'
         )
+        from .creative_reader_2358 import CREATIVE_READER_GUIDANCE
+        reader_2358 = CREATIVE_READER_GUIDANCE if calibrated_role == "creative" else ""
         owner_235 = (SCIENCE_GUIDANCE_235 if calibrated_role == "science" else
                      CREATIVE_GUIDANCE_235 if calibrated_role == "creative" else "")
         prompt = f"""{selector_header}
 {owner_235}
+{reader_2358}
 PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEXCLUSIONS: {p.rejection_rules}\nEXTRA: {p.selector_extra_prompt}
 {topic_memory}
 {science_audience_instruction}
@@ -2302,9 +2309,11 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             if channel.mode == ChannelMode.EDITORIAL else ""
         )
         from .full_story_2357 import full_story_instruction_2357
+        from .reader_gate_2359 import WRITER_RULE
         prompt = f"""Ти єдиний автор Telegram-поста. Напиши природною українською. Використовуй ТІЛЬКИ SOURCE та SOURCE NAME. Не вигадуй фактів, чисел, назв або причинності. Не додавай source footer: його додасть система.
 СТРУКТУРА: якщо фінальний текст має 350+ символів, обов'язково поділи його щонайменше на 2 короткі смислові абзаци; типовий редакторський пост — 2–3 абзаци, орієнтир 500–850 символів за наявності змісту. Не пиши суцільну стіну тексту. Не використовуй штучні повтори літер або пунктуації.{monitoring_rule}{named_source_style}
 {reader_rules}
+{WRITER_RULE}
 {reader_payoff_instruction}
 {blueprint.prompt_block()}
 {story_brief.prompt_block()}
@@ -2599,8 +2608,10 @@ SOURCE:
             science=is_science_general_channel(channel),
         )
         from .full_story_2357 import full_story_instruction_2357, final_story_loss_2357
+        from .reader_gate_2359 import WRITER_RULE
         prompt = f"""Ти фінальний редактор українського Telegram-тексту перед автоматичною публікацією. Перевір факти за SOURCE, потім виправ мову, граматику, узгодження, ясність, повтори і структуру. Якщо DRAFT містить непідтверджені твердження, перепиши відповідний фрагмент ЗАНОВО з SOURCE, а не поліруй вигадку. Не додавай жодних нових фактів/чисел/назв. Не роздувай коротке джерело. Не додавай порад, моралей чи фраз про відсутні деталі, якщо їх немає у SOURCE. {source_attribution_instruction}Якщо текст уже добрий, поверни його без змін.
 {reader_rules}
+{WRITER_RULE}
 {blueprint.prompt_block(final=True)}
 {story_brief.prompt_block(final=True)}
 {visual_story_2356}
