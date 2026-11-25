@@ -166,6 +166,27 @@ _OWNER_FINAL_2345 = """
 """.strip()
 
 
+# 24.11.2026 owner review of 21 accepted and 4 rejected LIVE posts.
+# Examples below prescribe EDITORIAL OPERATIONS, not reusable facts/headlines.
+_OWNER_READER_2354 = """
+РЕДАКТОР 2.3.54. Перед чернеткою знайди в SOURCE одну конкретну причину,
+чому повідомлення хочеться дочитати: факт, незвичну дію, нову можливість,
+реальні наслідки або межу результату. Постав ЦЕ у перше речення, без
+вступного «X повідомив», «у межах», «під час зустрічі обговорили», якщо
+джерело підтверджує предметніший факт. Не додавай оцінок та емоцій від себе.
+Далі назви автора/джерело, механіку і лише одну-дві необхідні деталі.
+Не перераховуй біографії, всі функції, всі позиції товару чи всі сцени фільму.
+Для справді візуального рекламного ролика текст — короткий коментар до
+РЕАЛЬНО прикріпленого відео, а не текстова аудіодескрипція від початку до
+кінця. Фото-афіша або посилання на YouTube не є прикріпленим роликом.
+Для оригінального об'єкта/дизайну важливі сама незвична функція і фотографії.
+Коли факт має статус прогнозу, оцінки виробника або лабораторного результату,
+збережи статус, дату та одиниці; не прикрашай доказовість. У тексті має
+лишитися людська природна українська мова, без обов'язкових емодзі, вигуків
+чи штучних гачків. Точність і редакторський сенс важливіші за довжину.
+""".strip()
+
+
 def newsroom_voice_2337(*, monitoring: bool = False,
                         commercial: bool = False,
                         science: bool = False,
@@ -173,6 +194,7 @@ def newsroom_voice_2337(*, monitoring: bool = False,
     """Pure presentation rule, selected by semantic channel role."""
     role = _MONITORING if monitoring else (_CREATIVE if commercial else _SCIENCE if science else _COMMON)
     return (_COMMON + "\n\n" + role + "\n\n" + _OWNER_READER_STANDARD_2345
+            + "\n\n" + _OWNER_READER_2354
             + ("\n\n" + _OWNER_MONITORING_2345 if monitoring else "")
             + ("\n\n" + _OWNER_CREATIVE_2345 if commercial else "")
             + ("\n\n" + _OWNER_SCIENCE_2345 if science else "")

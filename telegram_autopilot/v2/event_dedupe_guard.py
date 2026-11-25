@@ -1028,6 +1028,14 @@ class EventFingerprintDedupeEngine(SemanticDedupeEngine):
         best_strength = -1.0
         best_summary = ""
         for candidate in candidates:
+            # 2.3.53: unpublished/rejected/short material cannot act as a
+            # same-event winner. Published receipts remain valid history.
+            # Prefer a materially richer currently eligible source over an
+            # uncommitted, shorter candidate (prepublish protects final sends).
+            if channel is not None and channel.mode == ChannelMode.MONITORING and not published_only:
+                from .dedupe_eligible_winner_2353 import eligible_event_anchor_2353
+                if not eligible_event_anchor_2353(channel, current, candidate):
+                    continue
             try:
                 # A rejected/expired article is not an authoritative published
                 # event; comparing it as a canonical source silences new news.

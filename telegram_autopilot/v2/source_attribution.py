@@ -109,9 +109,17 @@ def source_body_attribution_issues(
     )
     if generic_attribution.search(body):
         return ("правила каналу забороняють атрибуцію джерела в тілі; джерело має лишатися тільки у footer",)
+    source_body = re.sub(r"https?://\S+", " ", str(_value(article, "raw_text", "") or ""), flags=re.I)
     for alias in _source_aliases(name):
         pattern = r"(?iu)(?<![\w’'-])" + r"\s+".join(re.escape(part) for part in alias.split()) + r"(?![\w’'-])"
         if re.search(pattern, body):
+            # Community Telegram pages often ARE the subject (e.g. "the
+            # community joins a campaign"). Naming the same real-world actor
+            # is not a forbidden attribution to the donor channel. Require
+            # literal actor evidence in the original text; bare link labels
+            # and generic "the source reports" remain forbidden above.
+            if re.search(pattern, source_body):
+                continue
             return ("правила каналу забороняють згадувати/атрибутувати джерело в тілі; джерело має лишатися тільки у footer",)
     return ()
 

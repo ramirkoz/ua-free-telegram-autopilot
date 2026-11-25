@@ -254,6 +254,23 @@ def build_publication_media_bundle(
             )
             drop_reasons = tuple(sorted(counts.items()))
 
+        from ..source_media_2357 import choose_editorial_media
+        original_candidate_count = len(candidates)
+        candidates = choose_editorial_media(candidates,
+            str(_v(article, "title", "") or ""),
+            str(_v(article, "raw_text", "") or ""))
+        if original_candidate_count > len(candidates):
+            counts = dict(drop_reasons)
+            counts["single_lead_selection_2357"] = original_candidate_count - len(candidates)
+            drop_reasons = tuple(sorted(counts.items()))
+        # A direct uploaded video does not need a second video footer. An
+        # unrelated secondary player must not accompany the selected image.
+        if candidates and not any(x.kind == "image" and x.context == "youtube video preview" for x in candidates):
+            if any(x.kind == "video" for x in candidates):
+                video_link = ""
+            elif not (getattr(prepared, "primary_video", None) is not None and
+                      getattr(prepared.primary_video, "kind", "") == "iframe"):
+                video_link = ""
         seen: set[str] = set()
         for item in candidates:
             if item is None or item.kind not in {"image", "video"} or not item.url:
@@ -283,7 +300,7 @@ def build_publication_media_bundle(
         declared_media_count=len(chosen),
         source_media_count=len(chosen),
         video_link=video_link,
-        video_links=raw.video_links,
+        video_links=(video_link,) if video_link else (),
         gallery_detected=gallery_detected,
         gallery_items_found=gallery_items_found,
         gallery_items_kept=len(chosen) if gallery_detected else 0,

@@ -872,6 +872,30 @@ class Publisher:
         if not schedule_ok:
             return schedule_reason
 
+        # Independent semantic reader gate: also covers inherited READY.
+        # Run after schedule and durable delivery preflight, before Telegram.
+        from .ai_gateway import AIGateway, GatewayExhausted
+        from .reader_gate_2359 import review
+        if not hasattr(self, "_reader_gateway_2359"):
+            self._reader_gateway_2359 = AIGateway(self.store)
+        if heartbeat:
+            heartbeat()
+        try:
+            reader_issues, reader_reason = review(self._reader_gateway_2359, channel, article, current_text)
+        except (GatewayExhausted, ValueError) as exc:
+            self.store.publication_backoff(article_id, blocked_by=BlockedBy.AI,
+                error_code="READER_GATE_2359_UNAVAILABLE", detail=str(exc), retry_seconds=300)
+            return "READER_GATE_2359_UNAVAILABLE"
+        if reader_issues:
+            detail = "READER_GATE_2359: " + ", ".join(reader_issues) + "; " + reader_reason
+            outcome = self.store.requeue_quality_rewrite(article_id,
+                error_code="READER_GATE_2359", detail=detail, max_attempts=3)
+            event("editorial", "reader acceptance blocked READY", channel_id=channel_id,
+                article_id=article_id, detail=detail, outcome=outcome)
+            return outcome
+        event("editorial", "reader acceptance passed READY", channel_id=channel_id,
+            article_id=article_id, reason=reader_reason)
+
         source_urls = _source_urls(article)
         source_url = source_urls[0] if source_urls else ""
         if not source_url.startswith(("http://", "https://")):

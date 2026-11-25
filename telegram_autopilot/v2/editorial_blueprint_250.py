@@ -113,6 +113,21 @@ def build_editorial_blueprint(
         )
 
     if commercial:
+        # 2.3.54: cinematic ads must be communicated as an actual film,
+        # not as an exhaustive textual shot-by-shot retelling.
+        from .editorial_owner_2354 import story_needs_embedded_video_2354
+        if story_needs_embedded_video_2354("creative", article):
+            return EditorialBlueprint(
+                "commercial_filmed_story",
+                "Яку конкретну цікаву ідею показує прикріплений рекламний ролик?",
+                "Одним коротким реченням назви контраст або кумедний прийом; "
+                "не переповідай послідовно всі сцени відео.",
+                "Одна перевірена ідея → бренд/автор → одна конкретна деталь. "
+                "Ролик має бути реально прикріплений; сама URL або афіша не є відео.",
+                "Не вигадуй прямих цитат, реакцій аудиторії чи сюжетних деталей; "
+                "не вдавай, що читач побачив відео, якщо не було валідованого кліпу.",
+                normalized_angle,
+            )
         if _CREATIVE.search(src) and _HAND_CRAFT.search(src) and _AI_MENTION.search(src):
             return EditorialBlueprint(
                 "commercial_contrast", "Що саме незвичайного в кампанії та в чому її підтверджений контраст?",

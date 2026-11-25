@@ -1,0 +1,1 @@
+2.3.59 candidate: independent semantic reader acceptance before Telegram including inherited READY; bounded rewrite; all channels clarity, creative broad-interest review. Existing regional selection unchanged. Native Windows and live AI verification pending.

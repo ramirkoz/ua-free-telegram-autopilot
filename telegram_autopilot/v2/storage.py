@@ -2471,11 +2471,8 @@ class V2Store:
                     # The legacy shared rewrite job is named "rewrite_oversize",
                     # but source factual failures must never masquerade as
                     # Telegram length errors when the safe retry budget ends.
-                    terminal_code = (
-                        "SOURCE_FACT_QA_BLOCKED" if str(error_code) == "PREPUBLISH_SOURCE_SAFETY"
-                        else "PREPUBLISH_QA_BLOCKED" if str(error_code) == "PREPUBLISH_QA"
-                        else "TELEGRAM_OVERSIZE_BLOCKED"
-                    )
+                    from .quality_code_2355 import terminal_quality_code_2355
+                    terminal_code = terminal_quality_code_2355(error_code, detail)
                     con.execute("UPDATE articles SET stage=?,decision=?,blocked_by=?,last_error_code=?,last_error_detail=?,retry_count=retry_count+1,next_retry_at='' WHERE id=?",(str(Stage.QA_PASSED),str(Decision.PENDING),str(BlockedBy.QUALITY),terminal_code,str(detail)[:2000],int(article_id)))
                     con.execute("UPDATE jobs SET state='DONE',lease_owner='',lease_until='',attempts=?,error_code=?,error_detail=?,updated_at=? WHERE article_id=? AND job_type='rewrite_oversize'",(attempt,terminal_code,str(detail)[:2000],stamp,int(article_id)))
                     con.commit(); return "QUALITY_BLOCKED"
@@ -2751,15 +2748,18 @@ class V2Store:
                 layout = json.loads(str(layout_raw or "{}"))
                 if isinstance(layout, dict):
                     entries.append(str(layout.get("featured") or ""))
+                    entries.append(str(layout.get("featured_video") or ""))
                     for block in layout.get("blocks", []):
                         if isinstance(block, dict) and block.get("type") == "media":
-                            entries.append(str(block.get("url") or ""))
+                            kind = str(block.get("kind") or "image")
+                            url = str(block.get("url") or "")
+                            entries.append(url if kind == "image" else f"{kind}|{url}")
             except (TypeError, ValueError):
                 pass
             result: dict[str, str] = {}
             for value in entries:
                 parsed = valid_public_media(value)
-                if not parsed or parsed[0] != "image":
+                if not parsed or parsed[0] not in {"image", "video", "iframe"}:
                     continue
                 _, url = parsed
                 result.setdefault(canonical_asset_key(url), url)
@@ -2825,7 +2825,7 @@ class V2Store:
         with self.connect() as con:
             self._ensure_published_web_media_2324(con)
             for item in prepared:
-                if str(getattr(item, "kind", "")) != "image":
+                if str(getattr(item, "kind", "")) not in {"image", "video"}:
                     continue
                 asset = canonical_asset_key(str(getattr(item, "source_url", "")))
                 digest = str(getattr(item, "digest", "") or "")
@@ -2850,7 +2850,7 @@ class V2Store:
         with self.connect() as con:
             self._ensure_published_web_media_2324(con)
             for item in prepared:
-                if str(getattr(item, "kind", "")) != "image":
+                if str(getattr(item, "kind", "")) not in {"image", "video"}:
                     continue
                 con.execute("""INSERT OR IGNORE INTO published_web_media_2324
                     (channel_id,article_id,source_url,asset_key,sha256,recorded_at)

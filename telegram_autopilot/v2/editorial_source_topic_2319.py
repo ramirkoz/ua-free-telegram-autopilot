@@ -100,6 +100,20 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
         rescue = creative_routine_pet_rescue_reason(article)
         if rescue:
             return rescue
+    # 2.3.54: owner-reviewed retail/obituary and story-video requirements.
+    # This is a source-only check; it is repeated at the final READY gate.
+    from .editorial_owner_2354 import owner_source_veto_2354
+    owner_2354 = owner_source_veto_2354(role, article)
+    if owner_2354:
+        return owner_2354
+    # 2.3.56: evidence-conjunctive seasonal shelf/price press release. The
+    # same source-topic function is called at the READY/send boundary; never
+    # ban a food/brand or a genuinely novel product in general.
+    if role == "creative":
+        from .editorial_quality_2356 import creative_routine_product_reason_2356
+        routine_2356 = creative_routine_product_reason_2356(article)
+        if routine_2356:
+            return routine_2356
     # 2.3.35: operator-red false-positive controls, topic only; no fact bypass.
     from .editorial_owner_235 import owner_source_veto_235
     owner_veto = owner_source_veto_235(role, article)
@@ -122,6 +136,11 @@ def editorial_source_topic_reason_2319(channel: Any, article: Any) -> str:
     owner_reader_value = owner_reader_value_reason_2344(role, article)
     if owner_reader_value:
         return owner_reader_value
+    if role == "creative":
+        from .creative_reader_2358 import creative_portfolio_reason
+        portfolio = creative_portfolio_reason(article)
+        if portfolio:
+            return portfolio
     if role != "science":
         return ""
     from .editorial_owner_2343 import science_procedural_teardown_reason_2343
