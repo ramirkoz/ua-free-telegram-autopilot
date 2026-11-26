@@ -32,6 +32,18 @@ def safe_format_candidate(text: str, error: Exception) -> str:
             cleaned = source[:match.start()].rstrip()
             if len(cleaned) >= 170 and cleaned[-1:] in ".!?…»”":
                 return cleaned
+    if "надто довгий абзац" in reason and "перевантажене речення" not in reason:
+        paragraphs = re.split(r"\n\s*\n", source)
+        longest = max(range(len(paragraphs)), key=lambda i: len(paragraphs[i]))
+        paragraph = paragraphs[longest]
+        stops = [m.end() for m in re.finditer(r"[.!?…](?=\s+[А-ЯІЇЄҐ])", paragraph)]
+        options = [i for i in stops if i >= 80 and len(paragraph)-i >= 80]
+        if options:
+            i = min(options, key=lambda k: abs(k-len(paragraph)/2))
+            paragraphs[longest] = paragraph[:i].rstrip()+"\n\n"+paragraph[i:].lstrip()
+            candidate = "\n\n".join(paragraphs)
+            if candidate.split() == source.split():
+                return candidate
     if "суцільна стіна тексту без абзаців" in reason and "\n" not in source:
         # Add ONLY whitespace at an existing sentence boundary. A period after
         # abbreviations/URLs may be unsafe, therefore require substantive sides.

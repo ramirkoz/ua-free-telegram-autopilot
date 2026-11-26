@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +38,8 @@ class AIResult:
     estimated_openrouter_usd: float = 0.0
     actual_openrouter_usd: float = 0.0
 
+
+_SELECTOR_CACHE_LOCK_2363 = threading.Lock()
 
 _CONTRACT_FAILURE_MARKERS = (
     "не повернув json", "no json", "invalid json", "порожн", "empty", "reasoning but no final",
@@ -966,6 +969,32 @@ class AIGateway:
                  or not self._openrouter_budget_status(cfg)[0]
                  or self._provider_blocked("openrouter"))
         )
+        # Cache only a validated selector response for an identical scoped
+        # prompt/route, for at most 15 minutes. Caller-side source, policy,
+        # freshness, and saturation checks still execute on every retry.
+        cache_key = None
+        if (mode == "openrouter" and validator is not None and purpose in
+                {"editorial_selector", "monitoring_selector"} and all(current_ai_article())):
+            cache_key = (current_ai_article(), purpose,
+                         hashlib.sha256(text_prompt.encode("utf-8")).hexdigest(),
+                         tuple((slot.provider, slot.model) for slot in route_slots),
+                         tuple(sorted(allowed or ())), int(max_output_tokens))
+            with _SELECTOR_CACHE_LOCK_2363:
+                if not hasattr(self, "_selector_cache_2363"):
+                    self._selector_cache_2363 = {}
+                cached = self._selector_cache_2363.get(cache_key)
+            if cached and time.monotonic() - cached[0] <= 900:
+                try:
+                    validator(cached[1].text)
+                except Exception:
+                    with _SELECTOR_CACHE_LOCK_2363:
+                        self._selector_cache_2363.pop(cache_key, None)
+                else:
+                    event("editorial", "validated selector response reused 2363",
+                          channel_id=current_ai_article()[0], article_id=current_ai_article()[1],
+                          purpose=purpose, ai_calls_saved=1)
+                    return AIResult(cached[1].text, cached[1].provider, cached[1].model,
+                                    "validated selector checkpoint")
         paid_attempts_232 = 0
         paid_spend_232 = 0.0
         paid_attempt_limit_232 = 1 if purpose == "reader_gate" else 2
@@ -1037,7 +1066,7 @@ class AIGateway:
             if provider == "openrouter":
                 from .ai_cost_2360 import reserve_paid_attempt
                 try:
-                    admitted = reserve_paid_attempt(self.store, current_ai_article()[1], editorial=editorial_cost_guard)
+                    admitted = reserve_paid_attempt(self.store, current_ai_article()[1], editorial=editorial_cost_guard, purpose=purpose)
                 except Exception:
                     lock.release()
                     raise
@@ -1084,6 +1113,14 @@ class AIGateway:
                     try:
                         validator(output)
                     except Exception as first_error:
+                        if purpose == "final_editor" and "REJECT_READER_2360" in str(first_error):
+                            # An explicit reader veto is terminal, not a reason to
+                            # seek a more permissive model or fall back to the draft.
+                            validation_failures += 1
+                            failures.append(f"{slot.label}: {first_error}")
+                            event("editorial", "explicit reader veto terminal 2363",
+                                  article_id=current_ai_article()[1], channel_id=current_ai_article()[0])
+                            break
                         # v2.2.38: delete only a short, incomplete trailing clause,
                         # then rerun the unchanged FULL editorial/source validator.
                         # A rejection of unsupported facts/polarity can never be
@@ -1206,7 +1243,13 @@ class AIGateway:
                     estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
                     actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )
-                return AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0), float(actual_cost or 0.0))
+                result = AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0), float(actual_cost or 0.0))
+                if cache_key is not None and provider == "openrouter":
+                    with _SELECTOR_CACHE_LOCK_2363:
+                        if len(self._selector_cache_2363) >= 256:
+                            self._selector_cache_2363.pop(next(iter(self._selector_cache_2363)), None)
+                        self._selector_cache_2363[cache_key] = (time.monotonic(), result)
+                return result
             except Exception as exc:
                 # lock is already released by the inner finally for call failures.
                 failures.append(f"{slot.label}: {exc}")
@@ -1293,6 +1336,13 @@ class AIGateway:
         # legitimate opportunity to prove a token/network/model recovered and clear
         # yesterday's state immediately.
         for slot in self._provider_slots(provider, cfg):
+            known = self._model_health_map().get((provider, slot.model))
+            detail = str(getattr(known, "detail", "") or "").casefold()
+            if (known and known.state == ProviderState.MODEL_UNSUPPORTED
+                    and ("http 410" in detail or "end of life" in detail)):
+                event("ai", "retired model probe skipped 2363", provider=provider,
+                      model=slot.model, status_unchanged=True)
+                continue
             started = time.monotonic()
             lock = self._provider_call_lock(provider)
             # Manual diagnostics must never wait ahead of editor requests.

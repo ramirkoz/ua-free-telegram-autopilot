@@ -12,7 +12,7 @@ MAX_PAID_TOTAL_ATTEMPTS = 8
 OBSERVED_USD_LIMIT = 0.010
 
 
-def reserve_paid_attempt(store, article_id: int, *, editorial: bool = True) -> bool:
+def reserve_paid_attempt(store, article_id: int, *, editorial: bool = True, purpose: str = "") -> bool:
     """Persist BEFORE sending, including timeouts/invalid results; atomic across workers."""
     if not article_id:
         return True
@@ -23,9 +23,18 @@ def reserve_paid_attempt(store, article_id: int, *, editorial: bool = True) -> b
             attempts = int(row[0]) if row else 0
             editorial_attempts = int(row[1]) if row else 0
             spend = float(con.execute("SELECT COALESCE(SUM(actual_openrouter_usd),0) FROM ai_usage_events WHERE article_id=? AND provider='openrouter'", (article_id,)).fetchone()[0])
-            if attempts >= MAX_PAID_TOTAL_ATTEMPTS or (editorial and editorial_attempts >= MAX_PAID_EDITORIAL_ATTEMPTS) or spend >= OBSERVED_USD_LIMIT:
+            # Reserve a final editor and a reader check within the existing cap.
+            # Historical attempts are never reset; the USD admission threshold
+            # is unchanged and does not guarantee the next invoice amount.
+            phase = str(purpose or '').casefold()
+            reserve = 3 if phase in {'editorial_selector', 'monitoring_selector'} else 2 if phase == 'writer' else 1 if phase in {'final_editor', 'rewrite', 'complex_rewrite'} else 0
+            editorial_reserve = min(reserve, 2)
+            total_limit = MAX_PAID_TOTAL_ATTEMPTS - reserve
+            editorial_limit = MAX_PAID_EDITORIAL_ATTEMPTS - editorial_reserve
+            selector_blocked = reserve == 3 and editorial_attempts >= MAX_PAID_EDITORIAL_ATTEMPTS - 2
+            if attempts >= total_limit or (editorial and editorial_attempts >= editorial_limit) or selector_blocked or spend >= OBSERVED_USD_LIMIT:
                 con.rollback()
-                event('ai', 'article paid editorial budget exhausted 2360', article_id=article_id, attempts=attempts, editorial_attempts=editorial_attempts, actual_usd=round(spend,6))
+                event('ai', 'article paid editorial budget exhausted 2360', article_id=article_id, attempts=attempts, editorial_attempts=editorial_attempts, actual_usd=round(spend,6), purpose=phase, reserved_attempts=reserve, total_limit=total_limit, editorial_limit=editorial_limit)
                 return False
             con.execute("INSERT INTO ai_article_budget_2360(article_id,attempts,editorial_attempts) VALUES(?,1,?) ON CONFLICT(article_id) DO UPDATE SET attempts=attempts+1, editorial_attempts=editorial_attempts+excluded.editorial_attempts", (article_id,int(editorial)))
             con.commit()
@@ -124,3 +133,13 @@ def save_writer_checkpoint(store, channel, article, prompt, draft, provider, mod
 def clear_writer_checkpoint(store, article_id):
     with store.connect() as con:
         con.execute('DELETE FROM ai_writer_checkpoint_2362 WHERE article_id=?', (int(article_id),))
+
+
+def prompt_shape_2363(prompt):
+    """Counts only; no source, policy or personal information in events."""
+    head, marker, tail = str(prompt).partition("\nSOURCE:\n")
+    source, draft_marker, draft = tail.partition("\nDRAFT:\n")
+    return {"prompt_chars": len(prompt), "instruction_chars": len(head),
+            "source_section_chars": len(source) if marker else 0,
+            "draft_section_chars": len(draft) if draft_marker else 0,
+            "purpose": "final_editor" if draft_marker else "writer"}
