@@ -482,7 +482,7 @@ class AIGateway:
                 and str(model or "").casefold() == "inclusionai/ling-3.0-tiny"):
             return True
         key = (str(purpose or "content").casefold(), str(model or "").casefold())
-        if key[0] in {"editorial_selector", "monitoring_selector", "reader_gate", "value_gate", "commercial_value_gate"} and getattr(self, "_contract_failure_streak_2365", {}).get(key, 0) >= 2:
+        if key[0] in {"editorial_selector", "monitoring_selector", "reader_gate", "value_gate", "commercial_value_gate", "writer", "final_editor", "rewrite", "complex_rewrite"} and getattr(self, "_contract_failure_streak_2365", {}).get(key, 0) >= 2:
             return True
         ok, bad = self._contract_stats().get(
             (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))

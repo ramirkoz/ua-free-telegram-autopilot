@@ -619,7 +619,7 @@ class RuntimeEngine:
                 channel_for_admission = self.store.get_channel(channel_id)
                 if (channel_for_admission is not None
                         and channel_for_admission.mode == ChannelMode.MONITORING):
-                    from .monitoring_short_material_2352 import monitoring_short_material_reason_2352
+                    from .monitoring_short_material_2352 import monitoring_short_material_reason_2352, regional_publication_floor_2355, _content_text
                     source_veto = monitoring_short_material_reason_2352(channel_for_admission, article)
                     if source_veto:
                         self.store.reject_editorial_article(article_id, source_veto)
@@ -627,7 +627,10 @@ class RuntimeEngine:
                         self._job_activity(state, "rejected")
                         self._job_activity(state, "completed")
                         event("editorial", "2.3.53 source rejected before event dedupe",
-                              channel_id=channel_id, article_id=article_id, reason=source_veto)
+                              channel_id=channel_id, article_id=article_id, reason=source_veto,
+                              source_chars=len(_content_text(str(article["raw_text"] or article["title"] or ""))),
+                              source_min_chars=regional_publication_floor_2355(channel_for_admission),
+                              source_id=int(article["source_id"] or 0))
                         return True
                 self.store.update_article(article_id, stage=str(Stage.EXTRACTED))
                 duplicate = self.dedupe.evaluate(article_id)
