@@ -2355,14 +2355,20 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {newsroom_voice}
 {source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}
 {full_story_instruction_2357(channel, article, validation_hard_max)}
-Цільова довжина: {effective_min}-{effective_max} символів. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
+Цільова довжина: {effective_min}-{effective_max} символів змістовного тіла без футера. Перед відповіддю перевір довжину, заверши всі речення, розбий перевантажені речення на короткі, за наявності фактів не стискай нижче мінімуму. Не додавай води. ЖОРСТКО: готовий текст не може перевищувати {validation_hard_max} символів, бо система додає окремий footer джерела.
 PROTECTED ACTIONABLE FACTS: якщо релевантні правилам каналу, збережи точні контакти/адреси/дати/час/URL дослівно.
 {protected}
 SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}
 SOURCE:
 {_source_pack(article, 6200)}
 Поверни ТІЛЬКИ готовий текст поста без службових пояснень."""
+        if _is_commercial_editorial(channel):
+            # Style only: preserve uncertainty and source facts; no new thematic veto.
+            prompt = prompt.replace("\nSOURCE:\n", "\nПРОДАНО! Пиши доступною українською, як для допитливого неспеціаліста. Спочатку зрозуміла цікава деталь, потім пояснення. Уникай академічних кальок на кшталт «передбачало подальший розвиток»; поясни, що саме дослідники спостерігали, не перетворюючи зв’язок на доведену причинність. Не спрощуй застереження та не вигадуй гачок.\nSOURCE:\n", 1)
         prompt = compact_prompt(prompt)
+        from .ai_cost_2360 import prompt_shape_2363
+        event("editorial", "editorial prompt shape 2363", channel_id=channel.id,
+              article_id=int(_v(article, "id", 0) or 0), **prompt_shape_2363(prompt))
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
@@ -2680,7 +2686,13 @@ SOURCE:
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
 CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsroom_voice}\n{source_context_instruction}SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE:\n{_source_pack(article, 5200)}\nDRAFT:\n{draft}\nПоверни тільки фінальний текст."""
+        if _is_commercial_editorial(channel):
+            # Style only: preserve uncertainty and source facts; no new thematic veto.
+            prompt = prompt.replace("\nSOURCE:\n", "\nПРОДАНО! Пиши доступною українською, як для допитливого неспеціаліста. Спочатку зрозуміла цікава деталь, потім пояснення. Уникай академічних кальок на кшталт «передбачало подальший розвиток»; поясни, що саме дослідники спостерігали, не перетворюючи зв’язок на доведену причинність. Не спрощуй застереження та не вигадуй гачок.\nSOURCE:\n", 1)
         prompt = compact_prompt(prompt)
+        from .ai_cost_2360 import prompt_shape_2363
+        event("editorial", "editorial prompt shape 2363", channel_id=channel.id,
+              article_id=int(_v(article, "id", 0) or 0), **prompt_shape_2363(prompt))
 
         def prepared_text(raw: str) -> str:
             return _rc111_prepare_candidate(
