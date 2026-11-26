@@ -461,6 +461,13 @@ class ReadyBacklogSupervisor(LocalOnlyProductionSupervisorService):
                         max_age_hours=int(channel.max_age_hours),
                     )
                     stats["publication_capacity"] = estimate
+                stats["ready_manual_review_2365"] = int(con.execute(
+                    """SELECT COUNT(*) FROM articles WHERE channel_id=? AND stage='READY'
+                       AND decision='PUBLISH' AND blocked_by='QUALITY'
+                       AND last_error_code='QUALITY_RETRY_EXHAUSTED' AND COALESCE(next_retry_at,'')=''""",
+                    (int(channel_id),),
+                ).fetchone()[0] or 0)
+                stats["ready_operational_2365"] = max(0, int(stats.get("ready") or 0) - stats["ready_manual_review_2365"])
                 stats["ready_permanent_blocked"] = int(
                     con.execute(
                         """SELECT COUNT(*) FROM articles

@@ -69,7 +69,7 @@ def test_local_short_editorial_gate_is_bounded_to_120_seconds(monkeypatch) -> No
     assert len(captured["prompt"]) <= 3200
 
 
-def test_gateway_uses_local_for_long_form_when_cloud_routes_unavailable(monkeypatch) -> None:
+def test_2364_gateway_never_uses_local_for_long_form_when_openrouter_unavailable(monkeypatch) -> None:
     gateway = _gateway()
     cfg = SimpleNamespace(local_enabled=True, local_model="qwen3:4b", local_base_url="http://127.0.0.1:8080/v1")
     slot = SimpleNamespace(provider="local", model="local-model", label="local", priority=100)
@@ -85,9 +85,11 @@ def test_gateway_uses_local_for_long_form_when_cloud_routes_unavailable(monkeypa
         "_refresh_provider_summary",
         lambda provider, _cfg: ProviderHealth(provider=provider, state=ProviderState.HEALTHY),
     )
-    result = gateway.run("long writer prompt", max_output_tokens=1100, timeout_seconds=30)
-    assert result.provider == "local"
-    assert result.text == "локальний повний текст"
+    import pytest
+    from telegram_autopilot.v2.ai_gateway import GatewayExhausted
+    with pytest.raises(GatewayExhausted) as exc:
+        gateway.run("long writer prompt", max_output_tokens=1100, timeout_seconds=30)
+    assert exc.value.provider_outage
 
 
 def test_local_health_probe_uses_cpu_timeout(monkeypatch) -> None:

@@ -148,9 +148,9 @@ def _parse_json(raw: str) -> dict[str, Any]:
         last_error = ValueError("AI JSON має бути object")
     raise ValueError(f"AI повернув пошкоджений JSON: {last_error}")
 
-def _source_pack(article: Any, budget: int = 6000) -> str:
+def _source_pack(article: Any, budget: int = 6000, *, separate_passages: bool = False) -> str:
     try:
-        packed = build_evidence_pack(article, char_budget=budget).text
+        packed = build_evidence_pack(article, char_budget=budget, separate_passages=separate_passages).text
     except Exception:
         packed = (_clean(_v(article, "title", ""), 700) + "\n" + _clean(_v(article, "raw_text", ""), budget)).strip()
     # Prompt-only lossless spacing; source DB and factual QA use raw evidence.
@@ -1956,7 +1956,9 @@ SOURCE:
             '"reason" — одне конкретне речення про цінність/відсутність цінності саме цієї новини; '
             '"angle" — факт і кут допису, якщо publish, інакше порожній рядок; '
             '"source_quote" — для publish ДОСЛІВНА цитата 20–180 символів із SOURCE BODY, '
-            'яка підтверджує головний факт. Не переказуй і не вигадуй цитату. '
+            'яка підтверджує головний факт. Копіюй один безперервний уривок у мові оригіналу '
+            'з SELECTED SOURCE PASSAGES (не TITLE, не SOURCE DATE); не перекладай, '
+            'не зшивай різні фрагменти, не додавай трикрапки. Не переказуй і не вигадуй цитату. '
             'Для reject поверни порожню цитату. Якщо конкретного факту, який '
             'цікавий широкому читачеві, немає, вирішуй reject.'
             if calibrated_role else
@@ -1986,7 +1988,7 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
 {calibrated_feedback_2320(calibrated_role)}
-SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
+SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600, separate_passages=bool(calibrated_role))}
 {output_contract}"""
 
         def parse_fit(raw: str):
@@ -2428,7 +2430,7 @@ SOURCE:
         if scoped:
             try:
                 checkpoint = writer_checkpoint(self.store, channel, article, prompt)
-                if checkpoint:
+                if checkpoint and checkpoint[1] == "openrouter":
                     validator(checkpoint[0])
                     cached_result = AIResult(checkpoint[0], checkpoint[1], checkpoint[2], "validated writer checkpoint")
                     event("editorial", "validated writer checkpoint reused 2362", channel_id=channel.id, article_id=aid, ai_calls_saved=1)

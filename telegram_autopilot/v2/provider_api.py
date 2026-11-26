@@ -213,6 +213,7 @@ def _request_json(
     headers: Mapping[str, str] | None = None,
     payload: Mapping[str, Any] | None = None,
     timeout_seconds: int = 25,
+    single_request: bool = False,
 ) -> tuple[int, dict[str, str], Any]:
     parts = urlsplit(str(url or ""))
     host = str(parts.hostname or "").casefold().rstrip(".")
@@ -233,7 +234,8 @@ def _request_json(
     opener = build_opener(ProxyHandler(), HTTPSHandler(context=ssl.create_default_context()))
     last_error: ProviderAPIError | None = None
 
-    for attempt in range(3):
+    attempts = 1 if single_request else 3
+    for attempt in range(attempts):
         _pace_host(host)
         try:
             with opener.open(request, timeout=max(3, int(timeout_seconds))) as response:
@@ -248,7 +250,7 @@ def _request_json(
             classified = _classify_http(status, detail, response_headers)
             last_error = classified
             transient = status == 429 or status in {500, 502, 503, 504}
-            if transient and attempt < 2:
+            if transient and attempt < attempts - 1:
                 retry = int(classified.retry_after or (2 ** attempt))
                 # Long Retry-After values should not pin a channel worker. The caller
                 # can immediately try another reviewed model/provider instead.
@@ -258,7 +260,7 @@ def _request_json(
             raise classified from exc
         except (socket.timeout, TimeoutError) as exc:
             last_error = ProviderAPIError(f"Provider request timed out for {host}", kind="timeout")
-            if attempt < 2:
+            if attempt < attempts - 1:
                 time.sleep(1 + attempt)
                 continue
             raise last_error from exc
@@ -268,7 +270,7 @@ def _request_json(
                 last_error = ProviderAPIError(f"Provider request timed out for {host}", kind="timeout")
             else:
                 last_error = ProviderAPIError(f"Provider network request failed for {host}: {reason}", kind="network")
-            if attempt < 2:
+            if attempt < attempts - 1:
                 time.sleep(1 + attempt)
                 continue
             raise last_error from exc
@@ -355,6 +357,7 @@ def openai_compatible_chat(
     timeout_seconds: int,
     json_mode: bool = False,
     exact_model: bool = False,
+    single_request: bool = False,
 ) -> ProviderReply:
     name = str(provider or "").casefold()
     if name == "nvidia":
@@ -373,7 +376,7 @@ def openai_compatible_chat(
     if not str(api_key or "").strip():
         raise ProviderAPIError(f"{provider} API key is missing", kind="configuration")
 
-    if name == "groq" and not exact_model:
+    if name == "groq" and not exact_model and not single_request:
         model_candidates = _groq_fallback_models(model)
     else:
         model_candidates = [str(model)]
@@ -382,7 +385,7 @@ def openai_compatible_chat(
     last_error: ProviderAPIError | None = None
 
     for active_model in model_candidates:
-        structured_attempts = 2 if name == "groq" and json_mode else 1
+        structured_attempts = 2 if name == "groq" and json_mode and not single_request else 1
         for structured_attempt in range(structured_attempts):
             if name == "groq":
                 messages = _groq_messages(prompt, json_mode=json_mode, repair=structured_attempt > 0)
@@ -447,6 +450,7 @@ def openai_compatible_chat(
                     },
                     payload=payload,
                     timeout_seconds=timeout_seconds,
+                    **({"single_request": True} if single_request else {}),
                 )
                 text, runtime_model = _extract_openai_text(response)
                 usage = response.get("usage") if isinstance(response, dict) else {}
@@ -477,6 +481,7 @@ def openai_compatible_chat(
                     name == "groq"
                     and json_mode
                     and structured_attempt == 0
+                    and not single_request
                     and exc.kind in {"validation", "bad_response"}
                 ):
                     # One same-model repair is cheaper and more accurate than marking
