@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_TERMINATORS = re.compile(r"(?<=[.!?…])\s+|\n+")
+_TERMINATORS = re.compile(r"(?<=[.!?…])\s+|(?<=[.!?…])(?=[А-ЯІЇЄҐA-Z])|\n+")
 _UNCERTAINTY = re.compile(r"(?iu)\b(?:нібито|ймовірно|попередньо|можливо|припуска\w*|за\s+непідтверджен\w*)\b")
 _TIME_CURRENT = re.compile(r"(?iu)\b(?:зараз|наразі|прямо\s+зараз|у\s+ці\s+хвилини|сьогодні)\b")
 

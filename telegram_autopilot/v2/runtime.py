@@ -603,6 +603,7 @@ class RuntimeEngine:
                       article_id=article_id, reason=stale_reason)
                 return True
         event("worker", "job start", channel_id=channel_id, article_id=article_id, job_id=job_id, attempts=int(job["attempts"] or 0))
+        current = article
         try:
             canonical = str(article["canonical_source_url"] or "").strip()
             if not canonical.startswith(("http://", "https://")):
@@ -687,11 +688,30 @@ class RuntimeEngine:
         except GatewayExhausted as exc:
             # 2.3.42: a full local provider-capacity queue is not article QA.
             # Never burn QUALITY retries or reject an article without an AI call.
+            from .ai_gateway import ArticleBudgetExhausted
+            if isinstance(exc, ArticleBudgetExhausted) or str(exc).startswith("TARGETED_REPAIR_QA:"):
+                outcome = self.store.exhaust_quality_job(job_id, detail=str(exc))
+                self._job_activity(state, "completed")
+                if outcome == "REJECTED":
+                    self._job_activity(state, "rejected")
+                event("worker", "bounded article repair stopped 2360", channel_id=channel_id,
+                      article_id=article_id, outcome=outcome, detail=str(exc)[:500])
+                return True
             ai_wait = exc.provider_outage or getattr(exc, "congested", False)
             blocker = BlockedBy.AI if ai_wait else BlockedBy.QUALITY
             code = ("AI_CAPACITY_WAIT" if getattr(exc, "congested", False)
                     else "WAITING_AI" if exc.provider_outage else "QUALITY_RETRY")
             attempts=int(job["attempts"] or 0)
+            # Keep the original targeted failure for an outage retry, rather than
+            # converting it into a new full selection/writer job.
+            if ai_wait and str(job["job_type"]) == "rewrite_oversize":
+                from .focused_rewrite import focused_rewrite_instructions
+                if focused_rewrite_instructions(current):
+                    self.store.defer_job(job_id, blocked_by=BlockedBy.AI,
+                        error_code=str(current["last_error_code"]), detail=str(current["last_error_detail"]),
+                        retry_seconds=exc.retry_seconds, count_attempt=False)
+                    self._job_activity(state, "deferred")
+                    return True
             if not ai_wait and attempts >= _rc111_quality_retry_limit(str(exc)):
                 outcome=self.store.exhaust_quality_job(job_id, detail=str(exc))
                 self._job_activity(state, "completed")

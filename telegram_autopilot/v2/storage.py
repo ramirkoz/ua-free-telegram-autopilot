@@ -397,6 +397,17 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
  actual_openrouter_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_recent ON ai_usage_events(created_at DESC,provider,model);
+CREATE TABLE IF NOT EXISTS ai_article_budget_2360 (
+ article_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
+ editorial_attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ai_writer_checkpoint_2362 (
+ article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+ digest TEXT NOT NULL, draft TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_reader_receipts_2360 (
+ article_id INTEGER PRIMARY KEY, digest TEXT NOT NULL, reason TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS editorial_actions(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,

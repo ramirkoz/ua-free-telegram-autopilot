@@ -14,6 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
+from .ai_economics_237 import current_ai_article
 from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
@@ -65,6 +66,11 @@ class GatewayExhausted(RuntimeError):
         # Capacity saturation is not an API outage or a content-quality failure.
         self.congested = bool(congested)
         self.failures = tuple(failures)
+
+
+class ArticleBudgetExhausted(GatewayExhausted):
+    def __init__(self):
+        super().__init__('ARTICLE_AI_BUDGET_2360: paid editorial budget exhausted', provider_outage=False)
 
 
 class CandidateRejected(RuntimeError):
@@ -783,6 +789,7 @@ class AIGateway:
         max_output_tokens: int,
         timeout_seconds: int,
         json_mode: bool = False,
+        exact_model: bool = False,
     ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
         self._set_last_actual_cost(0.0)
@@ -821,6 +828,7 @@ class AIGateway:
                 model=slot.model,
                 api_key=key,
                 account_id=getattr(cfg, "cloudflare_account_id", ""),
+                **({"exact_model": True} if exact_model else {}),
                 prompt=prompt,
                 max_output_tokens=max_output_tokens,
                 timeout_seconds=max(8, int(timeout_seconds)),
@@ -931,7 +939,7 @@ class AIGateway:
         ]
         openrouter_slots = self._openrouter_task_slots(
             cfg,
-            purpose=str(purpose or "content"),
+            purpose="final_editor" if purpose == "reader_gate" else str(purpose or "content"),
             prompt_chars=len(text_prompt),
             max_output_tokens=max_output_tokens,
         ) if mode in {"codex", "openrouter"} else []
@@ -960,7 +968,7 @@ class AIGateway:
         )
         paid_attempts_232 = 0
         paid_spend_232 = 0.0
-        paid_attempt_limit_232 = 2
+        paid_attempt_limit_232 = 1 if purpose == "reader_gate" else 2
         paid_spend_limit_232 = 0.006  # USD per gateway invocation, not a per-day budget.
         for slot in route_slots:
             provider = slot.provider
@@ -1026,8 +1034,18 @@ class AIGateway:
                       paid_attempt_charged=False)
                 continue
             # Only a real admitted request consumes a per-task paid attempt.
-            if provider == "openrouter" and editorial_cost_guard:
-                paid_attempts_232 += 1
+            if provider == "openrouter":
+                from .ai_cost_2360 import reserve_paid_attempt
+                try:
+                    admitted = reserve_paid_attempt(self.store, current_ai_article()[1], editorial=editorial_cost_guard)
+                except Exception:
+                    lock.release()
+                    raise
+                if not admitted:
+                    lock.release()
+                    raise ArticleBudgetExhausted()
+                if editorial_cost_guard:
+                    paid_attempts_232 += 1
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             queue_wait = started - queued_at
@@ -1157,6 +1175,10 @@ class AIGateway:
                                 event(
                                     "ai", "candidate rejected by QA", provider=provider, model=runtime_model,
                                     elapsed=round(time.monotonic() - started, 2), detail=str(first_error)[:600],
+                                    purpose=str(purpose or "content"),
+                                    channel_id=current_ai_article()[0], article_id=current_ai_article()[1],
+                                    input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0),
+                                    actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                                 )
                                 # RC111: if two independent reviewed routes hit the same
                                 # deterministic QA class, a third/fourth model is usually
@@ -1180,6 +1202,7 @@ class AIGateway:
                     elapsed=round(time.monotonic() - started, 2), chars=len(output),
                     provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
                     input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0), total_tokens=int(total_tokens or 0),
+                    prompt_chars=len(text_prompt), channel_id=current_ai_article()[0], article_id=current_ai_article()[1],
                     estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
                     actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )
@@ -1285,9 +1308,10 @@ class AIGateway:
                         slot,
                         cfg,
                         "Reply with OK only.",
-                        max_output_tokens=48 if provider == "local" else 96,
-                        timeout_seconds=90 if provider == "local" else 20,
+                        max_output_tokens=48 if provider == "local" else (1024 if provider in {"groq", "cloudflare"} else 96),
+                        timeout_seconds=90 if provider == "local" else (35 if provider in {"groq", "cloudflare"} else 20),
                         json_mode=False,
+                        **({"exact_model": True} if provider in {"groq", "cloudflare"} else {}),
                     )
                     actual_cost = self._consume_last_actual_cost()
                     self.store.record_ai_usage(
@@ -1300,11 +1324,18 @@ class AIGateway:
                     lock.release()
                 if not str(text or "").strip():
                     raise ProviderAPIError("health probe returned empty text", kind="bad_response")
+                if provider in {"groq", "cloudflare"}:
+                    if runtime_model != slot.model:
+                        raise ProviderAPIError("health probe model identity mismatch", kind="bad_response")
+                    if str(text).strip().rstrip(".").casefold() != "ok":
+                        raise ProviderAPIError("health probe expected OK, got non-matching final content", kind="bad_response")
                 self._mark_probe_success(provider, slot.model, runtime_model)
                 event(
                     "ai", "model health probe success", provider=provider, model=runtime_model,
                     elapsed=round(time.monotonic() - started, 2),
                 )
+                if provider in {"groq", "cloudflare"}:
+                    continue  # Probe every configured model; a healthy first slot must not mask the second.
                 return self._refresh_provider_summary(provider, cfg)
             except Exception as exc:
                 _state, scope = self._mark_probe_failure(provider, slot.model, exc)

@@ -306,7 +306,7 @@ def candidate_models_for_task(
         # Editorial generation must prefer proven quality, not the cheapest viable model.
         # Preserve budget caps and task-tier eligibility.
         if str(purpose or "").strip().casefold() in {"writer", "final_editor", "complex_rewrite", "rewrite"}:
-            eligible.sort(key=lambda row: (-row.quality, -row.context_length, row.blended_price_million, row.id))
+            eligible.sort(key=lambda row: (-row.quality, row.blended_price_million, -row.context_length, row.id))
         else:
             eligible.sort(key=lambda row: (row.blended_price_million, -row.quality, -row.context_length, row.id))
         for row in eligible[:8]:

@@ -354,6 +354,7 @@ def openai_compatible_chat(
     max_output_tokens: int,
     timeout_seconds: int,
     json_mode: bool = False,
+    exact_model: bool = False,
 ) -> ProviderReply:
     name = str(provider or "").casefold()
     if name == "nvidia":
@@ -372,7 +373,7 @@ def openai_compatible_chat(
     if not str(api_key or "").strip():
         raise ProviderAPIError(f"{provider} API key is missing", kind="configuration")
 
-    if name == "groq":
+    if name == "groq" and not exact_model:
         model_candidates = _groq_fallback_models(model)
     else:
         model_candidates = [str(model)]
@@ -421,7 +422,7 @@ def openai_compatible_chat(
                     payload["response_format"] = {"type": "json_object"}
             if name == "groq":
                 if "gpt-oss" in active_model.casefold():
-                    payload["reasoning_effort"] = "none" if json_mode else "low"
+                    payload["reasoning_effort"] = "low"
                     payload["include_reasoning"] = False
                 elif "qwen3.8" in active_model.casefold():
                     payload["reasoning_effort"] = "none"
@@ -513,6 +514,7 @@ def gemini_generate(
     max_output_tokens: int,
     timeout_seconds: int,
     json_mode: bool = False,
+    exact_model: bool = False,
 ) -> ProviderReply:
     if not str(api_key or "").strip():
         raise ProviderAPIError("Gemini API key is missing", kind="configuration")
@@ -533,7 +535,7 @@ def gemini_generate(
     }
 
     last_error: ProviderAPIError | None = None
-    for active_model in _gemini_model_candidates(model):
+    for active_model in ([str(model)] if exact_model else _gemini_model_candidates(model)):
         safe_model = quote(active_model, safe="-._")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
         try:

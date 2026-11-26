@@ -38,6 +38,10 @@ _INT = re.compile(r"(?<![\d.,:])\d+(?![\d.,:])")
 def _prepare(text: str) -> str:
     clean = _URL.sub(" ", str(text or ""))
     clean = restore_joined_schedule_rows(clean)
+    # A glued sentence boundary (посадах.24 квітня) is not a decimal.
+    clean = re.sub(rf"(?<=[{_LETTER}])[.!?](?=\d)", " ", clean)
+    # Keep terminal punctuation separate without splitting decimals or times.
+    clean = re.sub(r"(?<=\d)[.,](?=\s|$)", " ", clean)
     # Telegram extraction glues the end of one sentence to the next word.
     clean = _DIGIT_THEN_LETTER.sub(" ", clean)
     return _LETTER_THEN_DIGIT.sub(" ", clean)

@@ -116,9 +116,11 @@ def test_failed_focused_edit_does_not_bypass_hard_qa(monkeypatch):
     monkeypatch.setattr(editorial, "prepublish_quality_issues", lambda *a: ())
     called = []
     monkeypatch.setattr(EditorialEngine, "select", lambda *a: called.append(True) or EditorialOutcome(Decision.REJECT, reason="fallback", fit_score=0))
-    result = engine.process_article(77337)
-    assert called and result.decision == Decision.REJECT
-    assert not store.ready
+    from telegram_autopilot.v2.ai_gateway import GatewayExhausted
+    with pytest.raises(GatewayExhausted, match="TARGETED_REPAIR_QA") as exc:
+        engine.process_article(77337)
+    assert not exc.value.provider_outage
+    assert not called and not store.ready
 
 
 def _seed_store(db):
