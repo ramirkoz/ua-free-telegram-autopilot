@@ -44,7 +44,7 @@ def test_111301_111303_not_anchored_to_111304_short_unpublished():
         "Комісія опрацьовує звернення про пошкоджене житло. "
     )
     assert len(short_anchor.raw_text) < 500 < len(incoming.raw_text)
-    assert monitoring_short_material_reason_2352(monitoring(), short_anchor)
+    assert not monitoring_short_material_reason_2352(monitoring(), short_anchor)
     assert not eligible_event_anchor_2353(monitoring(), incoming, short_anchor)
     assert not eligible_event_anchor_2353(
         monitoring(), incoming, article(short_anchor.raw_text, decision="REJECT")

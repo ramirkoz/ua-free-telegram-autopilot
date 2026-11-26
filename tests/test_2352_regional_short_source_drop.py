@@ -1,4 +1,4 @@
-"""Owner regression: short monitoring stories must be dropped, never expanded."""
+"""Owner 2.3.67: length is not a regional veto; facts remain mandatory."""
 from types import SimpleNamespace
 
 from telegram_autopilot.v2.domain import ChannelConfig, ChannelMode, ChannelPolicy
@@ -30,7 +30,7 @@ def article(text):
     )
 
 
-def test_live_5715_mixed_traffic_body_short_source_dropped_pre_ai_and_send():
+def test_short_traffic_source_not_dropped_for_length():
     source = (
         "У Запоріжжі на вулиці Марії Примаченко зранку лежало тіло "
         "людини. На місці перебували дві поліцейські машини, "
@@ -38,18 +38,12 @@ def test_live_5715_mixed_traffic_body_short_source_dropped_pre_ai_and_send():
         "відновлено, повідомляє поліція."
     )
     item = article(source)
-    assert monitoring_short_material_reason_2352(regional(), item) == (
-        "MONITORING_SHORT_SOURCE_DROP_2352"
-    )
-    assert hard_editorial_reject(regional(), item) == (
-        "MONITORING_SHORT_SOURCE_DROP_2352"
-    )
-    assert hard_editorial_reject(regional(), item, "Говорять про відновлення руху.") == (
-        "MONITORING_SHORT_SOURCE_DROP_2352"
-    )
+    assert monitoring_short_material_reason_2352(regional(), item) == ""
+    assert hard_editorial_reject(regional(), item) == ""
+    assert hard_editorial_reject(regional(), item, "Говорять про відновлення руху.") != "MONITORING_SHORT_SOURCE_DROP_2352"
 
 
-def test_final_155_chars_rejected_even_after_a_long_original():
+def test_short_final_not_rejected_for_length_alone():
     original = (
         "У Запорізькій області місцева адміністрація оприлюднила "
         "нові дані про порядок роботи закладу для жителів громади. "
@@ -58,17 +52,13 @@ def test_final_155_chars_rejected_even_after_a_long_original():
     ) * 4
     text = "У Запоріжжі відновили рух бульваром Марії Примаченко. Зранку на узбіччі лежало тіло людини."
     assert len(original) > 500 and len(text) < 500
-    assert monitoring_short_material_reason_2352(regional(), article(original), text) == (
-        "MONITORING_SHORT_FINAL_DROP_2352"
-    )
+    assert monitoring_short_material_reason_2352(regional(), article(original), text) == ""
 
 
-def test_floor_not_satisfied_by_link_padding():
+def test_short_fact_with_link_does_not_need_padding():
     short = "У Запоріжжі відновили рух. " + ("https://t.me/zaborzp/160771 " * 40)
     assert len(short) > 500
-    assert monitoring_short_material_reason_2352(regional(), article(short)) == (
-        "MONITORING_SHORT_SOURCE_DROP_2352"
-    )
+    assert monitoring_short_material_reason_2352(regional(), article(short)) == ""
 
 
 def test_qualified_long_story_and_faithful_500_char_final_remain_possible():
@@ -80,9 +70,7 @@ def test_qualified_long_story_and_faithful_500_char_final_remain_possible():
     ) * 4
     assert len(text) > MIN_REGIONAL_NEWS_CHARS
     assert monitoring_short_material_reason_2352(regional(), article(text), text) == ""
-    assert monitoring_short_material_reason_2352(regional(600), article(text), text[:525]) == (
-        "MONITORING_SHORT_FINAL_DROP_2352"
-    )
+    assert monitoring_short_material_reason_2352(regional(600), article(text), text[:525]) == ""
 
 
 def test_only_regional_news_channel_no_cross_channel_regression():
@@ -95,7 +83,7 @@ def test_only_regional_news_channel_no_cross_channel_regression():
         assert monitoring_short_material_reason_2352(other, short) == ""
 
 
-def test_legacy_short_form_policy_is_not_implicitly_migrated():
+def test_configured_length_is_nonbinding_for_regional_dispatches():
     # The operator's current production min=500 is authoritative; generic
     # historical test profiles targeting 120/300 are not silently rewritten.
     assert monitoring_short_material_reason_2352(
@@ -103,4 +91,4 @@ def test_legacy_short_form_policy_is_not_implicitly_migrated():
     ) == ""
     assert monitoring_short_material_reason_2352(
         regional(500), article("Відновили рух бульваром.")
-    ) == "MONITORING_SHORT_SOURCE_DROP_2352"
+    ) == ""

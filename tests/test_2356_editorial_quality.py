@@ -158,7 +158,7 @@ def test_repeated_word_outside_quoted_name_is_repaired_but_quoted_words_protecte
 
 def test_source_floor_remains_owner_500_and_no_replay():
     from telegram_autopilot.v2.monitoring_short_material_2352 import regional_publication_floor_2355
-    assert regional_publication_floor_2355(region_channel())==500
+    assert regional_publication_floor_2355(region_channel())==0
     assert regional_publication_floor_2355(creative_channel())==0
 
 

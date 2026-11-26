@@ -191,8 +191,9 @@ def test_schedule_table_passes_the_two_sentence_source_floor():
     engine.store = None
     with pytest.raises(NeedsAI):
         engine.select(_monitoring_channel(), _art(_GPV))
-    short = engine.select(_monitoring_channel(), _art("Запоріжжя чекає своїх Захисників додому"))
-    assert short.decision == Decision.REJECT and short.reason.startswith("EDITORIAL_MIN_TWO_SENTENCES")
+    # A one-sentence message reaches the content selector; it is not auto-approved.
+    with pytest.raises(NeedsAI):
+        engine.select(_monitoring_channel(), _art("Запоріжжя чекає своїх Захисників додому"))
 
 
 def test_utility_rumour_is_not_a_service_update():

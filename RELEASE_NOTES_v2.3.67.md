@@ -1,0 +1,7 @@
+# Autopilot 2.3.67 — strict startup and regional coverage
+
+Owner correction 26 November 2026: short, substantive regional reports belong in ГРОМАДИ; do not recover missed stories. Every channel admits only original source timestamps at or after the current runtime start.
+
+- Supersede the regional 500-character source/final hard floor and allow a complete single-sentence dispatch. Length preferences are advisory, not reasons to reject; source context, factual grounding, language, event scope and delivery safeguards remain mandatory. Existing model selector decides substance. Short-text Ukrainian recognition retains mixed-script/Russian-only checks. No other channel's length policy changes.
+- Strict start fence in collection, queued worker and final publish, with no checkpoint gap or READY/QUEUED continuation exception. Retire pre-start unsent rows without delivery evidence before starting workers. Archive, not delete. Preserve published history, prior receipts and UNKNOWN non-replay. No historical backfill or recovery. Existing source-date verification, age/day, event expiry, duplicate and material-update checks remain.
+- Preserve operator settings, budgets, cadence, OpenRouter-only copy and direct support routing. No provider API calls, Telegram sends, or operator-data mutation during local validation. Native Windows and LIVE acceptance pending. Official release synchronization postponed.

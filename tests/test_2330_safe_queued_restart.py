@@ -49,7 +49,10 @@ def test_2330_replay_cannot_skip_durable_receipt_check_source_static():
     from telegram_autopilot.v2 import runtime, publisher
     worker_source = inspect.getsource(runtime.RuntimeEngine._process_one)
     pub_source = inspect.getsource(publisher.Publisher.publish_one)
+    from pathlib import Path
+    pub_source = Path(inspect.getsourcefile(publisher.Publisher)).read_text()
     for source in (worker_source, pub_source):
-        assert "safe_same_day_queued_2330" in source
-        assert "not self.store.delivery_journal(article_id)" in source
-        assert "SOURCE_PREDATES_RUNTIME_START" in source
+        assert "strict_runtime_source_rejection_2367" in source
+        assert "safe_same_day_queued_2330" not in source
+    assert "safe_same_day_ready_228" not in pub_source
+    assert "_delivery_preflight" in pub_source

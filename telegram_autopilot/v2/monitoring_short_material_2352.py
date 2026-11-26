@@ -1,12 +1,7 @@
-"""Fail-closed regional source and final length floor, owner editorial rule.
+"""Regional source admission: no character quota (owner correction 2.3.67).
 
-A source with too few confirmed facts is not made publishable by an AI
-rewriter. The minimum 500-character source/final policy applies to the actual
-regional news channel configured for 500+ characters; never alter older
-short-form profiles, CTRL+UA or ПРОДАНО!.
-
-Applied in hard_editorial_reject before AI and before Telegram, including
-previously READY items, so no legacy short post can bypass it.
+Historical function names retained for compatibility. Source facts and final QA
+remain mandatory; only the arbitrary length gate is superseded.
 """
 from __future__ import annotations
 
@@ -33,34 +28,21 @@ def _content_text(text: str) -> str:
     return clean.strip()
 
 
+def regional_dispatch_2367(channel: Any) -> bool:
+    return (int(getattr(channel, "id", 0) or 0) == REGIONAL_CHANNEL_ID
+            and str(getattr(getattr(channel, "mode", None), "value", getattr(channel, "mode", ""))).casefold() == "monitoring")
+
 def regional_publication_floor_2355(channel: Any) -> int:
-    """Return the *configured* owner rule for the real regional channel only.
-
-    Other channels and historical short-form fixtures retain their policies.
-    """
-    if (int(getattr(channel, "id", 0) or 0) != REGIONAL_CHANNEL_ID
-            or str(getattr(getattr(channel, "mode", None), "value", getattr(channel, "mode", ""))).casefold()
-            != "monitoring"):
-        return 0
-    configured = int(getattr(getattr(channel, "policy", None), "target_min_chars", 0) or 0)
-    return max(MIN_REGIONAL_NEWS_CHARS, configured) if configured >= MIN_REGIONAL_NEWS_CHARS else 0
-
+    """Historical interface; owner superseded the hard length floor in 2.3.67."""
+    return 0
 
 def monitoring_short_material_reason_2352(channel: Any, article: Any, text: str = "") -> str:
-    min_chars = regional_publication_floor_2355(channel)
-    if not min_chars:
+    if not regional_dispatch_2367(channel):
         return ""
-
     source = _content_text(_value(article, "raw_text") or _value(article, "title"))
-    if len(source) < min_chars:
-        return "MONITORING_SHORT_SOURCE_DROP_2352"
-
-    # Do not force any text to be padded to 500. Let the existing AI writer
-    # use only supported facts; when its faithful answer is too short,
-    # REJECT instead of publishing or inventing an extension.
-    if text and len(_content_text(text)) < min_chars:
-        return "MONITORING_SHORT_FINAL_DROP_2352"
+    if not re.search(r"[А-Яа-яІіЇїЄєҐґA-Za-z0-9]", source):
+        return "MONITORING_CONTEXT_MISSING"
     return ""
 
 
-__all__ = ["monitoring_short_material_reason_2352", "regional_publication_floor_2355"]
+__all__ = ["monitoring_short_material_reason_2352", "regional_publication_floor_2355", "regional_dispatch_2367"]

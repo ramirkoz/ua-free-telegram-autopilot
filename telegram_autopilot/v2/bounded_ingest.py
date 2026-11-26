@@ -16,7 +16,7 @@ from .strict_ingest import StrictIngestService, collect_strict
 from .commercial_yield_237 import prioritize_commercial_sources, commercial_source_yield_rows_24h
 from .commercial_diversity_257 import commercial_published_share_7d
 from .commercial_fetch_effort_247 import commercial_page_fetch_limits
-from .freshness_fence_241 import source_freshness_rejection, restart_source_rejection
+from .freshness_fence_241 import source_freshness_rejection, strict_runtime_source_rejection_2367
 from .domain import ChannelMode
 from .linked_teaser_hydration_253 import teaser_page_target, hydrate_linked_teaser
 
@@ -261,7 +261,7 @@ class BoundedStrictIngestService(StrictIngestService):
             # feeds, only enrich stories actually eligible AFTER runtime start;
             # source items still reach the ordinary date/dedupe pre-AI gate.
             def eligible_for_rss_enrichment(item: CollectedArticle) -> bool:
-                rejection = restart_source_rejection(
+                rejection = strict_runtime_source_rejection_2367(
                     str(item.published_at or ""), runtime_started_at,
                     str(source_checkpoints.get(str(source.id), "")),
                 )
@@ -311,7 +311,7 @@ class BoundedStrictIngestService(StrictIngestService):
                 from .editorial_hard_floor import facts
                 for item in items:
                     if (len(facts(str(item.raw_text or ""))) >= 2
-                            or restart_source_rejection(str(item.published_at or ""),
+                            or strict_runtime_source_rejection_2367(str(item.published_at or ""),
                                 runtime_started_at, str(source_checkpoints.get(str(source.id), "")))
                             or self._existing_reason(channel_id, source.id, item.external_id, item.url)):
                         continue
@@ -326,7 +326,7 @@ class BoundedStrictIngestService(StrictIngestService):
                           no_timestamp_guess=True, identity_media_unchanged=True)
             if source.kind == "telegram":
                 for item in items:
-                    if runtime_started_at and restart_source_rejection(
+                    if runtime_started_at and strict_runtime_source_rejection_2367(
                         str(item.published_at or ""), runtime_started_at,
                         str(source_checkpoints.get(str(source.id), "")),
                     ):
@@ -373,7 +373,7 @@ class BoundedStrictIngestService(StrictIngestService):
                       source=source.name, **evidence)
             source_added = 0
             for item in items:
-                stale_reason = restart_source_rejection(
+                stale_reason = strict_runtime_source_rejection_2367(
                     str(item.published_at or ""), runtime_started_at,
                     str(source_checkpoints.get(str(source.id), "")),
                     rolling_window_hours=editorial_rolling_hours,

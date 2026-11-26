@@ -85,3 +85,19 @@ def fabricated_event_reason(article: Any, final_text: str) -> str:
     if re.search(r"\b(?:троє|трьох|три)\b", outgoing) and _KIN.search(outgoing) and not re.search(r"(?iu)\b(?:троє|трьох|три)\b.{0,70}\bродин", original):
         return "FACT_UNSUPPORTED_GROUP_KINSHIP"
     return ""
+
+
+def dispatch_sentence_reason_2367(article: Any, final_text: str | None = None, *, regional: bool = False) -> str:
+    """One complete factual sentence may be enough for a regional dispatch.
+    Source content, not punctuation count, goes to the existing selector.
+    The final remains subject to independent fact, language and completeness QA.
+    """
+    if not regional:
+        return two_sentence_reason(article, final_text)
+    from .monitoring_short_material_2352 import _content_text
+    source = _content_text(_v(article, "raw_text") or _v(article, "title"))
+    if not re.search(r"[А-Яа-яІіЇїЄєҐґA-Za-z0-9]", source):
+        return "MONITORING_CONTEXT_MISSING"
+    if final_text is not None and not facts(final_text):
+        return "MONITORING_INCOMPLETE_FINAL_2367"
+    return ""

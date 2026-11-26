@@ -65,3 +65,36 @@ def schedule_guidance(text: str) -> str:
         if _SCHEDULE_CONTEXT.search(clean) and len(_TIME_ATOM.findall(clean)) >= 4
         else ""
     )
+
+
+# Complete explicit group rows; no date inference or arithmetic. The source
+# itself remains immutable. Reject ambiguous duplicate groups / partial rows.
+_GROUP_ROW_2366 = re.compile(r"(?<![\d.])([1-6]\.[12])\s*[:：]\s*")
+_CLOCK_2366 = r"(?:[01]\d|2[0-3]):[0-5]\d|24:00"
+_RANGE_2366 = re.compile(r"(?:" + _CLOCK_2366 + r")\s*[–—-]\s*(?:" + _CLOCK_2366 + r")")
+
+
+def schedule_rows_2366(raw: str) -> tuple[tuple[str, str], ...]:
+    text = restore_joined_schedule_rows(raw)
+    if not _SCHEDULE_CONTEXT.search(text):
+        return ()
+    matches = list(_GROUP_ROW_2366.finditer(text))
+    rows = []
+    for i, match in enumerate(matches):
+        end = matches[i+1].start() if i+1 < len(matches) else len(text)
+        tail = text[match.end():end].strip()
+        # Only accept an entire row containing ranges; no partial/guessed table.
+        parts = [part.strip() for part in tail.split(',')]
+        if not parts or not all(_RANGE_2366.fullmatch(part) for part in parts):
+            return ()
+        rows.append((match[1], tail))
+    return tuple(rows) if len(rows) >= 2 and len({group for group, _ in rows}) == len(rows) else ()
+
+
+def schedule_row_guidance_2366(raw: str) -> str:
+    rows = schedule_rows_2366(raw)
+    if not rows:
+        return ""
+    return ("ТОЧНІ РЯДКИ ОДНІЄЇ ТАБЛИЦІ SOURCE (не нові факти):\n"
+            + "\n".join(f"{group}: {times}" for group, times in rows)
+            + "\nНе переставляй проміжки між чергами, не виводь дату з часу обробки; використовуй лише прямо вказану у SOURCE дату. Не копіюй усі рядки, якщо це не вміщується; дій за правилами каналу та збережи посилання на першоджерело.\n")

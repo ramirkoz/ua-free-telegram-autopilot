@@ -23,6 +23,7 @@ from .ai_route_circuit_263 import RouteContractCircuit
 from .qa_adjacent_word_239 import repair_adjacent_repeated_word
 from .cost_quality_232 import order_openrouter_editorial_models, safe_format_candidate, PAID_EDITORIAL_PURPOSES
 from .storage import V2Store, now_iso
+from .support_routes_2364 import support_slots, reserve_support, validate_support_response
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,9 @@ _SELECTOR_CACHE_LOCK_2363 = threading.Lock()
 _CONTRACT_FAILURE_MARKERS = (
     "не повернув json", "no json", "invalid json", "порожн", "empty", "reasoning but no final",
     "no final content", "invalid decision", "placeholder", "must be boolean", "invalid event_type",
+    "editor_2330_publish_without_source_evidence", "support_2364_",
+    "reader_2359_missing_boolean", "reader_2359_missing_reason", "reader_2359_invalid",
+    "expecting value", "expecting property name", "unterminated string",
 )
 
 
@@ -463,6 +467,11 @@ class AIGateway:
         key = (str(purpose or "content").casefold(), str(model or "").casefold())
         record = self._contract_stats().setdefault(key, [0, 0])
         record[0 if ok else 1] += 1
+        # A sequence of broken JSON/evidence contracts is not a valid negative
+        # editorial verdict. Demote only this purpose/model, never provider health.
+        if not hasattr(self, "_contract_failure_streak_2365"):
+            self._contract_failure_streak_2365 = {}
+        self._contract_failure_streak_2365[key] = 0 if ok else self._contract_failure_streak_2365.get(key, 0) + 1
         if sum(record) > 40:          # keep a moving picture, not a lifetime verdict
             record[0], record[1] = record[0] // 2, record[1] // 2
 
@@ -471,6 +480,9 @@ class AIGateway:
         # Put it last from the first job, without touching user configuration.
         if (str(purpose or "").casefold() in {"editorial_selector", "monitoring_selector"}
                 and str(model or "").casefold() == "inclusionai/ling-3.0-tiny"):
+            return True
+        key = (str(purpose or "content").casefold(), str(model or "").casefold())
+        if key[0] in {"editorial_selector", "monitoring_selector", "reader_gate", "value_gate", "commercial_value_gate", "writer", "final_editor", "rewrite", "complex_rewrite"} and getattr(self, "_contract_failure_streak_2365", {}).get(key, 0) >= 2:
             return True
         ok, bad = self._contract_stats().get(
             (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))
@@ -793,6 +805,7 @@ class AIGateway:
         timeout_seconds: int,
         json_mode: bool = False,
         exact_model: bool = False,
+        single_request: bool = False,
     ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
         self._set_last_actual_cost(0.0)
@@ -832,6 +845,7 @@ class AIGateway:
                 api_key=key,
                 account_id=getattr(cfg, "cloudflare_account_id", ""),
                 **({"exact_model": True} if exact_model else {}),
+                **({"single_request": True} if single_request else {}),
                 prompt=prompt,
                 max_output_tokens=max_output_tokens,
                 timeout_seconds=max(8, int(timeout_seconds)),
@@ -946,29 +960,19 @@ class AIGateway:
             prompt_chars=len(text_prompt),
             max_output_tokens=max_output_tokens,
         ) if mode in {"codex", "openrouter"} else []
-        codex_slots = [
-            slot for slot in self._runtime_slots(cfg)
-            if slot.provider == "codex"
-        ] if mode == "codex" else []
-
-        # 2.3.19 operator contract: OpenRouter serves every AI purpose while
-        # usable. Individual model QA/reasoning failures never enable free AI.
-        # Emergency direct routing requires a service outage or budget exhaustion.
+        # 2.3.64 owner contract: only explicitly allowlisted validated support
+        # tasks may use direct models. Every other purpose is OpenRouter-only,
+        # including writer/rewrite/final editor, even on outage or budget block.
+        # Codex/free settings cannot silently authorize non-OpenRouter copy.
         editorial_cost_guard = str(purpose or "").casefold() in PAID_EDITORIAL_PURPOSES
-        if mode == "codex":
-            route_slots = codex_slots + (free_slots + openrouter_slots if editorial_cost_guard else openrouter_slots + free_slots)
-        elif mode == "openrouter":
-            route_slots = openrouter_slots + free_slots
-        else:
-            route_slots = free_slots
-        route_slots = self._order_by_contract_success(route_slots, purpose)
-        openrouter_transport_failures = 0
-        openrouter_failover_allowed = bool(
-            mode == "openrouter"
-            and (not self._configured("openrouter", cfg)
-                 or not self._openrouter_budget_status(cfg)[0]
-                 or self._provider_blocked("openrouter"))
-        )
+        direct = support_slots(free_slots, purpose, validator, text_prompt, max_output_tokens)
+        direct = self._order_by_contract_success(direct, purpose)
+        route_slots = direct + self._order_by_contract_success(openrouter_slots, purpose)
+        direct_attempted = False
+        direct_admission_denied = set()
+        if not route_slots:
+            raise GatewayExhausted("2.3.64: немає дозволеного маршруту; написання та редактура тільки OpenRouter.",
+                                   provider_outage=True, retry_seconds=300)
         # Cache only a validated selector response for an identical scoped
         # prompt/route, for at most 15 minutes. Caller-side source, policy,
         # freshness, and saturation checks still execute on every retry.
@@ -1001,15 +1005,12 @@ class AIGateway:
         paid_spend_limit_232 = 0.006  # USD per gateway invocation, not a per-day budget.
         for slot in route_slots:
             provider = slot.provider
-            if mode == "openrouter" and provider != "openrouter" and not openrouter_failover_allowed:
-                # QA rejection of a valid OpenRouter answer is not an outage.
+            support_direct = provider != "openrouter"
+            if support_direct and (direct_attempted or provider in direct_admission_denied):
                 continue
-            # 2.3.23: under the operator's "OpenRouter serves every AI purpose"
-            # contract a caller's provider whitelist (written for the free-provider
-            # era, e.g. the trusted final editor) must not exclude OpenRouter. It
-            # did, so with free providers skipped no route was left and a
-            # successfully written article died with "no AI provider configured".
-            openrouter_contract = mode == "openrouter" and provider == "openrouter"
+            # Legacy caller whitelists may restrict direct support, but must not
+            # exclude the explicitly authorized paid fallback or text writer.
+            openrouter_contract = provider == "openrouter" and mode in {"openrouter", "codex"}
             if allowed is not None and provider not in allowed and not openrouter_contract:
                 continue
             if not self._configured(provider, cfg):
@@ -1019,14 +1020,10 @@ class AIGateway:
                 if editorial_cost_guard and (paid_attempts_232 >= paid_attempt_limit_232 or paid_spend_232 >= paid_spend_limit_232):
                     event("ai", "2.3.19 paid editorial attempt cap", purpose=str(purpose or ""),
                           attempts=paid_attempts_232, actual_usd=round(paid_spend_232, 6))
-                    if mode == "openrouter" and openrouter_failover_allowed:
-                        continue
                     break
                 budget_ok, _budget_detail = self._openrouter_budget_status(cfg)
                 if not budget_ok:
                     self._mark_openrouter_budget_block(cfg)
-                    if mode == "openrouter":
-                        openrouter_failover_allowed = True
                     continue
             if provider in provider_suppressed or self._provider_blocked(provider):
                 continue
@@ -1048,7 +1045,7 @@ class AIGateway:
             # A lock timeout means NOTHING was sent: no paid attempt/token charge,
             # no model-health change and no reason to classify article QUALITY.
             lock = self._provider_call_lock(provider)
-            wait_for_lock = 6.0 if provider == "local" else min(
+            wait_for_lock = 1.0 if support_direct else 6.0 if provider == "local" else min(
                 25.0, max(8.0, float(timeout_seconds) * 0.75)
             )
             queued_at = time.monotonic()
@@ -1075,6 +1072,20 @@ class AIGateway:
                     raise ArticleBudgetExhausted()
                 if editorial_cost_guard:
                     paid_attempts_232 += 1
+            if support_direct:
+                try:
+                    admitted = reserve_support(self.store, provider, text_prompt)
+                except Exception as exc:
+                    admitted = False
+                    event("ai", "support admission unavailable 2364", provider=provider, error=type(exc).__name__)
+                if not admitted:
+                    lock.release()
+                    direct_admission_denied.add(provider)
+                    event("ai", "support admission limit 2364", provider=provider, purpose=purpose)
+                    continue
+                direct_attempted = True
+                event("ai", "direct support request admitted 2364", provider=provider, model=slot.model,
+                      purpose=purpose, channel_id=current_ai_article()[0], article_id=current_ai_article()[1])
             attempted.append(f"{provider}:{slot.model}")
             started = time.monotonic()
             queue_wait = started - queued_at
@@ -1092,6 +1103,7 @@ class AIGateway:
                         max_output_tokens=max_output_tokens,
                         timeout_seconds=timeout_seconds,
                         json_mode=json_mode,
+                        **({"exact_model": True, "single_request": True} if support_direct else {}),
                     )
                     actual_cost = self._consume_last_actual_cost()
                     if provider == "openrouter" and editorial_cost_guard:
@@ -1111,6 +1123,8 @@ class AIGateway:
 
                 if validator is not None:
                     try:
+                        if support_direct:
+                            validate_support_response(output, purpose)
                         validator(output)
                     except Exception as first_error:
                         if purpose == "final_editor" and "REJECT_READER_2360" in str(first_error):
@@ -1126,7 +1140,7 @@ class AIGateway:
                         # A rejection of unsupported facts/polarity can never be
                         # repaired by clipping or promoted to a publication.
                         original_length = len(output)
-                        salvaged = conservative_completed_tail(output, first_error)
+                        salvaged = None if support_direct else conservative_completed_tail(output, first_error)
                         repaired_ok = False
                         if salvaged:
                             try:
@@ -1148,7 +1162,7 @@ class AIGateway:
                         # and only if the original full source/editorial QA passes.
                         # An unchanged/unsupported factual claim remains rejected.
                         if not repaired_ok:
-                            word_candidate = repair_adjacent_repeated_word(output, first_error)
+                            word_candidate = None if support_direct else repair_adjacent_repeated_word(output, first_error)
                             if word_candidate:
                                 try:
                                     validator(word_candidate)
@@ -1166,7 +1180,7 @@ class AIGateway:
                         # Content-preserving source-footer/paragraph formatting
                         # repair. Original full validator must accept it.
                         if not repaired_ok:
-                            formal_candidate = safe_format_candidate(output, first_error)
+                            formal_candidate = None if support_direct else safe_format_candidate(output, first_error)
                             if formal_candidate:
                                 try:
                                     validator(formal_candidate)
@@ -1182,7 +1196,7 @@ class AIGateway:
                             validation_failures += 1
                             self._note_contract_outcome(purpose, runtime_model, ok=False, error=first_error)
                             signature=_rc111_qa_signature(first_error)
-                            if signature:
+                            if signature and not support_direct:
                                 validation_signatures[signature]=int(validation_signatures.get(signature,0))+1
                             self._mark_task_failure(provider, runtime_model, first_error)
                             # Local is our last-resort deterministic engine. One bounded
@@ -1244,7 +1258,7 @@ class AIGateway:
                     actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )
                 result = AIResult(output, provider, runtime_model, label, tuple(attempted), int(input_tokens or 0), int(output_tokens or 0), int(total_tokens or 0), float(estimated_cost or 0.0), float(actual_cost or 0.0))
-                if cache_key is not None and provider == "openrouter":
+                if cache_key is not None:
                     with _SELECTOR_CACHE_LOCK_2363:
                         if len(self._selector_cache_2363) >= 256:
                             self._selector_cache_2363.pop(next(iter(self._selector_cache_2363)), None)
@@ -1262,16 +1276,6 @@ class AIGateway:
                           operator_configuration_unchanged=True)
                 if scope == "provider":
                     provider_suppressed.add(provider)
-                    if mode == "openrouter" and provider == "openrouter":
-                        openrouter_failover_allowed = True
-                if mode == "openrouter" and provider == "openrouter" and state in {
-                    ProviderState.NETWORK_DOWN, ProviderState.TIMEOUT,
-                }:
-                    # Repeated failures to reach the shared API endpoint may
-                    # trigger emergency fallback; one model timeout cannot.
-                    openrouter_transport_failures += 1
-                    if openrouter_transport_failures >= 2:
-                        openrouter_failover_allowed = True
                 if suppress_reasoning_only_route(provider, exc):
                     # A second Cloudflare model with the same reasoning-only
                     # response contract wastes tokens in THIS task. The next

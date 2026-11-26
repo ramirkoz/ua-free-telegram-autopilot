@@ -11,7 +11,7 @@ def ch(mode=ChannelMode.MONITORING):
 
 def test_short_one_sentence_no_inventing_another():
     assert two_sentence_reason(row("Через міст пролетіла реактива.")) == "EDITORIAL_MIN_TWO_SENTENCES: source"
-    assert "EDITORIAL_MIN_TWO_SENTENCES: source" in prepublish_quality_issues(ch(),row("Через міст пролетіла реактива."),"Через міст пролетіла реактива.")
+    assert "MONITORING_UNSETTLED_AERIAL_SOURCE" in prepublish_quality_issues(ch(),row("Через міст пролетіла реактива."),"Через міст пролетіла реактива.")
     assert EditorialEngine.select(object.__new__(EditorialEngine),ch(),row("Через міст пролетіла реактива.")).decision==Decision.REJECT
 
 def test_source_and_final_gates_separate():

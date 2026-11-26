@@ -136,3 +136,22 @@ def restart_source_rejection(
         if not discovered or discovered < started or discovered > current.astimezone(timezone.utc) + timedelta(minutes=2):
             return reason
     return ""
+
+
+def strict_runtime_source_rejection_2367(
+    source_published_at: str, runtime_started_at: str,
+    source_last_successful_check_at: str = "", *,
+    discovered_at: str | None = None, now: datetime | None = None,
+    rolling_window_hours: int = 0,
+) -> str:
+    """Owner 2.3.67: no restart gap or inherited pre-start news.
+
+    The legacy checkpoint argument is deliberately ignored. Existing source
+    date, age, day, and discovery checks remain in force.
+    """
+    source = _aware(source_published_at)
+    started = _aware(runtime_started_at)
+    if source is not None and started is not None and source < started:
+        return "SOURCE_PREDATES_RUNTIME_START"
+    return restart_source_rejection(source_published_at, runtime_started_at, "",
+        discovered_at=discovered_at, now=now, rolling_window_hours=rolling_window_hours)

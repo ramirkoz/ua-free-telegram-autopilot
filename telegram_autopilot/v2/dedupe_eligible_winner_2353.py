@@ -49,8 +49,9 @@ def eligible_event_anchor_2353(channel: Any, current: Any, candidate: Any) -> bo
     # Do not run the entire AI/editorial policy twice while deciding an event
     # anchor. In particular, an ordinary long civic report is not rejected
     # here by a post-writing or content-relevance rule meant for the editor.
-    from .editorial_hard_floor import two_sentence_reason
-    if two_sentence_reason(candidate):
+    from .editorial_hard_floor import dispatch_sentence_reason_2367
+    from .monitoring_short_material_2352 import regional_dispatch_2367
+    if dispatch_sentence_reason_2367(candidate, regional=regional_dispatch_2367(channel)):
         return False
     from .monitoring_source_context_2351 import monitoring_source_context_reason_2351
     rules = str(getattr(getattr(channel, "policy", None), "rejection_rules", "") or "")
