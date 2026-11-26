@@ -488,6 +488,9 @@ class SemanticDedupeEngine(DedupeEngine):
                 rows = con.execute(
                     """SELECT id FROM articles
                        WHERE channel_id=? AND stage='READY' AND decision='PUBLISH'
+                         AND NOT (COALESCE(blocked_by,'')='QUALITY'
+                                  AND COALESCE(last_error_code,'')='QUALITY_RETRY_EXHAUSTED'
+                                  AND COALESCE(next_retry_at,'')='')
                        ORDER BY datetime(CASE WHEN ready_at<>'' THEN ready_at ELSE discovered_at END) ASC,id ASC
                        LIMIT ?""",
                     (channel_id, max(1, int(limit_per_channel))),

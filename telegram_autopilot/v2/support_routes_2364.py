@@ -15,9 +15,10 @@ SUPPORT_MODELS = {
     ('nvidia', 'nvidia/nemotron-3-ultra-550b-a55b'): 2,
     ('cloudflare', '@cf/zai-org/glm-4.7-flash'): 3,
 }
-MAX_HOURLY = 8
-MAX_DAILY = 60
-MAX_DAILY_BYTES = 400_000
+MAX_HOURLY = 24
+MAX_DAILY = 120
+MAX_DAILY_BYTES = 3_200_000
+GROQ_MIN_SPACING_SECONDS = 60
 MAX_PROMPT_BYTES = 32_000
 
 
@@ -44,7 +45,14 @@ def reserve_support(store, provider, prompt, *, now=None):
             con.execute('CREATE TABLE IF NOT EXISTS ai_support_admission_2364 (provider TEXT NOT NULL, sent_at REAL NOT NULL, bytes_reserved INTEGER NOT NULL)')
             con.execute('DELETE FROM ai_support_admission_2364 WHERE sent_at <= ?', (stamp-86400,))
             hour, day, used = con.execute('SELECT COALESCE(SUM(sent_at > ?),0), COUNT(*), COALESCE(SUM(bytes_reserved),0) FROM ai_support_admission_2364 WHERE provider=?', (stamp-3600, provider)).fetchone()
-            if hour >= MAX_HOURLY or day >= MAX_DAILY or used + size > MAX_DAILY_BYTES:
+            # LIVE 2.3.64: Groq Qwen returned 429 at 7000 input tokens/min.
+            # Pace all Groq routes together; never sleep holding a DB/provider lock.
+            # Conservative app ceiling only, not a verified provider allowance.
+            recent = provider == 'groq' and con.execute(
+                'SELECT 1 FROM ai_support_admission_2364 WHERE provider=? AND sent_at>? LIMIT 1',
+                (provider, stamp-GROQ_MIN_SPACING_SECONDS),
+            ).fetchone() is not None
+            if recent or hour >= MAX_HOURLY or day >= MAX_DAILY or used + size > MAX_DAILY_BYTES:
                 con.commit()
                 return False
             con.execute('INSERT INTO ai_support_admission_2364 VALUES (?,?,?)', (provider,stamp,size))

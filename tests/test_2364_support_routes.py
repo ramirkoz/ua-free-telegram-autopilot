@@ -74,10 +74,10 @@ def test_direct_support_still_available_with_paid_budget_exhausted(monkeypatch):
 
 def test_direct_limits_are_persistent_and_atomic(tmp_path):
     path=tmp_path/'db.sqlite3';store=V2Store(path)
-    for i in range(MAX_HOURLY): assert reserve_support(store,'groq','source',now=100000+i)
-    assert not reserve_support(V2Store(path),'groq','source',now=100020)
-    assert reserve_support(store,'nvidia','source',now=100020)
-    assert reserve_support(store,'groq','source',now=103700)
+    for i in range(MAX_HOURLY): assert reserve_support(store,'nvidia','source',now=100000+i)
+    assert not reserve_support(V2Store(path),'nvidia','source',now=100030)
+    assert reserve_support(store,'groq','source',now=100030)
+    assert reserve_support(store,'nvidia','source',now=103700)
     assert not reserve_support(store,'groq','x'*(MAX_PROMPT_BYTES+1),now=103701)
 
 

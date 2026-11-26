@@ -45,6 +45,9 @@ _SELECTOR_CACHE_LOCK_2363 = threading.Lock()
 _CONTRACT_FAILURE_MARKERS = (
     "не повернув json", "no json", "invalid json", "порожн", "empty", "reasoning but no final",
     "no final content", "invalid decision", "placeholder", "must be boolean", "invalid event_type",
+    "editor_2330_publish_without_source_evidence", "support_2364_",
+    "reader_2359_missing_boolean", "reader_2359_missing_reason", "reader_2359_invalid",
+    "expecting value", "expecting property name", "unterminated string",
 )
 
 
@@ -464,6 +467,11 @@ class AIGateway:
         key = (str(purpose or "content").casefold(), str(model or "").casefold())
         record = self._contract_stats().setdefault(key, [0, 0])
         record[0 if ok else 1] += 1
+        # A sequence of broken JSON/evidence contracts is not a valid negative
+        # editorial verdict. Demote only this purpose/model, never provider health.
+        if not hasattr(self, "_contract_failure_streak_2365"):
+            self._contract_failure_streak_2365 = {}
+        self._contract_failure_streak_2365[key] = 0 if ok else self._contract_failure_streak_2365.get(key, 0) + 1
         if sum(record) > 40:          # keep a moving picture, not a lifetime verdict
             record[0], record[1] = record[0] // 2, record[1] // 2
 
@@ -472,6 +480,9 @@ class AIGateway:
         # Put it last from the first job, without touching user configuration.
         if (str(purpose or "").casefold() in {"editorial_selector", "monitoring_selector"}
                 and str(model or "").casefold() == "inclusionai/ling-3.0-tiny"):
+            return True
+        key = (str(purpose or "content").casefold(), str(model or "").casefold())
+        if key[0] in {"editorial_selector", "monitoring_selector", "reader_gate", "value_gate", "commercial_value_gate"} and getattr(self, "_contract_failure_streak_2365", {}).get(key, 0) >= 2:
             return True
         ok, bad = self._contract_stats().get(
             (str(purpose or "content").casefold(), str(model or "").casefold()), (0, 0))
@@ -958,6 +969,7 @@ class AIGateway:
         direct = self._order_by_contract_success(direct, purpose)
         route_slots = direct + self._order_by_contract_success(openrouter_slots, purpose)
         direct_attempted = False
+        direct_admission_denied = set()
         if not route_slots:
             raise GatewayExhausted("2.3.64: немає дозволеного маршруту; написання та редактура тільки OpenRouter.",
                                    provider_outage=True, retry_seconds=300)
@@ -994,7 +1006,7 @@ class AIGateway:
         for slot in route_slots:
             provider = slot.provider
             support_direct = provider != "openrouter"
-            if support_direct and direct_attempted:
+            if support_direct and (direct_attempted or provider in direct_admission_denied):
                 continue
             # Legacy caller whitelists may restrict direct support, but must not
             # exclude the explicitly authorized paid fallback or text writer.
@@ -1068,6 +1080,7 @@ class AIGateway:
                     event("ai", "support admission unavailable 2364", provider=provider, error=type(exc).__name__)
                 if not admitted:
                     lock.release()
+                    direct_admission_denied.add(provider)
                     event("ai", "support admission limit 2364", provider=provider, purpose=purpose)
                     continue
                 direct_attempted = True
