@@ -514,6 +514,7 @@ def gemini_generate(
     max_output_tokens: int,
     timeout_seconds: int,
     json_mode: bool = False,
+    exact_model: bool = False,
 ) -> ProviderReply:
     if not str(api_key or "").strip():
         raise ProviderAPIError("Gemini API key is missing", kind="configuration")
@@ -534,7 +535,7 @@ def gemini_generate(
     }
 
     last_error: ProviderAPIError | None = None
-    for active_model in _gemini_model_candidates(model):
+    for active_model in ([str(model)] if exact_model else _gemini_model_candidates(model)):
         safe_model = quote(active_model, safe="-._")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
         try:
