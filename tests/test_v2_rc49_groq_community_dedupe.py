@@ -47,7 +47,7 @@ def test_groq_json_gate_retries_same_model_with_realistic_budget(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["max_completion_tokens"] >= 768
     assert calls[1]["max_completion_tokens"] >= 1536
-    assert calls[0]["reasoning_effort"] == "none"
+    assert calls[0]["reasoning_effort"] == "low"
     assert calls[0]["temperature"] == 0.0
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert "STRICT STRUCTURED OUTPUT CONTRACT" in calls[0]["messages"][0]["content"]

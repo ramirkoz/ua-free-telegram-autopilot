@@ -788,6 +788,7 @@ class AIGateway:
         max_output_tokens: int,
         timeout_seconds: int,
         json_mode: bool = False,
+        exact_model: bool = False,
     ) -> tuple[str, str, str, int, int, int]:
         provider = slot.provider
         self._set_last_actual_cost(0.0)
@@ -826,6 +827,7 @@ class AIGateway:
                 model=slot.model,
                 api_key=key,
                 account_id=getattr(cfg, "cloudflare_account_id", ""),
+                **({"exact_model": True} if exact_model else {}),
                 prompt=prompt,
                 max_output_tokens=max_output_tokens,
                 timeout_seconds=max(8, int(timeout_seconds)),
@@ -1301,9 +1303,10 @@ class AIGateway:
                         slot,
                         cfg,
                         "Reply with OK only.",
-                        max_output_tokens=48 if provider == "local" else 96,
-                        timeout_seconds=90 if provider == "local" else 20,
+                        max_output_tokens=48 if provider == "local" else (1024 if provider in {"groq", "cloudflare"} else 96),
+                        timeout_seconds=90 if provider == "local" else (35 if provider in {"groq", "cloudflare"} else 20),
                         json_mode=False,
+                        **({"exact_model": True} if provider in {"groq", "cloudflare"} else {}),
                     )
                     actual_cost = self._consume_last_actual_cost()
                     self.store.record_ai_usage(
@@ -1316,11 +1319,18 @@ class AIGateway:
                     lock.release()
                 if not str(text or "").strip():
                     raise ProviderAPIError("health probe returned empty text", kind="bad_response")
+                if provider in {"groq", "cloudflare"}:
+                    if runtime_model != slot.model:
+                        raise ProviderAPIError("health probe model identity mismatch", kind="bad_response")
+                    if str(text).strip().rstrip(".").casefold() != "ok":
+                        raise ProviderAPIError("health probe expected OK, got non-matching final content", kind="bad_response")
                 self._mark_probe_success(provider, slot.model, runtime_model)
                 event(
                     "ai", "model health probe success", provider=provider, model=runtime_model,
                     elapsed=round(time.monotonic() - started, 2),
                 )
+                if provider in {"groq", "cloudflare"}:
+                    continue  # Probe every configured model; a healthy first slot must not mask the second.
                 return self._refresh_provider_summary(provider, cfg)
             except Exception as exc:
                 _state, scope = self._mark_probe_failure(provider, slot.model, exc)

@@ -37,6 +37,10 @@ def sanitize_provider_payload(url: str, payload: Mapping[str, Any] | None) -> Ma
         if str(clean.get("reasoning_effort") or "").casefold() not in {"low", "medium", "high"}:
             clean["reasoning_effort"] = "low"
         clean["include_reasoning"] = False
+    elif "qwen3.8" in model:
+        if clean.get("reasoning_effort") not in {"none", "default", "low", "medium", "high"}:
+            clean["reasoning_effort"] = "none"
+        clean.pop("include_reasoning", None)
     elif "qwen" in model:
         clean.pop("reasoning_effort", None)
         clean.pop("include_reasoning", None)

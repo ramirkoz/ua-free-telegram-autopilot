@@ -18,7 +18,7 @@ def test_groq_gpt_oss_never_sends_invalid_none_reasoning_effort():
     assert clean["response_format"] == {"type": "json_object"}
 
 
-def test_groq_qwen_drops_openai_reasoning_controls():
+def test_groq_qwen_preserves_supported_reasoning_effort():
     payload = {
         "model": "qwen/qwen3.8-27b",
         "reasoning_effort": "none",
@@ -27,7 +27,7 @@ def test_groq_qwen_drops_openai_reasoning_controls():
     }
     clean = sanitize_provider_payload("https://api.groq.com/openai/v1/chat/completions", payload)
     assert clean is not None
-    assert "reasoning_effort" not in clean
+    assert clean["reasoning_effort"] == "none"
     assert "include_reasoning" not in clean
     assert clean["max_completion_tokens"] == 768
 

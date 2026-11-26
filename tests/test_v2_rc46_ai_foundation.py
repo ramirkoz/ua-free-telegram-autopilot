@@ -55,7 +55,7 @@ def test_groq_reasoning_is_bounded_and_json_mode_requested(monkeypatch) -> None:
         json_mode=True,
     )
     assert reply.text == '{"ok":true}'
-    assert captured["payload"]["reasoning_effort"] == "none"
+    assert captured["payload"]["reasoning_effort"] == "low"
     assert captured["payload"]["include_reasoning"] is False
     assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert captured["payload"]["max_completion_tokens"] >= 768
