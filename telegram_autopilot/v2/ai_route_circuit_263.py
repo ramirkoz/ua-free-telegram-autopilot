@@ -35,7 +35,7 @@ class RouteContractCircuit:
         reasoning = (
             p in {"openrouter", "cloudflare"}
             and kind == "bad_response"
-            and "reasoning but no final content" in message
+            and ("reasoning but no final content" in message or "empty assistant response" in message)
         )
         cpu_timeout = p == "local" and (
             kind == "timeout" or "не завершила локальне ai-завдання за 120 секунд" in message

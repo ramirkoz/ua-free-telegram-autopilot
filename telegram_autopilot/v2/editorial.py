@@ -41,7 +41,7 @@ from .editorial_second_opinion_2320 import (
     eligible_second_opinion_2320, verified_second_opinion_2320,
     SECOND_OPINION_INSTRUCTION_2320,
 )
-from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance
+from .numeric_schedule_2313 import numeric_atoms, restore_joined_schedule_rows, schedule_guidance, schedule_row_guidance_2366
 from .schedule_digest_2314 import schedule_digest_limits_2314, schedule_digest_instruction_2314
 from .monitoring_integrity_2312 import monitoring_editorial_integrity_2312
 from .live_editorial_integrity_2311 import (
@@ -148,9 +148,9 @@ def _parse_json(raw: str) -> dict[str, Any]:
         last_error = ValueError("AI JSON має бути object")
     raise ValueError(f"AI повернув пошкоджений JSON: {last_error}")
 
-def _source_pack(article: Any, budget: int = 6000) -> str:
+def _source_pack(article: Any, budget: int = 6000, *, separate_passages: bool = False) -> str:
     try:
-        packed = build_evidence_pack(article, char_budget=budget).text
+        packed = build_evidence_pack(article, char_budget=budget, separate_passages=separate_passages).text
     except Exception:
         packed = (_clean(_v(article, "title", ""), 700) + "\n" + _clean(_v(article, "raw_text", ""), budget)).strip()
     # Prompt-only lossless spacing; source DB and factual QA use raw evidence.
@@ -1956,7 +1956,9 @@ SOURCE:
             '"reason" — одне конкретне речення про цінність/відсутність цінності саме цієї новини; '
             '"angle" — факт і кут допису, якщо publish, інакше порожній рядок; '
             '"source_quote" — для publish ДОСЛІВНА цитата 20–180 символів із SOURCE BODY, '
-            'яка підтверджує головний факт. Не переказуй і не вигадуй цитату. '
+            'яка підтверджує головний факт. Копіюй один безперервний уривок у мові оригіналу '
+            'з SELECTED SOURCE PASSAGES (не TITLE, не SOURCE DATE); не перекладай, '
+            'не зшивай різні фрагменти, не додавай трикрапки. Не переказуй і не вигадуй цитату. '
             'Для reject поверни порожню цитату. Якщо конкретного факту, який '
             'цікавий широкому читачеві, немає, вирішуй reject.'
             if calibrated_role else
@@ -1973,6 +1975,9 @@ SOURCE:
         reader_2358 = CREATIVE_READER_GUIDANCE if calibrated_role == "creative" else ""
         owner_235 = (SCIENCE_GUIDANCE_235 if calibrated_role == "science" else
                      CREATIVE_GUIDANCE_235 if calibrated_role == "creative" else "")
+        from .selector_evidence_2366 import selector_evidence_2366, evidence_hint_2366, resolve_evidence_2366
+        selector_source = _source_pack(article, 3600, separate_passages=bool(calibrated_role))
+        evidence_options = selector_evidence_2366(str(_v(article, 'raw_text', '') or ''), selector_source) if calibrated_role else {}
         prompt = f"""{selector_header}
 {owner_235}
 {reader_2358}
@@ -1986,8 +1991,8 @@ PURPOSE: {p.purpose}\nAUDIENCE: {p.audience}\nSELECTION: {p.selection_rules}\nEX
 {calibrated_feedback_2312(calibrated_role)}
 {calibrated_feedback_2316(calibrated_role)}
 {calibrated_feedback_2320(calibrated_role)}
-SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(article, 3600)}
-{output_contract}"""
+SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{selector_source}
+{output_contract}{evidence_hint_2366(evidence_options)}"""
 
         def parse_fit(raw: str):
             obj = _parse_json(raw)
@@ -2005,6 +2010,7 @@ SOURCE NAME: {_clean(_v(article, 'source_name', ''), 300)}\nSOURCE TITLE: {_clea
             # must be byte-for-byte recoverable after whitespace folding.
             if calibrated_role and decision == "publish":
                 from .editorial_second_opinion_2320 import verified_second_opinion_2320
+                obj = resolve_evidence_2366(obj, evidence_options)
                 if not verified_second_opinion_2320(obj, article):
                     raise ValueError("EDITOR_2330_PUBLISH_WITHOUT_SOURCE_EVIDENCE")
             return obj
@@ -2252,6 +2258,7 @@ SOURCE TITLE: {_clean(_v(article, 'title', ''), 700)}\nSOURCE:\n{_source_pack(ar
             monitoring=channel.mode == ChannelMode.MONITORING,
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
+            compact=True,
         )
         from .monitoring_newsroom_2348 import monitoring_newsroom_instruction_2348
         monitoring_2348 = (
@@ -2345,6 +2352,7 @@ ANGLE (лише кут подачі, НЕ факти): {selection.angle}
 {study_result_guidance}
 {monitoring_2348}
 {schedule_guidance(_v(article, 'raw_text', ''))}
+{schedule_row_guidance_2366(_v(article, 'raw_text', '')) if channel.mode == ChannelMode.MONITORING else ''}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 ПОРЯДОК ЖУРНАЛІСТА: до написання визнач найважливіший перевірений результат,
 дію чи незвичну деталь, що буде цікава людині без професійної підготовки.
@@ -2428,7 +2436,7 @@ SOURCE:
         if scoped:
             try:
                 checkpoint = writer_checkpoint(self.store, channel, article, prompt)
-                if checkpoint:
+                if checkpoint and checkpoint[1] == "openrouter":
                     validator(checkpoint[0])
                     cached_result = AIResult(checkpoint[0], checkpoint[1], checkpoint[2], "validated writer checkpoint")
                     event("editorial", "validated writer checkpoint reused 2362", channel_id=channel.id, article_id=aid, ai_calls_saved=1)
@@ -2581,6 +2589,12 @@ SOURCE:
         editorial_angle: str = "",
     ) -> str:
         p = channel.policy
+        # Existing deterministic reader sentinel provides actionable feedback
+        # to the already-required final editor, rather than another AI pass.
+        if is_science_general_channel(channel):
+            issue = science_plain_language_issue(draft)
+            if issue:
+                repair_focus = (repair_focus + "\n" + "ВИЯВЛЕНИЙ НЕДОЛІК DRAFT: " + issue).strip()
         source_name = source_context_name(channel, article)
         source_context = source_body_context_name(channel, article)
         body_hard_max = source_body_hard_limit(
@@ -2607,7 +2621,7 @@ SOURCE:
             monitoring=channel.mode == ChannelMode.MONITORING,
             commercial=_is_commercial_editorial(channel),
             science=is_science_general_channel(channel),
-            final=True,
+            final=True, compact=True,
         )
         from .monitoring_newsroom_2348 import monitoring_newsroom_instruction_2348
         monitoring_2348 = (
@@ -2673,6 +2687,7 @@ SOURCE:
 {study_result_guidance}
 {monitoring_2348}
 {schedule_guidance(_v(article, 'raw_text', ''))}
+{schedule_row_guidance_2366(_v(article, 'raw_text', '')) if channel.mode == ChannelMode.MONITORING else ''}
 {schedule_digest_instruction_2314(_v(article, 'raw_text', ''))}
 {repair_focus}
 {full_story_instruction_2357(channel, article, final_hard_max)}

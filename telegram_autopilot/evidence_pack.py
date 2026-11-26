@@ -71,7 +71,7 @@ def _score(sentence: str, index: int) -> int:
     return score
 
 
-def build_evidence_pack(article: Row, *, char_budget: int) -> EvidencePack:
+def build_evidence_pack(article: Row, *, char_budget: int, separate_passages: bool = False) -> EvidencePack:
     """Build a bounded, deterministic multilingual evidence pack without an extra AI call.
 
     RC45 keeps the established English-source behavior and extends the same scoring
@@ -113,7 +113,7 @@ def build_evidence_pack(article: Row, *, char_budget: int) -> EvidencePack:
             chosen = candidate
 
     ordered = [sentences[i] for i in sorted(chosen)]
-    body = " ".join(ordered).strip()
+    body = ("\n" if separate_passages else " ").join(ordered).strip()
     if not body and raw:
         cut = raw[:available].rstrip()
         boundary = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("… "))

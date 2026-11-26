@@ -527,7 +527,8 @@ class SupervisorService:
 
             done30 = int(stats.get("jobs_done_30m") or 0)
             published30 = int(stats.get("published_30m") or 0)
-            ready = int(stats.get("ready") or 0)
+            ready = int(stats.get("ready_operational_2365", stats.get("ready")) or 0)
+            manual_review = int(stats.get("ready_manual_review_2365") or 0)
             oldest_age = int(stats.get("oldest_due_age_seconds") or 0)
             oldest_ready_age = int(stats.get("oldest_ready_age_seconds") or 0)
             max_age_hours = max(1, int(stats.get("max_age_hours") or 24))
@@ -544,6 +545,8 @@ class SupervisorService:
                 reasons.append(f"no publications/60m with due backlog={due}")
             if ready >= 5 and oldest_ready_age >= 900 and published30 == 0:
                 reasons.append(f"READY backlog: {ready} with no publications/30m")
+            if manual_review >= 5 and published30 == 0 and int(stats.get("ready_buffer_usable") or 0) == 0:
+                reasons.append(f"manual quality review backlog: {manual_review}; no usable READY")
             near_ttl = max_age_hours * 3600 * 0.85
             if due >= 50 and oldest_age >= near_ttl:
                 reasons.append(f"oldest due near TTL: {oldest_age//60}m/{max_age_hours*60}m")

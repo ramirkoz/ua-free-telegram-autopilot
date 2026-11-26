@@ -254,6 +254,10 @@ def test_2330_calibrated_publish_needs_real_source_quote_without_second_ai_call(
     assert outcome.decision == Decision.PUBLISH
     assert engine.gateway.calls == 1
 
+    engine.gateway = Gateway(valid.replace("Researchers measured a new gravitational effect in 500 observations.", "Q1"))
+    assert engine._select_editorial(SCIENCE, article).decision == Decision.PUBLISH
+    assert engine.gateway.calls == 1
+
     for bad in (
         '{"decision":"publish","reason":"Цікаве дослідження", "angle":"Наука"}',
         '{"decision":"publish","reason":"Цікаве дослідження", "angle":"Наука",'
