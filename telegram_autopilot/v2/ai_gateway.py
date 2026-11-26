@@ -14,6 +14,7 @@ from ..local_ai_runtime import LocalAIRuntimeError, generate_local_text
 from ..secrets_store import load_secrets
 from .domain import AIModelHealth, BlockedBy, ProviderHealth, ProviderState
 from .loghub import event
+from .ai_economics_237 import current_ai_article
 from .openrouter_catalog import _chat_compatible_id, candidate_model_ids_for_task, recommended_model_ids
 from .provider_api import ProviderAPIError, gemini_generate, openai_compatible_chat
 from .qa_route_efficiency_238 import conservative_completed_tail, suppress_reasoning_only_route, bounded_local_timeout
@@ -1034,7 +1035,6 @@ class AIGateway:
                 continue
             # Only a real admitted request consumes a per-task paid attempt.
             if provider == "openrouter":
-                from .ai_economics_237 import current_ai_article
                 from .ai_cost_2360 import reserve_paid_attempt
                 try:
                     admitted = reserve_paid_attempt(self.store, current_ai_article()[1], editorial=editorial_cost_guard)
@@ -1175,6 +1175,10 @@ class AIGateway:
                                 event(
                                     "ai", "candidate rejected by QA", provider=provider, model=runtime_model,
                                     elapsed=round(time.monotonic() - started, 2), detail=str(first_error)[:600],
+                                    purpose=str(purpose or "content"),
+                                    channel_id=current_ai_article()[0], article_id=current_ai_article()[1],
+                                    input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0),
+                                    actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                                 )
                                 # RC111: if two independent reviewed routes hit the same
                                 # deterministic QA class, a third/fourth model is usually
@@ -1198,6 +1202,7 @@ class AIGateway:
                     elapsed=round(time.monotonic() - started, 2), chars=len(output),
                     provider_state=str(summary.state), attempted=len(attempted), purpose=str(purpose or "content"),
                     input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0), total_tokens=int(total_tokens or 0),
+                    prompt_chars=len(text_prompt), channel_id=current_ai_article()[0], article_id=current_ai_article()[1],
                     estimated_openrouter_usd=round(float(estimated_cost or 0.0), 6),
                     actual_openrouter_usd=round(float(actual_cost or 0.0), 6),
                 )

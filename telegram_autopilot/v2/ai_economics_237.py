@@ -150,3 +150,57 @@ def economics_snapshot(store: Any, *, now: datetime|None = None) -> dict[str,Any
         'quality_approved_count':None,
         'note':'Historic usage lacks article IDs; delivery is not editorial approval; uncommitted drafts may publish later',
     }
+
+
+def runtime_economics_snapshot(store: Any, started_at: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Exact current runtime window; recorded usage, not an invoice or quality verdict."""
+    if not started_at:
+        return {"scope": "not_running"}
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    start = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+    if start.tzinfo is None:
+        return {"scope": "unavailable", "error": "START_TIME_MISSING_OFFSET"}
+    if start > current:
+        return {"scope": "unavailable", "error": "START_TIME_IN_FUTURE"}
+    params = (start.isoformat(), current.isoformat())
+    with store.connect() as con:
+        rows = con.execute("""SELECT provider, model, purpose, COUNT(*) AS calls,
+            COALESCE(SUM(input_tokens),0) AS input_tokens, COALESCE(SUM(output_tokens),0) AS output_tokens,
+            COALESCE(SUM(actual_openrouter_usd),0) AS actual_openrouter_usd
+            FROM ai_usage_events WHERE julianday(created_at)>=julianday(?) AND julianday(created_at)<=julianday(?)
+            GROUP BY provider, model, purpose""", params).fetchall()
+        deliveries = con.execute("""
+            SELECT article_id,channel_id,committed_at FROM publication_delivery_journal
+              WHERE state='COMMITTED' AND julianday(committed_at)>=julianday(?) AND julianday(committed_at)<=julianday(?)
+            UNION ALL
+            SELECT a.article_id,a.channel_id,a.committed_at FROM delivery_receipt_archive a
+              WHERE a.state='COMMITTED' AND julianday(a.committed_at)>=julianday(?) AND julianday(a.committed_at)<=julianday(?)
+                AND NOT EXISTS(SELECT 1 FROM publication_delivery_journal p WHERE p.article_id=a.article_id)
+        """, (*params,*params)).fetchall()
+        posts = con.execute("""SELECT p.article_id,p.channel_id,p.committed_at,p.primary_message_id,p.message_ids_json,p.media_count,
+             a.title,a.final_text,a.canonical_source_url,a.ai_provider,a.ai_model
+             FROM publication_delivery_journal p JOIN articles a ON a.id=p.article_id
+             WHERE p.state='COMMITTED' AND julianday(p.committed_at)>=julianday(?) AND julianday(p.committed_at)<=julianday(?)
+             ORDER BY julianday(p.committed_at) DESC,p.id DESC LIMIT 100""", params).fetchall()
+    ids = set(); channels = defaultdict(int)
+    for row in deliveries:
+        try:
+            dt = datetime.fromisoformat(str(row['committed_at']).replace('Z','+00:00'))
+        except ValueError:
+            continue
+        if dt.tzinfo is None or not start <= dt <= current:
+            continue
+        aid = int(row['article_id'])
+        if aid not in ids:
+            ids.add(aid); channels[str(row['channel_id'])] += 1
+    usage = [dict(r) for r in rows]
+    cost = sum(float(r['actual_openrouter_usd']) for r in usage if r['provider']=='openrouter')
+    return {'scope':'runtime_since_start_2362','started_at':started_at,'through':current.isoformat(),
+            'recorded_ai_calls':sum(r['calls'] for r in usage),
+            'actual_openrouter_usd':round(cost,6),'committed_posts':len(ids),
+            'usd_per_committed_post':round(cost/len(ids),6) if ids else None,
+            'committed_by_channel':dict(channels),'by_model_purpose':usage,
+            'recent_committed_posts':[dict(r) for r in posts], 'recent_posts_limit':100,
+            'recent_posts_omitted':max(0,len(ids)-len(posts)),
+            'post_text_note':'Stored article body, not an independently fetched Telegram rendering; archive may omit body.',
+            'note':'Recorded usage during current runtime; pending charges and unrecorded provider billing may differ.'}

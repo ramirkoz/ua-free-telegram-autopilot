@@ -401,6 +401,10 @@ CREATE TABLE IF NOT EXISTS ai_article_budget_2360 (
  article_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
  editorial_attempts INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS ai_writer_checkpoint_2362 (
+ article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+ digest TEXT NOT NULL, draft TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_reader_receipts_2360 (
  article_id INTEGER PRIMARY KEY, digest TEXT NOT NULL, reason TEXT NOT NULL
 );

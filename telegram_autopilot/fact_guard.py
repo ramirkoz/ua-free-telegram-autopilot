@@ -236,7 +236,11 @@ def _is_generic_telegram_reference(url: str) -> bool:
 def _explicit_registration_context(value: str) -> bool:
     return bool(re.search(
         r"(?iu)(?:реєстрац|зареєстр|заповн.{0,20}(?:форм|анкет)|"
-        r"(?:подати|подач).{0,20}(?:заяв|анкет)|registration|sign\s*up|apply\s+here)",
+        r"(?:подати|подач).{0,20}(?:заяв|анкет)|"
+        r"(?:запис\w*|записатись|записатися)\s+на\s+(?:безоплатн\w*\s+)?(?:консультац\w*|прийом\w*)|"
+        r"як\s+скористатися\s*[?]\s*(?:[0-9️⃣.\s]*)перейдіть\s+на|"
+        r"актуальн\w*\s+графік\w*\s+відключен\w*.{0,80}на\s+(?:нашому\s+)?сайті|"
+        r"registration|sign\s*up|apply\s+here|book\s+(?:a\s+)?consultation)",
         value,
     ))
 
@@ -281,9 +285,16 @@ def actionable_source_urls(source: str, *, source_name: str = "", excluded_urls=
     name = " ".join(str(source_name or "").split()).casefold()
     excluded = {_url_identity(value) for value in excluded_urls if _url_identity(value)}
     result: list[str] = []
+    # Telegram occasionally appends a Ukrainian word directly to a duplicate
+    # URL. Only a separately attested exact shorter URL can prove this boundary.
+    exact_urls = {m.group(0).rstrip(".,;:!?") for m in _URL_RE.finditer(text)}
     for match in _URL_RE.finditer(text):
         url = match.group(0).rstrip(".,;:!?")
         if not url:
+            continue
+        if any(url.startswith(exact) and url != exact and
+               re.fullmatch(r"[А-Яа-яІіЇїЄєҐґ]+", url[len(exact):])
+               for exact in exact_urls if exact):
             continue
         if _url_identity(url) in excluded or _is_generic_telegram_reference(url):
             continue
@@ -318,14 +329,8 @@ def strip_monitoring_nonform_urls(article, text: str) -> str:
     insert that URL into the text.
     """
     source = _row_text(article, "raw_text")
-    allowed: set[str] = set()
-    for match in _URL_RE.finditer(source):
-        url = match.group(0)
-        if _is_generic_telegram_reference(url) or _url_identity(url) in article_non_actionable_urls(article):
-            continue
-        context = _action_url_context(source, match.start())
-        if _explicit_registration_context(context) or _source_video_action(url, context):
-            allowed.add(_url_identity(url))
+    allowed = {_url_identity(url) for url in actionable_source_urls(
+        source, source_name=_row_text(article, "source_name"), excluded_urls=article_non_actionable_urls(article))}
     value = str(text or "")
     # Repair only a URL prefix exactly attested by the original source. This
     # catches an adjacent Ukrainian word concatenated to a valid forms.gle URL.
@@ -438,7 +443,8 @@ def validate_fact_guard(article: Row, output: str) -> FactGuardAssessment:
     # Reader-action links are protected facts too. A canonical source footer does
     # not satisfy this contract because it forces the reader to hunt for the actual
     # registration/form/payment target in somebody else's post.
-    missing_action_urls = [url for url in actionable_source_urls(source, source_name=_row_text(article, "source_name"), excluded_urls=article_non_actionable_urls(article)) if url not in output_text]
+    output_urls = {_url_identity(m.group(0)) for m in _URL_RE.finditer(output_text)}
+    missing_action_urls = [url for url in actionable_source_urls(source, source_name=_row_text(article, "source_name"), excluded_urls=article_non_actionable_urls(article)) if _url_identity(url) not in output_urls]
     if missing_action_urls:
         raise FactGuardError(
             "AI прибрав практичне посилання з джерела: " + ", ".join(missing_action_urls[:4])

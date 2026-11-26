@@ -74,7 +74,15 @@ def compact_prompt(prompt):
     if not sep:
         return prompt
     seen=set(); out=[]
+    # The source itself stays byte-identical. Only repeated literal evidence
+    # hints can be replaced by a reference to the same text below.
+    source = evidence.split("\nDRAFT:\n", 1)[0]
+    normalized_source = " ".join(source.split())
     for line in header.splitlines():
+        hint = re.match(r"^\s*- (?:Цитата SOURCE: |\[(?:ЦИФРА В КОНТЕКСТІ|АТРИБУЦІЯ/УМОВНІСТЬ|ПРАКТИЧНІ УМОВИ|ФАКТ ДЖЕРЕЛА), фрагмент \d+\] )(.*)$", line)
+        if hint and len(hint[1]) >= 55 and "[уривок]" not in hint[1] and " ".join(hint[1].split()) in normalized_source:
+            # Do not strip rule text, labels, facts outside SOURCE or protected contacts.
+            line = line[:hint.start(1)] + "Дослівний фрагмент уже наведено у SOURCE нижче."
         key=line.strip()
         if len(key)>=35 and key in seen:
             continue
@@ -90,3 +98,29 @@ def compact_style_memory(block):
     return '\n'.join(line for line in lines if not re.match(r'^🔥[2-9]\d*:',line))
 
 COMBINED_EDITOR_RULE = """Виконай одночасно фінальне редагування та перевірку очима читача. Обов'язково: зрозуміло хто що зробив і чому це цікаво, послідовність, природна українська, ключові факти й важливі обмеження з SOURCE. Виправ істотні недоліки за один прохід; не вимагай усіх другорядних подробиць дослідження, якщо вони не змінюють висновку. Не переробляй текст заради синонімів. Для ПРОДАНО! якщо в SOURCE немає конкретної незвичайної ідеї, механізму, людської історії чи іншого широкого читацького інтересу, поверни тільки REJECT_READER_2360, не вигадуй гачок. Для ГРОМАД не змінюй правила відбору та не прибирай практичні подробиці. Поверни лише самодостатній перевірений фінальний текст."""
+
+
+def writer_checkpoint(store, channel, article, prompt):
+    """Draft only, never an approval or a reader receipt. Caller revalidates."""
+    aid = int(_field(article, 'id') or 0)
+    if not aid:
+        return None
+    with store.connect() as con:
+        row = con.execute('SELECT draft,provider,model FROM ai_writer_checkpoint_2362 WHERE article_id=? AND digest=?',
+                          (aid, review_key(channel, article, prompt))).fetchone()
+    return tuple(row) if row else None
+
+
+def save_writer_checkpoint(store, channel, article, prompt, draft, provider, model):
+    aid = int(_field(article, 'id') or 0)
+    if not aid or not draft.strip():
+        return
+    with store.connect() as con:
+        con.execute('INSERT INTO ai_writer_checkpoint_2362(article_id,digest,draft,provider,model) VALUES(?,?,?,?,?) '
+                    'ON CONFLICT(article_id) DO UPDATE SET digest=excluded.digest,draft=excluded.draft,provider=excluded.provider,model=excluded.model',
+                    (aid, review_key(channel, article, prompt), draft, provider, model))
+
+
+def clear_writer_checkpoint(store, article_id):
+    with store.connect() as con:
+        con.execute('DELETE FROM ai_writer_checkpoint_2362 WHERE article_id=?', (int(article_id),))

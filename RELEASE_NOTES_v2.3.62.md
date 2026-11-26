@@ -1,0 +1,13 @@
+# Autopilot 2.3.62 — targeted quality and cost stabilization
+
+Based on the exact 2.3.61 candidate deployed by the operator. Production AI routing (OpenRouter-only while usable), existing fallback, Groq/Cloudflare adapters, channel rules, budgets, sources, timing, media provenance and Telegram delivery protections are unchanged.
+
+- Repair numeric grounding at glued sentence punctuation (LIVE 115303) and terminal integer punctuation, without allowing fabricated values or altering decimals/time ranges.
+- Recognize source-owned consultation registration, explicitly linked service access and current outage schedule links; deduplicate a glued duplicate URL only when the exact clean URL also appears in the source. Restore actionable links through existing local candidate preparation and validate exact URL identity. Existing explicit operator URL-strip setting remains authoritative.
+- Keep the final editor's length targets consistent with the writer. Do not accept a writer fallback when the final editor explicitly rejects reader value; stop full pipeline reruns on final-editor deterministic failure when the draft also fails local QA.
+- A new additive SQLite writer-checkpoint table retains a locally validated draft during the same article workflow. Reuse requires matching source, policy and exact writer prompt, and re-runs the writer validator. The final editor, reader gate and delivery QA remain mandatory. Successful READY clears the checkpoint. Manual trials do not reuse checkpoints.
+- Compact only duplicate literal evidence hints when the same full literal remains in SOURCE. All unique evidence and configured policies stay. New success/rejection logs include article/purpose/token/cost attribution; success also includes prompt length.
+- Narrow routine retail footwear/apparel admission guard, using product listing metadata and main story rather than unrelated related-story cards. Preserve evidence of a non-routine mechanism or public value.
+- New current-runtime economics snapshot: recorded cost, token/call counts by model and purpose, COMMITTED receipts since runtime start, bounded last 100 committed stored text bodies and message IDs. Historical rolling windows unchanged; stored text is not a rendered Telegram fetch. No new network destination.
+
+Not activated: direct free-provider production writing (requires authenticated paired evaluation); deterministic full-schedule generation (the actual 115179 table still hits existing repetition QA; no guard bypass); broad media/duplicate policy changes. No guaranteed LIVE savings or throughput claims. No historical READY/UNKNOWN replay or operator Data reset. One additive checkpoint schema table is created by existing store initialization.

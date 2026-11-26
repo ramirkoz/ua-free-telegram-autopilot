@@ -800,6 +800,13 @@ class SupervisorService:
                   level=30, detail=str(exc)[:220])
             return {"scope":"unavailable", "error":"READ_ONLY_ECONOMICS_UNAVAILABLE"}
 
+    def _safe_runtime_economics_2362(self, started_at: str) -> dict[str, Any]:
+        try:
+            from .ai_economics_237 import runtime_economics_snapshot
+            return runtime_economics_snapshot(self.store, started_at)
+        except Exception:
+            return {"scope":"unavailable", "error":"RUNTIME_ECONOMICS_READ_FAILED"}
+
     def build_snapshot(self) -> dict[str, Any]:
         runtime = self.runtime.health_snapshot()
         enabled_rows = self.store.list_channels(enabled_only=True)
@@ -905,6 +912,7 @@ class SupervisorService:
             # 2.3.27: actual OpenRouter charges and COMMITTED deliveries in
             # matching rolling windows; 3 completed Kyiv calendar days separate.
             "ai_economics_237": self._safe_ai_economics_237(),
+            "ai_economics_runtime_2362": self._safe_runtime_economics_2362(str(runtime.get("started_at") or "")),
             "editorial_sources_237": self._safe_editorial_sources_237(),
             "provider_discovery": provider_discovery_snapshot(),
             "feedback_auto_refresh": feedback_snapshot,
