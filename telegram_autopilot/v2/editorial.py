@@ -59,7 +59,7 @@ from .editorial_human_calibration_236 import calibrated_editorial_role
 from .editorial_owner_235 import SCIENCE_GUIDANCE_235, CREATIVE_GUIDANCE_235, REGIONAL_GUIDANCE_235
 from .source_final_fidelity_255 import SOURCE_FINAL_FIDELITY_RULE_255
 from .editorial_polish_259 import UA_EDITORIAL_POLISH_RULE_259
-from .monitoring_short_material_2352 import regional_publication_floor_2355
+from .monitoring_short_material_2352 import regional_publication_floor_2355, regional_dispatch_2367
 from .editorial_voice_2337 import newsroom_voice_2337, needs_voice_editor_2337
 from .monitoring_news_integrity_263 import (MONITORING_NEWS_INTEGRITY_RULE_263, monitoring_source_promo_reason, monitoring_unverified_teaser_reason, monitoring_copied_cta_issue)
 
@@ -836,7 +836,7 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
                                         configured_max, int(body_hard_max))
 
     source_len = len(_source_text(article))
-    from .monitoring_short_material_2352 import regional_publication_floor_2355
+    from .monitoring_short_material_2352 import regional_publication_floor_2355, regional_dispatch_2367
     regional_floor = regional_publication_floor_2355(channel)
     # 2.3.55: if a regionally publishable source is 500+ chars, a 220/350
     # character generation target is internally contradictory. Do not
@@ -865,6 +865,8 @@ def _monitoring_limits(channel: ChannelConfig, article: Any, body_hard_max: int)
     else:
         effective_min = configured_min
         effective_max = configured_max
+    if regional_dispatch_2367(channel):
+        effective_min = min(effective_min, max(1, int(source_len * 0.6)))
     effective_max = max(effective_min, min(effective_max, int(body_hard_max)))
     # 2.3.14: a table-rich source with an explicit change narrative should
     # produce a short factual update, not 500 chars of artificial padding.
@@ -1097,6 +1099,7 @@ def validate_writer_output(
     required_context: str = "",
     slop_profile: str = "",
     strict_min_chars: bool = False,
+    regional_dispatch: bool = False,
 ) -> str:
     # Gate 1 is deterministic sanitation: strip invisible/bidi junk before any
     # language or factual validation. This mirrors the upstream anti-ai-slop
@@ -1116,13 +1119,15 @@ def validate_writer_output(
     # Regional hard floor must be checked at WRITER and FINAL-EDITOR time,
     # not first discovered by the Telegram publisher after expensive AI calls.
     minimum = max(80, int(min_chars)) if strict_min_chars else max(80, int(min_chars) * 2 // 3)
+    if regional_dispatch:
+        minimum = 1  # semantic completeness, not a character quota
     if len(value) < minimum:
         raise ValueError("Непридатна довжина Telegram-тексту: надто коротко")
     if hard_max_chars is not None and len(value) > int(hard_max_chars):
         raise ValueError(f"Непридатна довжина Telegram-тексту: понад жорсткий ліміт {int(hard_max_chars)}")
     if len(value) > max(int(max_chars) + 250, int(max_chars) * 3 // 2):
         raise ValueError("Непридатна довжина Telegram-тексту: надто довго")
-    if not looks_ukrainian(value):
+    if not looks_ukrainian(value, short_dispatch=regional_dispatch):
         raise ValueError("AI не повернув природний український текст")
     require_source_context(value, required_context)
     validate_fact_guard(article, value)
@@ -1178,8 +1183,8 @@ def validate_writer_output(
     hard_issues = hard_editorial_blockers(value)
     if hard_issues:
         raise ValueError("Жорсткий QA: " + "; ".join(hard_issues[:4]))
-    from .editorial_hard_floor import two_sentence_reason, fabricated_event_reason
-    source_or_final = two_sentence_reason(article, value) or fabricated_event_reason(article, value)
+    from .editorial_hard_floor import dispatch_sentence_reason_2367, fabricated_event_reason
+    source_or_final = dispatch_sentence_reason_2367(article, value, regional=regional_dispatch) or fabricated_event_reason(article, value)
     if source_or_final:
         raise ValueError(source_or_final)
     from .source_fact_integrity import source_fact_issues
@@ -1381,8 +1386,8 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
         issues.append(critical)
     # Source/output sentence floor at actual final send, including old READY.
     # Keep historical safety diagnoses from hard_editorial_reject intact.
-    from .editorial_hard_floor import two_sentence_reason
-    sentence_floor = two_sentence_reason(article, value)
+    from .editorial_hard_floor import dispatch_sentence_reason_2367
+    sentence_floor = dispatch_sentence_reason_2367(article, value, regional=regional_dispatch_2367(channel))
     if sentence_floor:
         issues.append(sentence_floor)
     from .editorial_hard_floor import fabricated_event_reason
@@ -1433,6 +1438,7 @@ def prepublish_quality_issues(channel: ChannelConfig, article: Any, text: str) -
             hard_max_chars=validation_hard_max, required_context=source_body_context_name(channel, article),
             slop_profile=_anti_slop_profile(channel),
             strict_min_chars=bool(regional_publication_floor_2355(channel)),
+            regional_dispatch=regional_dispatch_2367(channel),
         )
     except Exception as exc:
         issues.append(str(exc))
@@ -1530,8 +1536,8 @@ class EditorialEngine:
             scope_issue = monitoring_scope_issue(article)
             if scope_issue:
                 return EditorialOutcome(Decision.REJECT, reason=scope_issue, fit_score=0)
-        from .editorial_hard_floor import two_sentence_reason
-        source_short = two_sentence_reason(article)
+        from .editorial_hard_floor import dispatch_sentence_reason_2367
+        source_short = dispatch_sentence_reason_2367(article, regional=regional_dispatch_2367(channel))
         if source_short and channel.mode == ChannelMode.MONITORING:
             # 2.3.23: an outage schedule is a time table, not prose. Its facts
             # are the queue/time rows; the final-text floor still applies.
@@ -1582,7 +1588,7 @@ class EditorialEngine:
         prompt = f"""Ти UNIVERSAL MONITORING POLICY GATE.
 {REGIONAL_GUIDANCE_235}
 {REGIONAL_NEWS_VALUE_PROMPT_2356}
-Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу.
+Не оцінюй цікавість, wow, editorial value, баланс тем або broad appeal. Застосуй ТІЛЬКИ ручні правила цього каналу. Для ГРОМАД коротка підтверджена місцева новина чи суттєве оновлення є придатними незалежно від довжини, навіть одне речення. Не вигадуй відсутній контекст.
 INCLUSION RULES:
 {inclusion or 'Не задано: inclusion виконаний.'}
 
@@ -2373,6 +2379,8 @@ SOURCE:
         if _is_commercial_editorial(channel):
             # Style only: preserve uncertainty and source facts; no new thematic veto.
             prompt = prompt.replace("\nSOURCE:\n", "\nПРОДАНО! Пиши доступною українською, як для допитливого неспеціаліста. Спочатку зрозуміла цікава деталь, потім пояснення. Уникай академічних кальок на кшталт «передбачало подальший розвиток»; поясни, що саме дослідники спостерігали, не перетворюючи зв’язок на доведену причинність. Не спрощуй застереження та не вигадуй гачок.\nSOURCE:\n", 1)
+        if regional_dispatch_2367(channel):
+            prompt += "\nПРІОРИТЕТ 2.3.67: для ГРОМАД довжина лише орієнтир; одне повне підтверджене речення достатньо. Не доповнюй і не відхиляй заради 500 символів чи двох речень. Інші правила достовірності та тематики чинні."
         prompt = compact_prompt(prompt)
         from .ai_cost_2360 import prompt_shape_2363
         event("editorial", "editorial prompt shape 2363", channel_id=channel.id,
@@ -2419,6 +2427,7 @@ SOURCE:
                 article, candidate, min_chars=effective_min, max_chars=effective_max,
                 hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
                 strict_min_chars=bool(regional_publication_floor_2355(channel)),
+                regional_dispatch=regional_dispatch_2367(channel),
             )
             if study_result_guidance:
                 missing = study_results_missing_2347(article, candidate)
@@ -2473,6 +2482,7 @@ SOURCE:
             article, prepared_text(result.text), min_chars=effective_min, max_chars=effective_max,
             hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
             strict_min_chars=bool(regional_publication_floor_2355(channel)),
+            regional_dispatch=regional_dispatch_2367(channel),
         )
         if study_result_guidance:
             missing = study_results_missing_2347(article, draft)
@@ -2550,6 +2560,7 @@ SOURCE:
                     article, candidate, min_chars=effective_min, max_chars=effective_max,
                     hard_max_chars=validation_hard_max, required_context=source_context, slop_profile=slop_profile,
                     strict_min_chars=bool(regional_publication_floor_2355(channel)),
+                    regional_dispatch=regional_dispatch_2367(channel),
                 )
             except ValueError as exc:
                 # Optional spelling polish is never allowed to turn a
@@ -2695,8 +2706,7 @@ SOURCE:
 ПЕРЕВІР ФІНАЛ: перше речення називає головний підтверджений факт або результат,
 а всі потрібні учасники стають зрозумілими в першому абзаці; кожен відсоток
 пов'язаний зі своїм об'єктом вимірювання, а висновки не сильніші за SOURCE.
-Для регіонального каналу з політикою 500+: НЕ стискай перевірену чернетку нижче
-її обов'язкового мінімуму й НЕ викидай конкретні місцеві обставини. Якщо DRAFT
+Для регіонального каналу: не вимагай мінімуму символів або двох речень, якщо факт повний. Не викидай конкретні місцеві обставини. Якщо DRAFT
 уже точний і завершений, краще залиш його без змін, ніж знищити корисні факти.
 ANGLE, DRAFT і редакційна пам'ять не можуть додавати фактів.
 Не додавай речення про іншу незалежну подію, яка випадково була в SOURCE: наприклад, прогноз погоди до новини про заклад культури.
@@ -2704,6 +2714,8 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
         if _is_commercial_editorial(channel):
             # Style only: preserve uncertainty and source facts; no new thematic veto.
             prompt = prompt.replace("\nSOURCE:\n", "\nПРОДАНО! Пиши доступною українською, як для допитливого неспеціаліста. Спочатку зрозуміла цікава деталь, потім пояснення. Уникай академічних кальок на кшталт «передбачало подальший розвиток»; поясни, що саме дослідники спостерігали, не перетворюючи зв’язок на доведену причинність. Не спрощуй застереження та не вигадуй гачок.\nSOURCE:\n", 1)
+        if regional_dispatch_2367(channel):
+            prompt += "\nПРІОРИТЕТ 2.3.67: для ГРОМАД довжина лише орієнтир; одне повне підтверджене речення достатньо. Не доповнюй і не відхиляй заради 500 символів чи двох речень. Інші правила достовірності та тематики чинні."
         prompt = compact_prompt(prompt)
         from .ai_cost_2360 import prompt_shape_2363
         event("editorial", "editorial prompt shape 2363", channel_id=channel.id,
@@ -2752,6 +2764,7 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
                 strict_min_chars=bool(regional_publication_floor_2355(channel)),
+                regional_dispatch=regional_dispatch_2367(channel),
             )
             # Study coverage: a post with study methods also needs a measured
             # outcome grounded in the original source, not merely the sample.
@@ -2788,6 +2801,7 @@ CHANNEL RULES: {p.writing_rules}\nSTYLE: {p.style_rules}\n{style_memory}\n{newsr
                 article, candidate, min_chars=min_chars, max_chars=max_chars,
                 hard_max_chars=final_hard_max, required_context=source_context, slop_profile=slop_profile,
                 strict_min_chars=bool(regional_publication_floor_2355(channel)),
+                regional_dispatch=regional_dispatch_2367(channel),
             )
             save_review_receipt(self.store, channel, article, final, "Combined source and reader final editor 2360")
             return final

@@ -115,10 +115,10 @@ def test_ready_hold_prunes_only_the_prior_restart_rejections(tmp_path):
 
     state = ChannelRuntimeState(channel_id=1)
     engine = _engine(store)
-    assert engine._retire_restart_ineligible_2334(1, state, limit=48, now=NOW) == 1
+    assert engine._retire_restart_ineligible_2334(1, state, limit=48, now=NOW) == 2
     with store.connect() as con:
         for aid, expected in ((stale, "REJECT"), (unknown, "PENDING"),
-                              (human, "PENDING"), (same_day, "PENDING"),
+                              (human, "PENDING"), (same_day, "REJECT"),
                               (fresh, "PENDING"), (blocked, "PENDING"),
                               (regional, "PENDING")):
             row = con.execute("SELECT decision FROM articles WHERE id=?", (aid,)).fetchone()
@@ -132,8 +132,8 @@ def test_ready_hold_prunes_only_the_prior_restart_rejections(tmp_path):
         assert con.execute(
             "SELECT min_publish_interval_minutes FROM channels WHERE id=1"
         ).fetchone()[0] == 30
-        assert con.execute("SELECT COUNT(*) FROM jobs WHERE state='QUEUED'").fetchone()[0] == 6
-    assert state.processed == 1 and state.jobs_rejected == 1
+        assert con.execute("SELECT COUNT(*) FROM jobs WHERE state='QUEUED'").fetchone()[0] == 5
+    assert state.processed == 2 and state.jobs_rejected == 2
     assert engine._retire_restart_ineligible_2334(3, ChannelRuntimeState(channel_id=3), now=NOW) == 0
     assert engine._retire_restart_ineligible_2334(1, state, now=NOW) == 0
 

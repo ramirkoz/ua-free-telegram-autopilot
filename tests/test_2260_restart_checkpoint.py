@@ -61,11 +61,11 @@ def test_all_three_live_gates_consult_same_checkpoint():
     publisher = Path(inspect.getsourcefile(Publisher)).read_text(encoding="utf-8")
     collector = inspect.getsource(BoundedStrictIngestService.collect_channel)
     assert "runtime_source_restart_checkpoints_260" in runtime_start
-    assert "restart_source_rejection" in worker
+    assert "strict_runtime_source_rejection_2367" in worker
     assert "discovered_at=" in worker
-    assert "restart_source_rejection" in publisher
+    assert "strict_runtime_source_rejection_2367" in publisher
     assert "discovered_at=" in publisher
-    assert "restart_source_rejection" in collector
+    assert "strict_runtime_source_rejection_2367" in collector
     assert "originally_prestart and previous_reason" in collector
     assert "source_freshness_rejection" in collector
     assert "_delivery_preflight" in publisher

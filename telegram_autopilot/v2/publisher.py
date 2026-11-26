@@ -580,7 +580,7 @@ class Publisher:
         fence_meta = {str(row["key"]): str(row["value"] or "") for row in fence_rows}
         started_at = fence_meta.get("runtime_source_freshness_started_at", "")
         if started_at:
-            from .freshness_fence_241 import restart_source_rejection
+            from .freshness_fence_241 import strict_runtime_source_rejection_2367
             try:
                 checkpoints = json.loads(fence_meta.get("runtime_source_restart_checkpoints_260", "{}"))
                 if not isinstance(checkpoints, dict):
@@ -594,53 +594,12 @@ class Publisher:
                 min(24, max(1, int(channel.max_age_hours or 24)))
                 if channel.mode == ChannelMode.EDITORIAL else 0
             )
-            stale_reason = restart_source_rejection(
+            stale_reason = strict_runtime_source_rejection_2367(
                 str(article["source_published_at"] or ""), started_at,
                 str(checkpoints.get(str(article["source_id"]), "")),
                 discovered_at=str(article["discovered_at"] or ""),
                 rolling_window_hours=editorial_hours,
             )
-            if stale_reason == "SOURCE_PREDATES_RUNTIME_START" and channel.mode == ChannelMode.EDITORIAL:
-                # Existing READY item waited its normal interval through a short
-                # restart. Durable journal preflight above already ruled out a
-                # committed/unknown Telegram delivery. No historical replay.
-                from .carryover_ready_228 import safe_same_day_ready_228
-                if safe_same_day_ready_228(
-                    str(article["source_published_at"] or ""),
-                    str(article["discovered_at"] or ""),
-                    str(article["ready_at"] or ""),
-                    started_at,
-                    max_age_hours=int(channel.max_age_hours or 24),
-                ):
-                    stale_reason = ""
-                    event("publish", "same-day prepared READY retained across restart",
-                          channel_id=channel_id, article_id=article_id,
-                          durable_delivery_preflight=True)
-            # 2.3.30: unsent preboot QUEUED item that was checked by this
-            # source shortly before restart and became READY only afterwards.
-            # Strictly exclude anything with an old or uncertain delivery
-            # journal; preflight alone can permit historical FAILED receipts.
-            if (stale_reason == "SOURCE_PREDATES_RUNTIME_START"
-                    and channel.mode == ChannelMode.EDITORIAL
-                    and str(article["ready_at"] or "")
-                    and not str(article["published_at"] or "")
-                    and not str(article["telegram_message_id"] or "")):
-                from .carryover_ready_228 import safe_same_day_queued_2330
-                from .freshness_fence_241 import _aware
-                started = _aware(started_at)
-                ready = _aware(str(article["ready_at"] or ""))
-                if (started is not None and ready is not None and ready >= started
-                        and not self.store.delivery_journal(article_id)
-                        and safe_same_day_queued_2330(
-                            str(article["source_published_at"] or ""),
-                            str(article["discovered_at"] or ""), started_at,
-                            str(checkpoints.get(str(article["source_id"]), "")),
-                            max_age_hours=editorial_hours,
-                        )):
-                    stale_reason = ""
-                    event("publish", "2.3.30 fresh QUEUED source continuity verified at Telegram",
-                          channel_id=channel_id, article_id=article_id,
-                          delivery_journal_absent=True, ready_after_restart=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 event("publish", "stale source refused before Telegram", level=30,

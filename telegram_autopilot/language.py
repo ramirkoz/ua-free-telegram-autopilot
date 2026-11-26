@@ -51,7 +51,7 @@ def looks_english(text: str) -> bool:
     return latin >= 120 and latin > cyr * 4 and common >= 4
 
 
-def looks_ukrainian(text: str) -> bool:
+def looks_ukrainian(text: str, *, short_dispatch: bool = False) -> bool:
     """Recognize Ukrainian prose without punishing technical Latin names.
 
     The old character-ratio rule (Cyrillic > Latin * 2) rejected perfectly normal
@@ -82,6 +82,13 @@ def looks_ukrainian(text: str) -> bool:
     ua_hits = sum(1 for w in low_cyr if w in _UA_COMMON)
     en_hits = sum(1 for w in low_latin if w in _EN_WORDS)
 
+    if short_dispatch and (cyr_chars < 45 or len(cyr_words) < 8):
+        # A complete concise Ukrainian dispatch can have only a few words.
+        # Keep the mixed-script and Russian-only letter checks above; do not
+        # confuse short Russian/English prose with a Ukrainian fact.
+        return (len(cyr_words) >= 3 and cyr_chars >= 12 and en_hits == 0
+                and (ua_specific >= 1 or ua_hits >= 2)
+                and cyr_chars >= len(_LATIN.findall(sample)))
     if cyr_chars < 45 or len(cyr_words) < 8:
         return False
     if ua_specific < 1 and ua_hits < 2:

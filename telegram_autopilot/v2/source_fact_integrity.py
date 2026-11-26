@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 import re
 
-from .editorial_hard_floor import fabricated_event_reason, two_sentence_reason
+from .editorial_hard_floor import fabricated_event_reason, dispatch_sentence_reason_2367
 from .incident_guard import _FATAL_CONTEXT, _FATAL_NUMBER_WORDS
 from .claim_verifier import verify_qualified_claims
 from .polarity_verifier import verify_source_polarity
@@ -107,8 +107,9 @@ def non_overridable_quality_issues(channel: Any, article: Any, final_text: str) 
         bulletin = multi_pet_bulletin_reason(article)
         if bulletin:
             issues.append(bulletin)
+    from .monitoring_short_material_2352 import regional_dispatch_2367
     for reason in (
-        two_sentence_reason(article, final_text),
+        dispatch_sentence_reason_2367(article, final_text, regional=regional_dispatch_2367(channel)),
         fabricated_event_reason(article, final_text),
     ):
         if reason:

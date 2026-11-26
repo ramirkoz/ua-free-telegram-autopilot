@@ -16,7 +16,7 @@ from .ingest import IngestService
 from .loghub import event
 from .media_pipeline import processing_media_gate
 from .publisher import Publisher
-from .freshness_fence_241 import source_freshness_rejection, restart_source_rejection
+from .freshness_fence_241 import source_freshness_rejection, strict_runtime_source_rejection_2367
 from .storage import V2Store
 
 
@@ -175,39 +175,20 @@ class RuntimeEngine:
     def start(self) -> None:
         with self._lock:
             live = any(t.is_alive() for t in [*self._threads.values(), *self._collector_threads.values()])
-        if live and not self.stop_event.is_set():
+        if live:
             event("app", "V2 runtime start ignored; already running", level=logging.WARNING)
             return
         self.store.recover_stale_leases()
         self.stop_event.clear()
         self.started_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        # 2.2.60: snapshot each source's LAST successful pre-restart poll
-        # BEFORE collectors can update last_checked_at. This is a bounded
-        # continuity window, NOT permission to replay a channel backlog.
-        # Preserve the original runtime marker and DB schema.
+        # 2.3.67: a fresh start never admits the gap since the previous poll.
+        self.restart_checkpoints_260 = {}
         with self.store.connect() as con:
-            checkpoints = con.execute(
-                """SELECT id,last_checked_at FROM sources
-                   WHERE enabled=1 AND initialized=1 AND COALESCE(last_error,'')='' 
-                     AND COALESCE(last_checked_at,'')<>''"""
-            ).fetchall()
-            self.restart_checkpoints_260 = {
-                str(row["id"]): str(row["last_checked_at"])
-                for row in checkpoints
-            }
-            con.execute(
-                "INSERT INTO meta(key,value) VALUES('runtime_source_restart_checkpoints_260',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (json.dumps(self.restart_checkpoints_260, separators=(",", ":")),),
-            )
-            con.execute(
-                "INSERT INTO meta(key,value) VALUES('runtime_source_freshness_started_at',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (self.started_at,),
-            )
-        event("ingest", "restart source checkpoint snapshot",
-              source_count=len(self.restart_checkpoints_260), strict_fence_preserved=True,
-              max_gap_minutes=120, no_old_ready_replay=True)
+            con.execute("INSERT INTO meta(key,value) VALUES('runtime_source_restart_checkpoints_260','{}') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            con.execute("INSERT INTO meta(key,value) VALUES('runtime_source_freshness_started_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (self.started_at,))
+        from .start_fence_2367 import retire_prestart_unattempted_2367
+        retired = retire_prestart_unattempted_2367(self.store, self.started_at)
+        event("ingest", "strict runtime start fence 2367", retired=retired, restart_gap_admission=False)
         # UI must never repeat Nov-9 NETWORK_DOWN as a verified Nov-11 result.
         # No API calls or paid tokens are spent by this presentation repair.
         self.gateway.mark_stale_provider_health_on_start(self.started_at)
@@ -438,7 +419,6 @@ class RuntimeEngine:
         if channel is None or channel.mode != ChannelMode.EDITORIAL:
             return 0
         max_age = min(24, max(1, int(channel.max_age_hours or 24)))
-        from .carryover_ready_228 import safe_same_day_queued_2330
         with self.store.connect() as con:
             rows = con.execute(
                 """SELECT a.id,a.source_id,a.source_published_at,a.discovered_at,
@@ -470,17 +450,11 @@ class RuntimeEngine:
             if str(row["published_at"] or "") or str(row["telegram_message_id"] or ""):
                 continue
             checkpoint = self.restart_checkpoints_260.get(str(row["source_id"]), "")
-            reason = restart_source_rejection(
+            reason = strict_runtime_source_rejection_2367(
                 str(row["source_published_at"] or ""), self.started_at,
                 checkpoint, discovered_at=str(row["discovered_at"] or ""),
                 rolling_window_hours=max_age, now=now,
             )
-            if reason == "SOURCE_PREDATES_RUNTIME_START" and safe_same_day_queued_2330(
-                str(row["source_published_at"] or ""),
-                str(row["discovered_at"] or ""), self.started_at, checkpoint,
-                max_age_hours=max_age, now=now,
-            ):
-                continue
             if not reason:
                 continue
             detail = ("SOURCE_FRESHNESS:" + reason)[:2000]
@@ -565,35 +539,12 @@ class RuntimeEngine:
                 and channel_for_freshness.mode == ChannelMode.EDITORIAL
                 else 0
             )
-            stale_reason = restart_source_rejection(
+            stale_reason = strict_runtime_source_rejection_2367(
                 str(article["source_published_at"] or ""), self.started_at,
                 self.restart_checkpoints_260.get(str(article["source_id"]), ""),
                 discovered_at=str(article["discovered_at"] or ""),
                 rolling_window_hours=editorial_hours,
             )
-            # 2.3.30: the previous runtime may have safely collected an
-            # unreviewed SAME-DAY article shortly before this restart. Preserve
-            # only a pending unsent row with a verified recent source poll and
-            # ZERO durable delivery-journal history. Old-day and long backlog
-            # stays rejected and never reaches AI or Telegram.
-            if (stale_reason == "SOURCE_PREDATES_RUNTIME_START"
-                    and channel_for_freshness is not None
-                    and channel_for_freshness.mode == ChannelMode.EDITORIAL
-                    and str(article["decision"]) == str(Decision.PENDING)
-                    and str(article["stage"]) in {str(Stage.COLLECTED), str(Stage.EXTRACTED)}
-                    and not str(article["published_at"] or "")
-                    and not str(article["telegram_message_id"] or "")):
-                from .carryover_ready_228 import safe_same_day_queued_2330
-                checkpoint = self.restart_checkpoints_260.get(str(article["source_id"]), "")
-                if safe_same_day_queued_2330(
-                    str(article["source_published_at"] or ""),
-                    str(article["discovered_at"] or ""), self.started_at,
-                    checkpoint, max_age_hours=editorial_hours,
-                ) and not self.store.delivery_journal(article_id):
-                    stale_reason = ""
-                    event("worker", "2.3.30 fresh unsent QUEUED retained after short restart",
-                          channel_id=channel_id, article_id=article_id,
-                          recent_source_checkpoint=True, delivery_journal_absent=True)
             if stale_reason:
                 self.store.reject_editorial_article(article_id, "SOURCE_FRESHNESS:" + stale_reason)
                 state.processed += 1
