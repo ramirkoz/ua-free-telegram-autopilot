@@ -104,7 +104,7 @@ def test_2319_both_openrouter_models_fail_qa_without_free_route(monkeypatch):
     assert called == ["openrouter", "openrouter"]
 
 
-def test_2319_emergency_direct_only_after_shared_openrouter_network_outage(monkeypatch):
+def test_2364_writer_defers_after_shared_openrouter_network_outage(monkeypatch):
     gateway, _ = _gateway(monkeypatch)
     attempted = []
 
@@ -117,20 +117,23 @@ def test_2319_emergency_direct_only_after_shared_openrouter_network_outage(monke
     monkeypatch.setattr(gateway, "_call_slot", generate)
     monkeypatch.setattr(gateway, "_mark_model_failure",
                         lambda provider, model, exc: (ProviderState.NETWORK_DOWN, "model"))
-    answer = gateway.run("Тест аварії", purpose="writer")
-    assert answer.provider == "gemini"
-    assert attempted == ["openrouter", "openrouter", "gemini"]
+    with pytest.raises(GatewayExhausted) as exc:
+        gateway.run("Тест аварії", purpose="writer")
+    assert exc.value.provider_outage
+    assert attempted == ["openrouter", "openrouter"]
 
 
-def test_2319_budget_exhausted_allows_emergency_direct(monkeypatch):
+def test_2364_budget_exhausted_defers_writer(monkeypatch):
     gateway, _ = _gateway(monkeypatch, budget=False)
     calls = []
     def generate(slot, cfg, prompt, **kwargs):
         calls.append(slot.provider)
         return ("резерв працює", slot.model, slot.label, 2, 2, 4)
     monkeypatch.setattr(gateway, "_call_slot", generate)
-    assert gateway.run("Тест", purpose="writer").provider == "gemini"
-    assert calls == ["gemini"]
+    with pytest.raises(GatewayExhausted) as exc:
+        gateway.run("Тест", purpose="writer")
+    assert exc.value.provider_outage
+    assert calls == []
 
 
 def test_2319_cloudflare_slot_is_gemma_backup_not_deprecated_nemotron():
