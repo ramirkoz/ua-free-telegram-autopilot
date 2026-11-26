@@ -2428,7 +2428,7 @@ SOURCE:
         if scoped:
             try:
                 checkpoint = writer_checkpoint(self.store, channel, article, prompt)
-                if checkpoint:
+                if checkpoint and checkpoint[1] == "openrouter":
                     validator(checkpoint[0])
                     cached_result = AIResult(checkpoint[0], checkpoint[1], checkpoint[2], "validated writer checkpoint")
                     event("editorial", "validated writer checkpoint reused 2362", channel_id=channel.id, article_id=aid, ai_calls_saved=1)

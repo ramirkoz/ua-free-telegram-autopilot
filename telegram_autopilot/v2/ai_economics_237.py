@@ -211,7 +211,15 @@ def runtime_economics_snapshot(store: Any, started_at: str, *, now: datetime | N
             row['preparation_window'] = 'unknown'
     usage = [dict(r) for r in rows]
     cost = sum(float(r['actual_openrouter_usd']) for r in usage if r['provider']=='openrouter')
-    return {'scope':'runtime_since_start_2362','started_at':started_at,'through':current.isoformat(),
+    from .support_routes_2364 import SUPPORT_PURPOSES
+    support = [r for r in usage if r['purpose'] in SUPPORT_PURPOSES]
+    routing = {'direct_support_recorded_calls': sum(r['calls'] for r in support if r['provider'] != 'openrouter'),
+               'openrouter_support_recorded_calls': sum(r['calls'] for r in support if r['provider'] == 'openrouter'),
+               'non_openrouter_copy_recorded_calls': sum(r['calls'] for r in usage if r['provider'] != 'openrouter' and r['purpose'] in {'writer','final_editor','rewrite','complex_rewrite','content'}),
+               'openrouter_copy_recorded_calls': sum(r['calls'] for r in usage if r['provider'] == 'openrouter' and r['purpose'] in {'writer','final_editor','rewrite','complex_rewrite','content'}),
+               'support_openrouter_usd': round(sum(float(r['actual_openrouter_usd']) for r in support if r['provider'] == 'openrouter'),6),
+               'note': 'Recorded responses, not all attempted HTTP calls; direct provider billing not verified.'}
+    return {'scope':'runtime_since_start_2362','routing_2364':routing,'started_at':started_at,'through':current.isoformat(),
             'recorded_ai_calls':sum(r['calls'] for r in usage),
             'actual_openrouter_usd':round(cost,6),'committed_posts':len(ids),
             'usd_per_committed_post':round(cost/len(ids),6) if ids else None,
